@@ -9,6 +9,7 @@ import {
   summarizeEntry,
   transportOf,
   userMcpDestination,
+  steeringInputIds,
   validateServer,
 } from './validate.js'
 
@@ -236,3 +237,25 @@ describe('review round 2 model rules', () => {
     expect(userMcpDestination(header('Bearer ${input:t}'))).not.toBe(userMcpDestination(header('Basic ${input:t}')))
   })
 })
+
+// #1420 B6 R3: which inputs can steer a request. A steering input's value is
+// part of every other secret's binding, and an agent setting one needs review.
+// Unsure must mean steering (the fail-closed side).
+describe('steeringInputIds', () => {
+  const env = (vars: Record<string, string>) => ({ command: 'node', env: vars })
+  it('treats a pure credential as not steering', () => {
+    expect(steeringInputIds(env({ API_KEY: '${input:k}', GITHUB_PERSONAL_ACCESS_TOKEN: '${input:p}' }))).toEqual([])
+    expect(steeringInputIds({ type: 'http', url: 'https://x.example/mcp', headers: { Authorization: 'Bearer ${input:t}', 'X-Api-Key': '${input:k}' } })).toEqual([])
+  })
+  it('treats addresses, templates and unknown names as steering', () => {
+    expect(steeringInputIds(env({ API_BASE_URL: '${input:u}' }))).toEqual(['u'])
+    expect(steeringInputIds(env({ AUTH_URL: '${input:u}' }))).toEqual(['u'])
+    expect(steeringInputIds(env({ MCP_ENDPOINT: 'https://${input:h}/mcp?key=${input:t}' })).sort()).toEqual(['h', 't'])
+    expect(steeringInputIds(env({ REGION: '${input:r}' }))).toEqual(['r'])
+    expect(steeringInputIds({ type: 'http', url: 'https://x.example/mcp', headers: { 'X-Upstream': '${input:u}' } })).toEqual(['u'])
+  })
+  it('treats an input used both as a credential and anywhere else as steering', () => {
+    expect(steeringInputIds(env({ API_KEY: '${input:t}', CALLBACK: 'https://cb.example/?k=${input:t}' }))).toEqual(['t'])
+  })
+})
+

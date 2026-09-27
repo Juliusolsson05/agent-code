@@ -22,7 +22,7 @@ import type {
   UserMcpServerEntry,
   UserMcpServerView,
 } from '@shared/userMcp/types'
-import { USER_MCP_PROVIDERS } from '@shared/userMcp/types'
+import { USER_MCP_PROVIDERS, type UserMcpSecretState } from '@shared/userMcp/types'
 import { providerSupportForEntry, transportOf, userMcpDestination } from '@shared/userMcp/validate'
 
 const PROVIDER_LABEL: Record<UserMcpProvider, string> = { claude: 'Claude', codex: 'Codex' }
@@ -540,9 +540,9 @@ function SecretFields({
 }: {
   inputs: UserMcpInput[]
   values: Record<string, string>
-  states: Record<string, { set: boolean; hint?: string; unconfirmed?: true }>
+  states: Record<string, UserMcpSecretState>
   onChange: (values: Record<string, string>) => void
-  /** Confirm a secret saved by an earlier version for this server (q114). */
+  /** Confirm a withheld secret for this server as it is now (q114, #1420 B6 R3). */
   onConfirm?: (inputId: string) => void
 }) {
   return (
@@ -554,7 +554,7 @@ function SecretFields({
         const placeholder = edited === ''
           ? 'cleared on save'
           : state?.unconfirmed
-          ? `saved by an earlier version${state.hint ? ` (…${state.hint})` : ''}: confirm or re-enter`
+          ? `${state.unconfirmed === 'legacy' ? 'saved by an earlier version' : 'withheld: where this server connects changed'}${state.hint ? ` (…${state.hint})` : ''}: confirm or re-enter`
           : state?.set
           ? `set${state.hint ? ` (…${state.hint})` : ''} — type to replace`
           : 'not set'

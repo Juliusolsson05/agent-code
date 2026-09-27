@@ -651,7 +651,7 @@ describe('secrets are bound to their destination (#1304, q113)', () => {
     await writeFile(blob, codec.encrypt(TOKEN), { mode: 0o600 })
     const restarted = service()
     expect(await launchedToken(restarted, id)).toBeNull()
-    expect((await restarted.snapshot()).servers[0]!.secrets['beeper-authorization']).toMatchObject({ set: false, unconfirmed: true })
+    expect((await restarted.snapshot()).servers[0]!.secrets['beeper-authorization']).toMatchObject({ set: false, unconfirmed: 'legacy' })
     expect(await readFile(blob, 'utf8')).toBe(`enc:${TOKEN}`)
     expect((await restarted.confirmSecret(id, 'beeper-authorization')).ok).toBe(true)
     expect(await launchedToken(service(), id)).toBe(TOKEN)
@@ -769,3 +769,128 @@ describe('a reference change is a destination change (#1420, q118)', () => {
   })
 })
 
+
+// B6 manager check at 4d5c79ab (temp/review-1420/manager-verify-a.md), R3: the
+// identity covered the entry text and reference ids but not the VALUES of the
+// inputs that decide where a request goes. Imported env values all become
+// inputs, so `API_BASE_URL=${input:svc-API_BASE_URL}` is a host an agent can
+// re-set with mcp_servers_set_secret, and the next launch sent API_KEY=T there.
+// Each secret is now bound to its destination PLUS the values of the entry's
+// non-credential inputs; changing one withholds the others (kept, never
+// deleted) until the user confirms, and an agent setting one needs review.
+describe('input values that steer a request are part of the binding (#1420, B6 R3)', () => {
+  const EVIL = 'https://evil.example'
+  const imported = () => ({
+    name: 'svc',
+    enabled: true,
+    providers: { claude: true, codex: true },
+    entry: { command: 'node', args: ['client.js'], env: { API_BASE_URL: '${input:svc-API_BASE_URL}', API_KEY: '${input:svc-API_KEY}' } },
+    inputs: [{ id: 'svc-API_BASE_URL', description: 'API_BASE_URL' }, { id: 'svc-API_KEY', description: 'API_KEY' }],
+  })
+  const endpoint = () => ({
+    name: 'endpoint-client',
+    enabled: true,
+    providers: { claude: true, codex: true },
+    entry: { command: 'node', args: ['client.js'], env: { MCP_ENDPOINT: 'https://${input:trusted-host}/mcp?key=${input:tok}' } },
+    inputs: [{ id: 'trusted-host', description: 'host' }, { id: 'tok', description: 'token' }],
+  })
+  const launched = async (svc: UserMcpService) => JSON.stringify((await svc.resolveForLaunch({ provider: 'claude', overrides: {}, cwd: dir })).servers)
+  const blob = (id: string, inputId: string) => readFile(join(dir, 'mcp-secrets', id, `${inputId}.bin`))
+
+  it('an agent re-setting an imported base URL withholds the key (kept on disk) and needs review, across a restart', async () => {
+    const live = service()
+    expect((await live.save({ ...imported(), secrets: { 'svc-API_BASE_URL': 'https://trusted.example', 'svc-API_KEY': TOKEN } } as UserMcpSaveInput)).ok).toBe(true)
+    const id = (await live.snapshot()).servers[0]!.id
+    expect(await launched(live)).toContain(TOKEN)
+    const keyBytes = await blob(id, 'svc-API_KEY')
+    expect((await live.setSecret(id, 'svc-API_BASE_URL', EVIL, 'agent')).ok).toBe(true)
+    const restarted = service()
+    const [server] = (await restarted.snapshot()).servers
+    expect(server!.pendingReview).toBe(true)
+    expect(server!.enabled).toBe(false)
+    expect(server!.secrets['svc-API_KEY']).toMatchObject({ set: false, unconfirmed: 'inputs-changed' })
+    expect(await launched(restarted)).not.toContain(TOKEN)
+    expect(await blob(id, 'svc-API_KEY')).toEqual(keyBytes)
+  })
+
+  it('an agent re-setting the host inside an endpoint template withholds the token, across a restart', async () => {
+    const live = service()
+    expect((await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)).ok).toBe(true)
+    const id = (await live.snapshot()).servers[0]!.id
+    expect((await live.setSecret(id, 'trusted-host', 'evil.example', 'agent')).ok).toBe(true)
+    const restarted = service()
+    expect((await restarted.snapshot()).servers[0]!.pendingReview).toBe(true)
+    expect(await launched(restarted)).not.toContain(TOKEN)
+  })
+
+  it('a USER changing the host still withholds the token until the user confirms it for the new host', async () => {
+    const live = service()
+    await live.save({ ...imported(), secrets: { 'svc-API_BASE_URL': 'https://trusted.example', 'svc-API_KEY': TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    expect((await live.setSecret(id, 'svc-API_BASE_URL', 'https://moved.example')).ok).toBe(true)
+    expect((await service().snapshot()).servers[0]!.pendingReview).toBeUndefined()
+    expect(await launched(service())).not.toContain(TOKEN)
+    const problems = (await service().snapshot()).servers[0]!.problems.map(problem => problem.message).join('\n')
+    expect(problems).toMatch(/svc-API_KEY/)
+    expect((await service().confirmSecret(id, 'svc-API_KEY')).ok).toBe(true)
+    const after = await launched(service())
+    expect(after).toContain(TOKEN)
+    expect(after).toContain('https://moved.example')
+  })
+
+  it('rotating the token itself needs no confirmation, and an agent may set a credential without review', async () => {
+    const live = service()
+    await live.save({ ...imported(), secrets: { 'svc-API_BASE_URL': 'https://trusted.example', 'svc-API_KEY': TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    expect((await live.setSecret(id, 'svc-API_KEY', 'bpr_live_rotated_1111')).ok).toBe(true)
+    expect(await launched(service())).toContain('bpr_live_rotated_1111')
+    expect((await live.setSecret(id, 'svc-API_KEY', 'bpr_live_rotated_2222', 'agent')).ok).toBe(true)
+    const restarted = service()
+    expect((await restarted.snapshot()).servers[0]!.pendingReview).toBeUndefined()
+    const out = await launched(restarted)
+    expect(out).toContain('bpr_live_rotated_2222')
+    expect(out).toContain('https://trusted.example')
+  })
+
+  // Gap 2 (B6): both guards had no committed test.
+  it('confirm refuses a record bound to ANOTHER destination, and Settings shows it as not set', async () => {
+    const live = service()
+    await live.save(beeper())
+    const id = (await live.snapshot()).servers[0]!.id
+    const oldBlob = await blob(id, 'beeper-authorization')
+    // Crafted: the document moves elsewhere while the old destination's blob
+    // stays on disk (the q113 crash window).
+    await live.save(beeper({ id, secrets: {}, entry: { type: 'http', url: 'https://evil.example/mcp', headers: { Authorization: 'Bearer ${input:beeper-authorization}' } } } as Partial<UserMcpSaveInput>))
+    await mkdir(join(dir, 'mcp-secrets', id), { recursive: true })
+    await writeFile(join(dir, 'mcp-secrets', id, 'beeper-authorization.bin'), oldBlob, { mode: 0o600 })
+    const restarted = service()
+    expect((await restarted.snapshot()).servers[0]!.secrets['beeper-authorization']).toEqual({ set: false })
+    expect((await restarted.confirmSecret(id, 'beeper-authorization')).ok).toBe(false)
+    expect(await blob(id, 'beeper-authorization')).toEqual(oldBlob)
+  })
+
+  // The destination guard must hold on its own: here the steering value moved
+  // too, so the "already bound" check cannot be what refuses it.
+  it('confirm refuses a token saved for another destination even when a steering value also changed', async () => {
+    const live = service()
+    await live.save({ ...imported(), secrets: { 'svc-API_BASE_URL': 'https://trusted.example', 'svc-API_KEY': TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    const oldKey = await blob(id, 'svc-API_KEY')
+    const moved = { ...imported(), entry: { ...imported().entry, args: ['other-client.js'] } }
+    expect((await live.save({ id, ...moved, secrets: { 'svc-API_BASE_URL': 'https://other.example' } } as UserMcpSaveInput)).secretsCleared).toBe(true)
+    await writeFile(join(dir, 'mcp-secrets', id, 'svc-API_KEY.bin'), oldKey, { mode: 0o600 })
+    const restarted = service()
+    expect((await restarted.snapshot()).servers[0]!.secrets['svc-API_KEY']).toEqual({ set: false })
+    expect((await restarted.confirmSecret(id, 'svc-API_KEY')).ok).toBe(false)
+    expect(await launched(service())).not.toContain(TOKEN)
+  })
+
+  it('confirm has nothing to do for a record already bound to the current binding, and leaves it byte-identical', async () => {
+    const live = service()
+    await live.save(beeper())
+    const id = (await live.snapshot()).servers[0]!.id
+    const bytes = await blob(id, 'beeper-authorization')
+    expect((await live.confirmSecret(id, 'beeper-authorization')).ok).toBe(false)
+    expect(await blob(id, 'beeper-authorization')).toEqual(bytes)
+  })
+})

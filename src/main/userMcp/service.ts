@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 
 import type { SecretCodec } from '@main/keyVault/vaultStore.js'
@@ -32,6 +32,7 @@ import {
   userMcpDestination,
   providerSupportForEntry,
   referencedInputIds,
+  steeringInputIds,
   summarizeEntry,
   transportOf,
   validateServer,
@@ -43,7 +44,7 @@ import {
   codexShellPolicyStyle,
   readNativeMcpServers,
 } from './nativeServers.js'
-import { UserMcpSecretStore } from './secrets.js'
+import { UserMcpSecretStore, type SecretBinding } from './secrets.js'
 import { loadUserMcpDocument, saveUserMcpDocument } from './store.js'
 
 type PendingSecretRestore = { run: () => Promise<void>; safeWithNewDocument: boolean }
@@ -165,7 +166,12 @@ export class UserMcpService {
       // prompt-injected agent could install a command that every future agent
       // runs. A user save of an existing server clears the flag only by
       // turning it on (setEnabled); saving it off keeps the flag visible.
-      const agentNeedsReview = actor === 'agent' && (existing === undefined || destinationChanged || existing.pendingReview === true)
+      // An agent supplying the VALUE of a steering input (a base URL, a host)
+      // moves where every other secret goes without touching the entry, so it
+      // needs review exactly like an entry change (B6 R3).
+      const steering = new Set(steeringInputIds(entry))
+      const agentSetsSteering = Object.entries(input.secrets ?? {}).some(([inputId, value]) => value !== '' && steering.has(inputId))
+      const agentNeedsReview = actor === 'agent' && (existing === undefined || destinationChanged || agentSetsSteering || existing.pendingReview === true)
       const enabled = actor === 'agent'
         ? (agentNeedsReview ? false : existing!.enabled && input.enabled)
         : input.enabled
@@ -225,10 +231,14 @@ export class UserMcpService {
           : [...this.document.servers, server],
       }
       await this.persist()
-      for (const [inputId, value] of Object.entries(input.secrets ?? {})) {
-        if (server.inputs.some(candidate => candidate.id === inputId)) {
-          await this.secrets.set(server.id, inputId, value, userMcpDestination(server.entry))
-        }
+      // Bindings from the values AFTER this save: a secret entered together
+      // with its base URL is bound to that URL. Secrets not supplied keep their
+      // old binding, so a changed base URL withholds them until confirmed.
+      const supplied = Object.fromEntries(Object.entries(input.secrets ?? {})
+        .filter(([inputId]) => server.inputs.some(candidate => candidate.id === inputId)))
+      const bindings = await this.bindingsFor(server, supplied)
+      for (const [inputId, value] of Object.entries(supplied)) {
+        await this.secrets.set(server.id, inputId, value, bindings[inputId]!)
       }
       await this.secrets.prune(server.id, server.inputs.map(candidate => candidate.id))
       return {
@@ -284,22 +294,69 @@ export class UserMcpService {
       const server = this.document.servers.find(candidate => candidate.id === id)
       if (!server) return { ok: false, error: 'That server no longer exists.' }
       if (!server.inputs.some(input => input.id === inputId)) return { ok: false, error: `No secret named "${inputId}".` }
-      const confirmed = await this.secrets.confirmUnbound(id, inputId, userMcpDestination(server.entry))
+      const confirmed = await this.secrets.confirm(id, inputId, (await this.bindingsFor(server))[inputId]!)
       if (!confirmed) return { ok: false, error: `Secret "${inputId}" has nothing to confirm.` }
       return { ok: true }
     })
   }
 
-  setSecret(id: string, inputId: string, value: string): Promise<UserMcpMutationResult> {
+  /**
+   * Store one secret. An AGENT setting a steering input (one that is not a
+   * pure credential: a base URL, a host inside an endpoint) turns the server
+   * off and flags it for review first (B6 R3). Its value moves where the other
+   * secrets go, and those are withheld anyway by their bindings; the review
+   * makes the change visible instead of a server that silently lost its token.
+   */
+  setSecret(id: string, inputId: string, value: string, actor: UserMcpActor = 'user'): Promise<UserMcpMutationResult> {
     return this.mutate(async () => {
       const problem = value === '' ? null : secretValueProblem(value)
       if (problem) return { ok: false, error: problem }
       const server = this.document.servers.find(candidate => candidate.id === id)
       if (!server) return { ok: false, error: 'That server no longer exists.' }
       if (!server.inputs.some(input => input.id === inputId)) return { ok: false, error: `No secret named "${inputId}".` }
-      await this.secrets.set(id, inputId, value, userMcpDestination(server.entry))
-      return { ok: true }
+      const needsReview = actor === 'agent' && value !== '' && steeringInputIds(server.entry).includes(inputId)
+      if (needsReview) {
+        // Published BEFORE the value is written: a crash between the two
+        // leaves a reviewed-off server with the old value, never an enabled
+        // one with the new.
+        const flagged: UserMcpServer = { ...server, enabled: false, pendingReview: true }
+        this.document = { version: 1, servers: this.document.servers.map(candidate => candidate.id === id ? flagged : candidate) }
+        await this.persist()
+      }
+      const bindings = await this.bindingsFor(server, { [inputId]: value })
+      await this.secrets.set(id, inputId, value, bindings[inputId]!)
+      return { ok: true, ...(needsReview ? { pendingReview: true } : {}) }
     })
+  }
+
+  /**
+   * What each of the server's secrets is bound to (#1420, B6 R3): its
+   * destination identity plus a digest of the values of the entry's STEERING
+   * inputs other than itself. `pending` overlays values about to be written,
+   * so a record is bound to the values it will be launched with.
+   *
+   * WHY only steering inputs in the digest (B6 asked for every other input):
+   * with every input, rotating a token would change the host input's digest
+   * and withhold the HOST until confirmed, unless every credential write also
+   * rebound its siblings. That rebind is safe exactly when the changed value
+   * is a credential, because a credential changes what is sent, never where.
+   * Leaving credential-only inputs out of the digest is that same behaviour
+   * with no rebind step to get wrong. The values are read raw (storedValue):
+   * the digest must see what a launch would substitute, bound or not.
+   */
+  private async bindingsFor(server: UserMcpServer, pending: Readonly<Record<string, string>> = {}): Promise<Record<string, SecretBinding>> {
+    const destination = userMcpDestination(server.entry)
+    const steering = steeringInputIds(server.entry).sort()
+    const values = new Map<string, string | null>()
+    for (const inputId of steering) {
+      values.set(inputId, inputId in pending ? (pending[inputId] || null) : await this.secrets.storedValue(server.id, inputId))
+    }
+    const bindings: Record<string, SecretBinding> = {}
+    for (const input of server.inputs) {
+      const others = steering.filter(inputId => inputId !== input.id).map(inputId => [inputId, values.get(inputId) ?? null])
+      bindings[input.id] = { destination, inputs: createHash('sha256').update(JSON.stringify(others)).digest('hex') }
+    }
+    return bindings
   }
 
   /**
@@ -407,9 +464,11 @@ export class UserMcpService {
       }
       const secrets: Record<string, string> = {}
       let missing: string | null = null
+      const bindings = await this.bindingsFor(server)
       for (const inputId of referencedInputIds(server.entry)) {
-        // Bound read (q113): only a secret saved for this destination.
-        const value = await this.secrets.get(server.id, inputId, userMcpDestination(server.entry))
+        // Bound read (q113, B6 R3): only a secret saved for this destination
+        // AND for the current values of its steering inputs.
+        const value = bindings[inputId] ? await this.secrets.get(server.id, inputId, bindings[inputId]!) : null
         if (value === null) {
           missing = inputId
           break
@@ -575,15 +634,17 @@ export class UserMcpService {
   ): Promise<UserMcpServerView> {
     const transport = transportOf(server.entry)
     const others = this.document.servers.filter(other => other.id !== server.id)
-    const secrets = await this.secrets.state(server.id, server.inputs.map(input => input.id), userMcpDestination(server.entry))
+    const secrets = await this.secrets.state(server.id, await this.bindingsFor(server))
     const problems = validateServer(server, others)
     for (const inputId of referencedInputIds(server.entry)) {
       if (secrets[inputId] && !secrets[inputId]!.set) {
         problems.push({
           kind: 'secret-missing',
-          message: secrets[inputId]!.unconfirmed
+          message: secrets[inputId]!.unconfirmed === 'legacy'
             ? `Secret "${inputId}" was saved by an earlier version. Confirm it is for ${summarizeEntry(server.entry)}, or re-enter it`
-            : `Secret "${inputId}" is not set`,
+            : secrets[inputId]!.unconfirmed === 'inputs-changed'
+              ? `Secret "${inputId}" is withheld because another value this server uses to decide where it connects changed. Confirm it may go to ${summarizeEntry(server.entry)} with the new values, or re-enter it`
+              : `Secret "${inputId}" is not set`,
         })
       }
     }

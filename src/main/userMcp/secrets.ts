@@ -50,20 +50,40 @@ import type { UserMcpSecretState } from '@shared/userMcp/types.js'
  * the document names" would stamp that token as B's and launch it. So an
  * unbound record is kept on disk (never deleted) but reads as not set, and
  * Settings asks the user to confirm it for the current destination
- * (`confirmUnbound`) or re-enter it. That user action is the proof that binds
+ * (`confirm`) or re-enter it. That user action is the proof that binds
  * it. Upgrading users pay a one-time confirmation per stored secret.
  */
 const BOUND_PREFIX = 'agent-code/user-mcp-secret/v1:'
 
-function bindValue(destination: string, value: string): string {
-  return BOUND_PREFIX + JSON.stringify({ d: destination, v: value })
+/**
+ * What a record is bound to (B6 R3 at 4d5c79ab). `destination` alone was not
+ * enough: the entry text can stay identical while the VALUE of another input
+ * moves the request (`API_BASE_URL=${input:svc-API_BASE_URL}`, or the host in
+ * `https://${input:host}/mcp?key=${input:tok}`), and an agent can set such a
+ * value with mcp_servers_set_secret. So a record also carries `inputs`, a
+ * digest of the values of the entry's STEERING inputs other than itself
+ * (service.ts bindingFor). A record's own value is never in its digest, so a
+ * rotated token stays bound.
+ */
+export type SecretBinding = { destination: string; inputs: string }
+
+function bindValue(binding: SecretBinding, value: string): string {
+  return BOUND_PREFIX + JSON.stringify({ d: binding.destination, x: binding.inputs, v: value })
 }
 
-function unbindValue(plaintext: string): { destination: string; value: string } | null {
-  if (!plaintext.startsWith(BOUND_PREFIX)) return null
+type SecretRecord =
+  | { kind: 'unbound'; value: string }
+  // `inputs` is absent on records written before B6 R3 (never merged, so only
+  // dev data); it then matches nothing and the record needs confirmation.
+  | { kind: 'bound'; destination: string; inputs: string | undefined; value: string }
+
+function parseRecord(plaintext: string): SecretRecord | null {
+  if (plaintext === '') return null
+  if (!plaintext.startsWith(BOUND_PREFIX)) return { kind: 'unbound', value: plaintext }
   try {
-    const record = JSON.parse(plaintext.slice(BOUND_PREFIX.length)) as { d?: unknown; v?: unknown }
-    return typeof record.d === 'string' && typeof record.v === 'string' ? { destination: record.d, value: record.v } : null
+    const record = JSON.parse(plaintext.slice(BOUND_PREFIX.length)) as { d?: unknown; x?: unknown; v?: unknown }
+    if (typeof record.d !== 'string' || typeof record.v !== 'string') return null
+    return { kind: 'bound', destination: record.d, inputs: typeof record.x === 'string' ? record.x : undefined, value: record.v }
   } catch {
     return null
   }
@@ -83,41 +103,45 @@ export class UserMcpSecretStore {
     }
   }
 
-  /** The secret, only if it was saved for `destination` (see BOUND_PREFIX). */
-  async get(serverId: string, inputId: string, destination: string): Promise<string | null> {
+  private async record(serverId: string, inputId: string): Promise<SecretRecord | null> {
     const plaintext = await this.decrypted(serverId, inputId)
-    if (plaintext === null) return null
-    const record = unbindValue(plaintext)
-    if (!record || record.destination !== destination || record.value === '') return null
-    return record.value
+    return plaintext === null ? null : parseRecord(plaintext)
   }
 
-  /** True when a record exists but was written before destination binding
-   *  (q114): it cannot prove its destination, so it is withheld. */
-  async isUnbound(serverId: string, inputId: string): Promise<boolean> {
-    const plaintext = await this.decrypted(serverId, inputId)
-    return plaintext !== null && plaintext !== '' && unbindValue(plaintext) === null
-  }
-
-  /** Last four characters of an unbound record, so the user can recognise
-   *  what they are confirming (the same hint rule as a set secret). */
-  async unboundHint(serverId: string, inputId: string): Promise<string | undefined> {
-    const plaintext = await this.decrypted(serverId, inputId)
-    if (plaintext === null || unbindValue(plaintext) !== null || plaintext.length < 12) return undefined
-    return plaintext.slice(-4)
+  /** The secret, only if it was saved for exactly `binding` (see BOUND_PREFIX). */
+  async get(serverId: string, inputId: string, binding: SecretBinding): Promise<string | null> {
+    const record = await this.record(serverId, inputId)
+    if (record?.kind !== 'bound' || record.value === '') return null
+    return record.destination === binding.destination && record.inputs === binding.inputs ? record.value : null
   }
 
   /**
-   * Bind an unbound (pre-binding) record to `destination` because the USER
-   * confirmed it is for that destination (q114). Nothing else may bind a
-   * legacy record: an old record carries no proof of its destination, and
-   * the document it sits next to may be exactly the inconsistent state this
-   * binding exists to refuse. Returns false when there is no unbound record.
+   * The stored value whatever it is bound to, ONLY for computing other
+   * records' bindings (service.ts bindingFor): the digest has to see the value
+   * the next launch would substitute. Never handed to a launch.
    */
-  async confirmUnbound(serverId: string, inputId: string, destination: string): Promise<boolean> {
-    const plaintext = await this.decrypted(serverId, inputId)
-    if (plaintext === null || plaintext === '' || unbindValue(plaintext) !== null) return false
-    await this.write(serverId, inputId, bindValue(destination, plaintext))
+  async storedValue(serverId: string, inputId: string): Promise<string | null> {
+    const record = await this.record(serverId, inputId)
+    return record ? record.value : null
+  }
+
+  /**
+   * Bind a withheld record to `binding` because the USER confirmed it
+   * (q114, B6 R3). Two cases only:
+   *   - an unbound record from an earlier version: it carries no proof of its
+   *     destination, and the user's confirmation is that proof;
+   *   - a record for the SAME destination whose steering inputs changed (a new
+   *     base URL): the user confirms the token may go there.
+   * A record bound to a DIFFERENT destination is never confirmable: that is
+   * the q113 crash window (a token next to a document it was not saved for),
+   * and only re-entering it may bind it. Returns false when there is nothing
+   * to confirm, leaving the bytes untouched.
+   */
+  async confirm(serverId: string, inputId: string, binding: SecretBinding): Promise<boolean> {
+    const record = await this.record(serverId, inputId)
+    if (!record || record.value === '') return false
+    if (record.kind === 'bound' && (record.destination !== binding.destination || record.inputs === binding.inputs)) return false
+    await this.write(serverId, inputId, bindValue(binding, record.value))
     return true
   }
 
@@ -137,13 +161,13 @@ export class UserMcpSecretStore {
     }
   }
 
-  /** Save `value` bound to `destination`, the destination it is for. */
-  async set(serverId: string, inputId: string, value: string, destination: string): Promise<void> {
+  /** Save `value` bound to `binding`, what it is for. */
+  async set(serverId: string, inputId: string, value: string, binding: SecretBinding): Promise<void> {
     if (value === '') {
       await this.clear(serverId, inputId)
       return
     }
-    await this.write(serverId, inputId, bindValue(destination, value))
+    await this.write(serverId, inputId, bindValue(binding, value))
   }
 
   private async write(serverId: string, inputId: string, plaintext: string): Promise<void> {
@@ -215,22 +239,31 @@ export class UserMcpSecretStore {
     }
   }
 
-  /** Presence and a last-4 hint only. The renderer never receives a value. */
-  async state(serverId: string, inputIds: readonly string[], destination: string): Promise<Record<string, UserMcpSecretState>> {
-    const entries = await Promise.all(inputIds.map(async id => {
-      const value = await this.get(serverId, id, destination)
+  /**
+   * Presence and a last-4 hint only; the renderer never receives a value.
+   * `unconfirmed` marks a record that is kept but withheld and that the user
+   * can confirm (see confirm): `legacy` from an earlier version, or
+   * `inputs-changed` when a steering input's value moved since it was bound.
+   * A record bound to another destination shows as plainly not set, because
+   * only re-entering it may bind it.
+   */
+  async state(serverId: string, bindings: Readonly<Record<string, SecretBinding>>): Promise<Record<string, UserMcpSecretState>> {
+    const entries = await Promise.all(Object.entries(bindings).map(async ([id, binding]) => {
+      const record = await this.record(serverId, id)
       // No hint for short values: the last four characters of a six-character
       // PIN are most of the secret.
+      const hint = record && record.value.length >= 12 ? { hint: record.value.slice(-4) } : {}
       let state: UserMcpSecretState
-      if (value !== null) {
-        state = { set: true, ...(value.length >= 12 ? { hint: value.slice(-4) } : {}) }
-      } else if (await this.isUnbound(serverId, id)) {
-        // Saved by an earlier version: kept, withheld, and shown so the user
-        // can confirm or re-enter it (q114).
-        const hint = await this.unboundHint(serverId, id)
-        state = { set: false, unconfirmed: true, ...(hint ? { hint } : {}) }
-      } else {
+      if (!record || record.value === '') {
         state = { set: false }
+      } else if (record.kind === 'unbound') {
+        state = { set: false, unconfirmed: 'legacy', ...hint }
+      } else if (record.destination !== binding.destination) {
+        state = { set: false }
+      } else if (record.inputs !== binding.inputs) {
+        state = { set: false, unconfirmed: 'inputs-changed', ...hint }
+      } else {
+        state = { set: true, ...hint }
       }
       return [id, state] as const
     }))

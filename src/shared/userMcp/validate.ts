@@ -134,6 +134,53 @@ function forbiddenSecretProblems(entry: Record<string, unknown>): UserMcpProblem
   return problems
 }
 
+/**
+ * The name of an env var or header whose value is a CREDENTIAL, never an
+ * address: API_KEY, GITHUB_PERSONAL_ACCESS_TOKEN, Authorization, X-Api-Key…
+ * Matched on the name's LAST word so `AUTH_URL` or `TOKEN_ENDPOINT` (which say
+ * where a request goes) are not credentials. Deliberately narrow: an unknown
+ * name is NOT a credential, which is the fail-closed side (see below).
+ */
+const CREDENTIAL_NAME = /(?:^|_)(?:API_?KEY|ACCESS_?KEY|KEY|SECRET(?:_?KEY)?|TOKEN|PASSWORD|PASSWD|PAT|CREDENTIALS?|AUTH(?:ORIZATION)?)$/i
+const CREDENTIAL_VALUE = /^(?:(?:Bearer|Basic|Token) )?\$\{input:([A-Za-z0-9_-]{1,64})\}$/
+
+/**
+ * Inputs whose value can only ever be a credential (#1420, B6 R3): EVERY
+ * reference to them is the whole value (optionally after an auth scheme) of
+ * an env var or header with a credential name. Changing such a value changes
+ * WHAT is sent, never WHERE, so it never withholds another secret and an
+ * agent may set it.
+ *
+ * Every other referenced input can steer a request (a base URL, a host inside
+ * an endpoint template, a header the server may route on). Those are the
+ * "steering" inputs: their values are part of every other secret's binding
+ * (service.ts bindingFor), and an agent setting one needs the user's review.
+ * Unsure means steering: a false "credential" would let a host change slip
+ * through, while a false "steering" only costs a confirmation.
+ */
+export function credentialOnlyInputIds(entry: UserMcpServerEntry): Set<string> {
+  const credential = new Set<string>()
+  const steering = new Set<string>()
+  const scan = (record: unknown) => {
+    if (!isStringRecord(record)) return
+    for (const [name, value] of Object.entries(record)) {
+      const whole = CREDENTIAL_VALUE.exec(value)
+      const isCredential = whole !== null && CREDENTIAL_NAME.test(name.replace(/-/g, '_'))
+      for (const id of inputReferences(value)) (isCredential && whole![1] === id ? credential : steering).add(id)
+    }
+  }
+  scan((entry as Record<string, unknown>).env)
+  scan((entry as Record<string, unknown>).headers)
+  for (const id of steering) credential.delete(id)
+  return credential
+}
+
+/** Referenced inputs that are not credential-only (see credentialOnlyInputIds). */
+export function steeringInputIds(entry: UserMcpServerEntry): string[] {
+  const credential = credentialOnlyInputIds(entry)
+  return referencedInputIds(entry).filter(id => !credential.has(id))
+}
+
 export function referencedInputIds(entry: UserMcpServerEntry): string[] {
   const ids = new Set<string>()
   const scan = (record: unknown) => {

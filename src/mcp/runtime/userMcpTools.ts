@@ -177,7 +177,7 @@ export function registerUserMcpTools(
 
   server.registerTool('mcp_servers_set_secret', {
     title: 'Set an MCP server secret',
-    description: 'Store one secret (a ${input:id} the server config references) encrypted. Only use a value the user gave you in this conversation; never invent one. The value is never returned by any tool.',
+    description: 'Store one secret (a ${input:id} the server config references) encrypted. Only use a value the user gave you in this conversation; never invent one. The value is never returned by any tool. Setting a value that decides where the server connects (a base URL or host, anything that is not a pure credential) switches the server off until the user reviews it, and its other secrets wait for the user to confirm them.',
     inputSchema: {
       id: z.string().min(1).max(64),
       inputId: z.string().min(1).max(64),
@@ -187,8 +187,12 @@ export function registerUserMcpTools(
   }, async ({ id, inputId, value }) => {
     try {
       const name = await nameOf(id)
-      const result = await service().setSecret(id, inputId, value)
-      if (result.ok) changed(`An agent set a secret for MCP server ${name}`)
+      const result = await service().setSecret(id, inputId, value, 'agent')
+      if (result.ok) {
+        changed(result.pendingReview
+          ? `An agent changed where MCP server ${name} connects (off until you review it)`
+          : `An agent set a secret for MCP server ${name}`)
+      }
       return mutation(result)
     } catch (error) {
       return failure(error)
