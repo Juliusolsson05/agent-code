@@ -54,6 +54,29 @@ describe('bounded local performance history', () => {
     expect((await store.query(20_000, 20_000, undefined, 7)).points).toHaveLength(1)
   })
 
+  // #1352 verification b: the store's persistence slice is the third place
+  // that capped operation histograms at a literal 100 (26 operations x 4
+  // outcomes = 104). The aggregator test cannot see this path; only the
+  // saved operations.json shows whether every legal pair reaches history.
+  it('persists a histogram for every legal operation and outcome', async () => {
+    const { MONITOR_OPERATIONS, MONITOR_OUTCOMES } = await import('@shared/performance/monitorPolicy.js')
+    const { MonitorAggregator } = await import('./MonitorAggregator.js')
+    const aggregator = new MonitorAggregator()
+    for (const name of MONITOR_OPERATIONS) {
+      for (const outcome of MONITOR_OUTCOMES) {
+        aggregator.accept([{ kind: 'operation', at: 1000, windowId: null, sample: { kind: 'operation', name, outcome, durationMs: 5 } }])
+      }
+    }
+    const root = await mkdtemp(join(tmpdir(), 'agent-code-monitor-'))
+    roots.push(root)
+    const store = new MonitorHistoryStore(root, 'run-ops', () => 2000)
+    store.record({ ...snapshot(2000), operations: aggregator.snapshot(2000, 100).operations }, null, null, 0, 0)
+    await store.settled()
+    const saved = JSON.parse(await readFile(join(root, 'runs', 'run-ops', 'operations.json'), 'utf8')) as Array<{ name: string; outcome: string }>
+    expect(saved).toHaveLength(MONITOR_OPERATIONS.length * MONITOR_OUTCOMES.length)
+    expect(saved.map(entry => `${entry.name}:${entry.outcome}`)).toContain('heap.snapshot:timeout')
+  })
+
   it('keeps an existing destination intact when report creation fails', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agent-code-monitor-'))
     roots.push(root)
