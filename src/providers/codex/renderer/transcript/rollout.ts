@@ -221,14 +221,24 @@ function codexCompactBoundaryEntry(
 // A committed Codex compaction: a timestamped boundary, then the summary when
 // the CLI wrote a readable one (#1289).
 //
-// WHY `replacement_history` is never mapped: it is not new conversation. It
-// is the context Codex keeps across the compaction (developer instructions,
-// the AGENTS.md block, earlier user prompts, and from 0.155 an encrypted
-// `compaction` summary item). Mapped, it repainted prompts already in the
-// feed: 17,326 of 20,343 sampled replacement messages duplicated an earlier
-// user message. WHY the summary is conditional: `message` is empty in every
-// 0.15x rollout, where the summary is encrypted; only 56 of about 1,500
-// local compactions (older CLIs) carry readable text.
+// WHY `replacement_history` is not mapped here: in the common case it is not
+// new conversation. It is the context Codex keeps across the compaction
+// (developer instructions, the AGENTS.md block, earlier user prompts, and from
+// 0.155 an encrypted `compaction` summary item). Mapped, it repainted prompts
+// already in the feed: 17,326 of 20,343 sampled replacement messages
+// duplicated an earlier user message.
+//
+// KNOWN GAP (review a of #1386, follow-up #1393): it is NOT
+// always a duplicate. 82 local rollouts (68 sessions) are resumed files that
+// START with a `compacted` line, so its retained user prompts are the only
+// copy of that earlier conversation in the file. This line-at-a-time mapper
+// cannot tell that case apart (a paged older-history load can also start a
+// page with a `compacted` line that has predecessors in the previous page),
+// so the fix belongs where the loader knows it is mapping from file offset 0.
+// Before #1386 no `compacted` line rendered at all, so this is not a
+// regression. WHY the summary is conditional: `message` is empty in every
+// 0.15x rollout, where the summary is encrypted; only 56 of about 1,500 local
+// compactions (older CLIs) carry readable text.
 function mapCodexCompacted(
   uuid: string,
   timestamp: string | undefined,
