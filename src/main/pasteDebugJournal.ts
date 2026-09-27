@@ -115,14 +115,38 @@ export class PasteDebugJournal {
   }
 }
 
+/**
+ * How many paste writers the registry keeps (#1278), the same bound and
+ * eviction as dictationJournal's MAX_OPEN_JOURNALS (#1276). A paste id is a
+ * fresh renderer UUID that is never reused, and dispose() has no caller, so a
+ * long-running app kept one writer (and its queue) per paste forever. A paste
+ * logs for a second or two around one Enter, so evicting the oldest of 64 never
+ * touches a live one in practice; if it ever did, get() just opens a new writer
+ * that appends to the same file.
+ */
+const MAX_OPEN_JOURNALS = 64
+
 export class PasteDebugJournalRegistry {
   private journals = new Map<string, PasteDebugJournal>()
+  /** Flushes started by dispose(), until they settle; see flushAll. */
+  private readonly disposing = new Set<Promise<void>>()
+
+  get size(): number {
+    return this.journals.size
+  }
 
   get(pasteId: string): PasteDebugJournal {
     let j = this.journals.get(pasteId)
     if (!j) {
       j = new PasteDebugJournal(pasteDebugLogPath(pasteId))
       this.journals.set(pasteId, j)
+      // Insertion order is age: evict the oldest paste (flushing it first),
+      // never the one just asked for.
+      while (this.journals.size > MAX_OPEN_JOURNALS) {
+        const oldest = this.journals.keys().next().value
+        if (oldest === undefined || oldest === pasteId) break
+        this.dispose(oldest)
+      }
     }
     return j
   }
@@ -133,15 +157,19 @@ export class PasteDebugJournalRegistry {
         console.warn('[pasteDebugJournal] flush error:', err)
       }),
     )
-    await Promise.all(drains)
+    // An evicted writer is no longer in the map, but its final flush belongs
+    // to the shutdown drain too, or its queued events are lost on quit.
+    await Promise.all([...drains, ...this.disposing])
   }
 
   dispose(pasteId: string): void {
     const j = this.journals.get(pasteId)
     if (!j) return
-    void j.flush().catch(err => {
+    const flushing = j.flush().catch(err => {
       console.warn('[pasteDebugJournal] dispose flush error:', err)
     })
+    this.disposing.add(flushing)
+    void flushing.finally(() => this.disposing.delete(flushing))
     this.journals.delete(pasteId)
   }
 }
