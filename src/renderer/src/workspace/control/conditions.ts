@@ -16,7 +16,7 @@ export function conditionControlCapabilities() {
   }
   return [
     defineCapability({ id: 'agents.inputInspect', title: 'Inspect provider draft uncertainty', execution: 'window', effect: 'read', target: { kind: 'session', field: 'sessionId' },
-      description: 'Inspect backend readiness and whether the full native terminal draft is known. Currently nativeDraft.state is unknown: neither xterm accessibility input nor an empty Agent Code draft proves the provider composer is empty. Prefer agents.prompt with its provider-owned delivery checks. Before computer paste/Return, establish the full native composer through the actual UI; do not clear or submit uncertain existing text. Reads never wake or type.',
+      description: 'Inspect backend readiness and whether the full native terminal draft is known. nativeDraft.state is occupied when the provider reports a draft in its own composer (Claude, and Codex since #800); otherwise it is unknown: neither xterm accessibility input nor an empty Agent Code draft proves the provider composer is empty. Prefer agents.prompt with its provider-owned delivery checks. Before computer paste/Return, establish the full native composer through the actual UI; do not clear or submit uncertain existing text. Reads never wake or type.',
       input: conditionTargetInput, output: nativeInputOutput, handler: async input => nativeInputOutput.parse(await invoke('sessions.inputInspect', input)),
     }),
     defineCapability({
