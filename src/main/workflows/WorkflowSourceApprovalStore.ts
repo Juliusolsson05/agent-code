@@ -12,7 +12,7 @@ type StoredApproval = {
 
 type StoredApprovalFile = {
   version: 1
-  approvals: StoredApproval[]
+  approvals: unknown[]
 }
 
 /**
@@ -25,6 +25,17 @@ type StoredApprovalFile = {
 export class WorkflowSourceApprovalStore {
   private readonly filePath: string
   private readonly approvals = new Map<string, StoredApproval>()
+  // Entries this build could not read, carried verbatim (#1251 row 11).
+  // WHY skip-and-carry instead of the old throw: load() threw on the first bad
+  // entry and never set `loaded`, so every authorize() rethrew and one bad row
+  // blocked every repository workflow until the file was hand-edited. Skipping
+  // still fails closed where it matters: an unreadable entry never enters
+  // `approvals`, so its source is prompted for again exactly like a new one.
+  // WHY carry rather than drop: persist() rewrites the whole file on the next
+  // grant, and dropping would silently delete a record a newer build may
+  // understand. The whole-file version check below still throws, because a
+  // file of an unknown version is not one bad row.
+  private readonly unreadable: unknown[] = []
   private readonly prompts = new Map<string, Promise<boolean>>()
   private loaded = false
 
@@ -83,7 +94,8 @@ export class WorkflowSourceApprovalStore {
         !/^[a-f0-9]{64}$/.test(value.sourceHash) ||
         typeof value.approvedAt !== 'string'
       ) {
-        throw new Error(`Workflow source approval entry is invalid: ${this.filePath}`)
+        this.unreadable.push(value)
+        continue
       }
       const approval = value as StoredApproval
       this.approvals.set(approvalKey(approval.canonicalIdentity, approval.sourceHash), approval)
@@ -97,10 +109,13 @@ export class WorkflowSourceApprovalStore {
     const temporary = `${this.filePath}.tmp-${process.pid}-${randomUUID()}`
     const document: StoredApprovalFile = {
       version: 1,
-      approvals: [...this.approvals.values()].sort((left, right) => (
-        left.canonicalIdentity.localeCompare(right.canonicalIdentity) ||
-        left.sourceHash.localeCompare(right.sourceHash)
-      )),
+      approvals: [
+        ...[...this.approvals.values()].sort((left, right) => (
+          left.canonicalIdentity.localeCompare(right.canonicalIdentity) ||
+          left.sourceHash.localeCompare(right.sourceHash)
+        )),
+        ...this.unreadable,
+      ],
     }
     try {
       await writeFile(temporary, `${JSON.stringify(document)}\n`, { encoding: 'utf8', mode: 0o600 })
