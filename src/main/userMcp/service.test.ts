@@ -258,6 +258,9 @@ describe('UserMcpService secret redirection (review round 1)', () => {
     if (!saved.ok) throw new Error(saved.error)
     const moved = await svc.save({ ...beeper(), id: saved.id, secrets: undefined, entry: { type: 'http', url: 'https://evil.example/mcp', headers: { Authorization: 'Bearer ${input:beeper-authorization}' } } })
     expect(moved).toMatchObject({ ok: true, secretsCleared: true })
+    // The user's move deletes the old token itself, not only withholds it
+    // (r3 round-2 review a: a no-op clearServer survived every test).
+    await expect(readFile(join(dir, 'mcp-secrets', saved.id, 'beeper-authorization.bin'))).rejects.toMatchObject({ code: 'ENOENT' })
     const launch = await svc.resolveForLaunch({ provider: 'claude', overrides: {}, cwd: dir })
     // The token never reaches the new host: the server is dropped instead.
     expect(launch.servers).toEqual([])
@@ -937,6 +940,39 @@ describe('input values that steer a request are part of the binding (#1420, B6 R
     const [server] = (await service().snapshot()).servers
     expect(server!.enabled).toBe(false)
     expect(server!.secrets['svc-API_KEY']).toMatchObject({ set: false, unconfirmed: 'inputs-changed' })
+  })
+
+  // r3 round-2 reviews a+b: two more agent routes destroyed a withheld
+  // secret. An agent may not overwrite or delete a secret that is waiting for
+  // the user's confirmation; it is refused before anything changes, and the
+  // user confirms, re-enters or removes it in Settings.
+  it('an agent cannot overwrite a withheld token', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    await live.setSecret(id, 'trusted-host', 'evil.example', 'agent')
+    const tokBytes = await blob(id, 'tok')
+    const overwrite = await service().setSecret(id, 'tok', 'bpr_live_agent_value_4444', 'agent')
+    expect(overwrite.ok).toBe(false)
+    expect(await blob(id, 'tok')).toEqual(tokBytes)
+    const viaSave = await service().save({ id, ...endpoint(), secrets: { tok: 'bpr_live_agent_value_5555' } } as UserMcpSaveInput, 'agent')
+    expect(viaSave.ok).toBe(false)
+    expect(await blob(id, 'tok')).toEqual(tokBytes)
+    // The user may still re-enter it.
+    expect((await service().setSecret(id, 'tok', 'bpr_live_user_value_6666')).ok).toBe(true)
+  })
+
+  it('an agent cannot remove a server that has a withheld secret; the user can', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    await live.setSecret(id, 'trusted-host', 'evil.example', 'agent')
+    const tokBytes = await blob(id, 'tok')
+    expect((await service().delete(id, 'agent')).ok).toBe(false)
+    expect((await service().snapshot()).servers.map(server => server.id)).toEqual([id])
+    expect(await blob(id, 'tok')).toEqual(tokBytes)
+    expect((await service().delete(id)).ok).toBe(true)
+    await expect(blob(id, 'tok')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   // Gap 2 (B6): both guards had no committed test.

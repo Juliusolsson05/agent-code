@@ -161,13 +161,13 @@ export function registerUserMcpTools(
 
   server.registerTool('mcp_servers_remove', {
     title: 'Remove an MCP server',
-    description: 'Delete one of the user\'s MCP servers and its stored secrets. Only when the user\'s current request asks to remove that server.',
+    description: 'Delete one of the user\'s MCP servers and its stored secrets. Only when the user\'s current request asks to remove that server. A server with a secret waiting for the user\'s confirmation can only be removed by the user.',
     inputSchema: { id: z.string().min(1).max(64) },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   }, async ({ id }) => {
     try {
       const name = await nameOf(id)
-      const result = await service().delete(id)
+      const result = await service().delete(id, 'agent')
       if (result.ok) changed(`An agent removed MCP server ${name}`)
       return mutation(result)
     } catch (error) {

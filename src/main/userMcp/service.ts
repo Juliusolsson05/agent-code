@@ -78,6 +78,10 @@ export type UserMcpServiceDeps = {
  * deleted or switched off. The renderer contributes only the pane's explicit
  * per-agent choices; everything else is read here at launch.
  */
+/** Why an agent's write or removal was refused (see withheldInputIds). */
+const WITHHELD_REFUSAL = (inputId: string): string =>
+  `Secret "${inputId}" is withheld until the user confirms or re-enters it in Settings → MCP, so an agent cannot replace or remove it.`
+
 export class UserMcpService {
   private document: UserMcpDocument = { version: 1, servers: [] }
   private storeProblem: string | undefined
@@ -156,6 +160,11 @@ export class UserMcpService {
       for (const value of Object.values(input.secrets ?? {})) {
         const problem = value === '' ? null : secretValueProblem(value)
         if (problem) return { ok: false, error: problem }
+      }
+      if (actor === 'agent' && existing) {
+        const withheld = await this.withheldInputIds(existing)
+        const overwrite = Object.keys(input.secrets ?? {}).find(inputId => withheld.includes(inputId))
+        if (overwrite) return { ok: false, error: WITHHELD_REFUSAL(overwrite) }
       }
       const entry = normalizeEntry(input.entry)
       const destinationChanged = existing !== undefined && userMcpDestination(existing.entry) !== userMcpDestination(entry)
@@ -258,9 +267,15 @@ export class UserMcpService {
     })
   }
 
-  delete(id: string): Promise<UserMcpMutationResult> {
+  /** An agent may not remove a server holding a withheld secret (see withheldInputIds). */
+  delete(id: string, actor: UserMcpActor = 'user'): Promise<UserMcpMutationResult> {
     return this.mutate(async () => {
-      if (!this.document.servers.some(server => server.id === id)) return { ok: false, error: 'That server no longer exists.' }
+      const existing = this.document.servers.find(server => server.id === id)
+      if (!existing) return { ok: false, error: 'That server no longer exists.' }
+      if (actor === 'agent') {
+        const [withheld] = await this.withheldInputIds(existing)
+        if (withheld) return { ok: false, error: `${WITHHELD_REFUSAL(withheld)} Only the user can remove this server now (Settings → MCP).` }
+      }
       // Snapshot strictly first (q110), so a failed clear can restore exactly
       // what was there once the document is back (see save()).
       const previousSecrets = await this.secrets.snapshotServer(id)
@@ -322,6 +337,9 @@ export class UserMcpService {
       const server = this.document.servers.find(candidate => candidate.id === id)
       if (!server) return { ok: false, error: 'That server no longer exists.' }
       if (!server.inputs.some(input => input.id === inputId)) return { ok: false, error: `No secret named "${inputId}".` }
+      if (actor === 'agent' && (await this.withheldInputIds(server)).includes(inputId)) {
+        return { ok: false, error: WITHHELD_REFUSAL(inputId) }
+      }
       // q127: ANY input an agent changes, clearing included.
       const needsReview = actor === 'agent'
       if (needsReview) {
@@ -363,6 +381,29 @@ export class UserMcpService {
       bindings[input.id] = { destination, inputs: createHash('sha256').update(JSON.stringify(others)).digest('hex') }
     }
     return bindings
+  }
+
+  /**
+   * Inputs whose stored secret is WITHHELD: a record exists but does not match
+   * its current binding (legacy, or bound before an agent changed another
+   * input). The user can still confirm or re-enter them.
+   *
+   * WHY an agent may not overwrite or delete one (r3 round-2 reviews a+b): a
+   * withheld secret is kept precisely so the USER decides what happens to it.
+   * An agent overwriting it (mcp_servers_set_secret, save with values) or
+   * removing its server (mcp_servers_remove) destroyed the ciphertext before
+   * that decision, so a prompt-injected agent could erase a credential it can
+   * never read. A valid secret may still be replaced by an agent (a user
+   * asking in chat to rotate a token), which already needs review.
+   */
+  private async withheldInputIds(server: UserMcpServer): Promise<string[]> {
+    const bindings = await this.bindingsFor(server)
+    const withheld: string[] = []
+    for (const input of server.inputs) {
+      if (await this.secrets.storedValue(server.id, input.id) === null) continue
+      if (await this.secrets.get(server.id, input.id, bindings[input.id]!) === null) withheld.push(input.id)
+    }
+    return withheld
   }
 
   /**
