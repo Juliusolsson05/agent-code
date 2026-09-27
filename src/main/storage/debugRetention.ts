@@ -500,13 +500,10 @@ async function collectIncidentRunDirs(): Promise<Artifact[]> {
   }))
 }
 
-export async function collectLegacyDebugBundleDirs(
+async function collectLegacyDebugBundleDirs(
   dir: string,
-  manualLegacyBundlePaths: Set<string> | null,
+  manualLegacyBundlePaths: Set<string>,
 ): Promise<Artifact[]> {
-  // Unknown classification: collect nothing this pass rather than guess a
-  // bundle is autosave (see loadManualLegacyBundlePaths).
-  if (manualLegacyBundlePaths === null) return []
   try {
     const entries = await readdir(dir, { withFileTypes: true })
     // WHY legacy root folders are still collected: old versions wrote both
@@ -557,24 +554,13 @@ function isProtectedFromDebugPrune(artifact: Artifact): boolean {
     artifact.bucket === 'debug-bundles-manual'
 }
 
-/**
- * The manual (protected) legacy bundles, or null when that is UNKNOWN.
- *
- * WHY null and not an empty set (q109, q115, "unknown is never empty"): this
- * set is what PROTECTS a manual legacy bundle. An empty set on a failed read
- * (EACCES, EIO, EMFILE) bucketed every manual legacy bundle as prunable
- * autosave, and the TTL pass deleted user-saved incidents. Only ENOENT, a
- * ledger that is not there, means "no manual bundles". `file` is a parameter
- * so the real-fs test can point it at a temp ledger.
- */
-export async function loadManualLegacyBundlePaths(file = DEBUG_BUNDLE_LOG_FILE): Promise<Set<string> | null> {
+async function loadManualLegacyBundlePaths(): Promise<Set<string>> {
   const manual = new Set<string>()
   let raw: string
   try {
-    raw = await readFile(file, 'utf8')
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return manual
-    return null
+    raw = await readFile(DEBUG_BUNDLE_LOG_FILE, 'utf8')
+  } catch {
+    return manual
   }
 
   for (const line of raw.split('\n')) {

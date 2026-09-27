@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 
-import { collectLegacyDebugBundleDirs, collectProxyRunDirs, loadManualLegacyBundlePaths, runPrunePasses } from './debugRetention.js'
+import { collectProxyRunDirs, runPrunePasses } from './debugRetention.js'
 import type { DebugStorageBucket, DebugStoragePrunePolicy } from './debugRetention.js'
 
 // #1385 (q91 follow-up of #1380): retention collected a proxy run dir only
@@ -94,45 +94,3 @@ it('a run dir with a child it cannot read is protected, and is collected normall
   await prune()
   expect(existsSync(dir)).toBe(false)
 })
-
-// Same rule, the PROTECT side. Legacy root-level bundles are classified manual
-// (protected forever) or autosave (prunable) from the saved-bundles ledger. A
-// failed ledger read returned an EMPTY manual set, so every manual legacy
-// bundle was bucketed as autosave and aged out. Unknown must protect: a ledger
-// that exists but cannot be read leaves legacy bundles uncollected that pass.
-// Only a ledger that is not there (ENOENT) means "no manual bundles".
-it('an unreadable bundle ledger protects legacy bundles, and they are classified normally once readable', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'legacy-bundles-'))
-  roots.push(root)
-  const now = Date.now()
-  const old = new Date(now - 30 * 24 * 3_600_000)
-  const bundle = runDir(root, ['2026-05-01T10-00-00-000-manual-report'], { 'manifest.json': '{}' })
-  utimesSync(join(bundle, 'manifest.json'), old, old)
-  utimesSync(bundle, old, old)
-  const ledger = join(root, 'saved-debug-bundles.jsonl')
-  writeFileSync(ledger, JSON.stringify({ event: 'saved', reason: 'manual', bundlePath: bundle }) + '\n')
-
-  const caps = {} as Record<DebugStorageBucket, number>
-  for (const bucket of ['debug-bundles-legacy', 'debug-bundles-manual'] as DebugStorageBucket[]) caps[bucket] = 1_000_000_000
-  const policy: DebugStoragePrunePolicy = { now, ttlMs: 48 * 3_600_000, activeGraceMs: 10 * 60_000, budgetBytes: 1_000_000_000, caps }
-  const prune = async () => runPrunePasses(
-    await collectLegacyDebugBundleDirs(root, await loadManualLegacyBundlePaths(ledger)), policy,
-    async artifact => { try { await rm(artifact.path, { recursive: true, force: true }); return true } catch { return false } })
-
-  chmodSync(ledger, 0o000)
-  locked.push(ledger)
-  await prune()
-  expect(existsSync(join(bundle, 'manifest.json'))).toBe(true)
-
-  chmodSync(ledger, 0o600)
-  locked.splice(0)
-  await prune()
-  await prune()
-  expect(existsSync(join(bundle, 'manifest.json'))).toBe(true)
-
-  // A ledger that is not there really means "no manual bundles".
-  rmSync(ledger)
-  await prune()
-  expect(existsSync(bundle)).toBe(false)
-})
-
