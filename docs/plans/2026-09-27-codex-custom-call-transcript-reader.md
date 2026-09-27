@@ -94,3 +94,7 @@ The reader runs in main over files, so the tests exercise the real entry point. 
     - the fail-closed branches of `${path}` resolution have no recording;
     - a re-assigned `let` binding resolves to its first value.
   - **Test gaps b and c flagged, now pinned:** calls inside template interpolations, and calls nested in another tool's argument.
+- **Steering q86 (manager adjudication of c's verdict).** The narrowed contract is accepted only if the uncertainty is on the output entries themselves.
+  - Every `shell_command` and `patch` read from `exec` script source now carries `executed: 'unknown'` (new optional field on both kinds in `agentTranscriptTypes.ts`). The tool description names the field.
+  - Top-level `apply_patch` custom calls are not marked: they are the call Codex made.
+  - Pinning test: a never-run `if (false)` command and patch appear in `timeline`, `shell_commands` and `file_changes` only with the marker. Removing the marker fails it.

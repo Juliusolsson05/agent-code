@@ -898,6 +898,14 @@ function extractCodexResponseItem(
  * The script is JavaScript we never run, read with the grammar the renderer
  * uses (`@shared/codex/execScript`). Its calls map, in source order:
  *
+ * Every command and patch item made here carries `executed: 'unknown'`
+ * (steering q86). They are calls the script CONTAINS, read without running
+ * it: a call inside `if (false)` is listed like any other, and Codex's one
+ * combined script output cannot say which calls ran. The marker makes that
+ * visible on the entry itself, where a reader looks, not just in the tool's
+ * description. The top-level `apply_patch` custom call is not marked: it IS
+ * the call Codex made.
+ *
  * - `tools.exec_command(...)`: one `shell_command` per call, when EVERY such
  *   call's argument decodes (92% of calls in the corpus). If even one is
  *   computed (`{cmd, workdir}` over a mapped array, string concatenation, a
@@ -928,7 +936,7 @@ function extractCodexExecScript(script: string, timestamp: number | undefined): 
     if (call.tool === 'exec_command') {
       if (everyCommandDecoded) {
         const command = decoded[commandIndex]!
-        const shellItem: AgentTranscriptItem = { kind: 'shell_command', timestamp, command: command.command }
+        const shellItem: AgentTranscriptItem = { kind: 'shell_command', timestamp, command: command.command, executed: 'unknown' }
         if (command.workdir) shellItem.cwd = command.workdir
         items.push(shellItem)
       } else if (commandIndex === 0) {
@@ -937,13 +945,13 @@ function extractCodexExecScript(script: string, timestamp: number | undefined): 
         // fold the copies, so removing this guard changes no test (#1368
         // review a, verified). It stays so this function's contract does not
         // depend on a collapse that keys on timestamp and text.
-        items.push({ kind: 'shell_command', timestamp, command: script })
+        items.push({ kind: 'shell_command', timestamp, command: script, executed: 'unknown' })
       }
       commandIndex += 1
     } else if (call.tool === 'apply_patch' && !patchEmitted) {
       patchEmitted = true
       const files = execScriptPatchFiles(script, patchCalls)
-      items.push({ kind: 'patch', timestamp, files, summary: files.length > 0 ? `apply_patch: ${files.join(', ')}` : 'apply_patch' })
+      items.push({ kind: 'patch', timestamp, files, summary: files.length > 0 ? `apply_patch: ${files.join(', ')}` : 'apply_patch', executed: 'unknown' })
     }
   }
   if (items.length > 0) return items

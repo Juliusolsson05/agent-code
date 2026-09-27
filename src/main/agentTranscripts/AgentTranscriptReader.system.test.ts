@@ -115,12 +115,12 @@ describe('agent transcript tools on Claude and Codex JSONL', () => {
       { kind: 'tool_read', timestamp: at('2026-09-27T00:26:39.779Z'), tool: 'exec', excerpt: otherScript },
       // A computed argument (`{cmd, ...}` over a mapped array) cannot be read
       // without running the script: the script itself is the command.
-      { kind: 'shell_command', timestamp: at('2026-09-27T00:26:52.324Z'), command: computedScript },
-      { kind: 'patch', timestamp: at('2026-09-27T00:27:16.483Z'), files: [`${worktree}/src/CodexHeadless.ts`], summary: `apply_patch: ${worktree}/src/CodexHeadless.ts` },
+      { kind: 'shell_command', timestamp: at('2026-09-27T00:26:52.324Z'), command: computedScript, executed: 'unknown' },
+      { kind: 'patch', timestamp: at('2026-09-27T00:27:16.483Z'), files: [`${worktree}/src/CodexHeadless.ts`], summary: `apply_patch: ${worktree}/src/CodexHeadless.ts`, executed: 'unknown' },
       // Two decodable calls in one script: two commands, in order.
-      { kind: 'shell_command', timestamp: at('2026-09-27T00:27:26.627Z'), command: 'git checkout -- src/CodexHeadless.ts', cwd: worktree },
-      { kind: 'shell_command', timestamp: at('2026-09-27T00:27:26.627Z'), command: "rg -n 'snapshotPlain\\(' src/terminal/HeadlessTerminal.ts", cwd: worktree },
-      { kind: 'shell_command', timestamp: at('2026-09-27T00:30:39.279Z'), command: 'rm node_modules', cwd: worktree },
+      { kind: 'shell_command', timestamp: at('2026-09-27T00:27:26.627Z'), command: 'git checkout -- src/CodexHeadless.ts', cwd: worktree, executed: 'unknown' },
+      { kind: 'shell_command', timestamp: at('2026-09-27T00:27:26.627Z'), command: "rg -n 'snapshotPlain\\(' src/terminal/HeadlessTerminal.ts", cwd: worktree, executed: 'unknown' },
+      { kind: 'shell_command', timestamp: at('2026-09-27T00:30:39.279Z'), command: 'rm node_modules', cwd: worktree, executed: 'unknown' },
     ])
     const shell = await readAgentTranscriptFile({ path, projection: 'shell_commands' })
     expect(shell.ok && shell.items.map(item => item.kind === 'shell_command' && item.command)).toEqual([
@@ -171,9 +171,9 @@ describe('agent transcript tools on Claude and Codex JSONL', () => {
     const titles = `${home}/auto-agent-titles`
     const result = await readAgentTranscriptFile({ path, provider: 'codex', projection: 'timeline' })
     expect(result.ok && result.items).toEqual([
-      { kind: 'patch', timestamp: Date.parse('2026-09-27T01:27:05.044Z'), files: [edited], summary: `apply_patch: ${edited}` },
+      { kind: 'patch', timestamp: Date.parse('2026-09-27T01:27:05.044Z'), files: [edited], summary: `apply_patch: ${edited}`, executed: 'unknown' },
       { kind: 'patch', timestamp: Date.parse('2026-05-19T07:15:19.499Z'), files: ['src/app/page.tsx'], summary: 'apply_patch: src/app/page.tsx' },
-      { kind: 'patch', timestamp: Date.parse('2026-07-12T19:14:02.294Z'), files: quoting, summary: `apply_patch: ${quoting.join(', ')}` },
+      { kind: 'patch', timestamp: Date.parse('2026-07-12T19:14:02.294Z'), files: quoting, summary: `apply_patch: ${quoting.join(', ')}`, executed: 'unknown' },
       {
         kind: 'tool_read',
         timestamp: Date.parse('2026-09-07T19:01:30.089Z'),
@@ -181,9 +181,31 @@ describe('agent transcript tools on Claude and Codex JSONL', () => {
         target: 'mcp__agent_code__orchestration_wait_agents',
         excerpt: expect.stringContaining('tools.mcp__agent_code__orchestration_wait_agents('),
       },
-      { kind: 'patch', timestamp: Date.parse('2026-09-25T04:28:55.297Z'), files: [`${titles}/src/mcp/runtime/BuiltInMcpHttpHost.ts`], summary: `apply_patch: ${titles}/src/mcp/runtime/BuiltInMcpHttpHost.ts` },
-      { kind: 'shell_command', timestamp: Date.parse('2026-09-25T04:28:55.297Z'), command: "npx vitest run src/main/tldr/enforcement.system.test.ts -t 'keeps TLDR enforcement responsive'", cwd: titles },
-      { kind: 'shell_command', timestamp: Date.parse('2026-09-27T00:23:21.087Z'), command: records[5]!.payload.input },
+      { kind: 'patch', timestamp: Date.parse('2026-09-25T04:28:55.297Z'), files: [`${titles}/src/mcp/runtime/BuiltInMcpHttpHost.ts`], summary: `apply_patch: ${titles}/src/mcp/runtime/BuiltInMcpHttpHost.ts`, executed: 'unknown' },
+      { kind: 'shell_command', timestamp: Date.parse('2026-09-25T04:28:55.297Z'), command: "npx vitest run src/main/tldr/enforcement.system.test.ts -t 'keeps TLDR enforcement responsive'", cwd: titles, executed: 'unknown' },
+      { kind: 'shell_command', timestamp: Date.parse('2026-09-27T00:23:21.087Z'), command: records[5]!.payload.input, executed: 'unknown' },
+    ])
+  })
+
+  // Steering q86: a command read from script source is never presented as a
+  // command that ran. A call inside a branch that never runs is still listed
+  // (the reader does not execute scripts), and it is listed ONLY with the
+  // `executed: 'unknown'` marker; so is every other script-derived entry.
+  it('marks every command and patch read from script source as not proven to have run', async () => {
+    const path = jsonl('codex-dead-branch.jsonl', [
+      { type: 'response_item', timestamp: '2026-09-27T07:00:00.000Z', payload: { type: 'custom_tool_call', call_id: 'c1', name: 'exec', input: 'if (false) tools.exec_command({cmd:"echo never"}); text("done")' } },
+      { type: 'response_item', timestamp: '2026-09-27T07:00:01.000Z', payload: { type: 'custom_tool_call', call_id: 'c2', name: 'exec', input: 'if (false) text(await tools.apply_patch("*** Begin Patch\\n*** Delete File: never.ts\\n*** End Patch"))' } },
+    ])
+    for (const projection of ['timeline', 'shell_commands', 'file_changes'] as const) {
+      const result = await readAgentTranscriptFile({ path, provider: 'codex', projection })
+      expect(result.ok && result.items.length).toBeGreaterThan(0)
+      for (const item of result.ok ? result.items : []) {
+        expect(item).toMatchObject({ executed: 'unknown' })
+      }
+    }
+    const shell = await readAgentTranscriptFile({ path, provider: 'codex', projection: 'shell_commands' })
+    expect(shell.ok && shell.items).toEqual([
+      { kind: 'shell_command', timestamp: Date.parse('2026-09-27T07:00:00.000Z'), command: 'echo never', executed: 'unknown' },
     ])
   })
 

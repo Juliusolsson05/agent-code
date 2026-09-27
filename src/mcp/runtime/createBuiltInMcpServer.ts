@@ -607,7 +607,7 @@ function registerAgentTranscriptTools(server: McpServer): void {
     {
       title: 'Read Agent Transcript File',
       description:
-        'Reads one agent transcript and returns a normalized, filtered, bounded projection of user-visible agent context. `path` is a Claude, Codex or Pi transcript JSONL path (a Pi session file is read as its active branch), or `opencode://session/<id>` for an OpenCode session (the locator Agent Management lists for OpenCode agents). Modern Codex runs tools from JavaScript `exec` scripts: their commands and patches are the calls the script contains, read without running it, so a call in a branch that never ran is still listed, and a script whose commands are computed is returned whole as one command.',
+        'Reads one agent transcript and returns a normalized, filtered, bounded projection of user-visible agent context. `path` is a Claude, Codex or Pi transcript JSONL path (a Pi session file is read as its active branch), or `opencode://session/<id>` for an OpenCode session (the locator Agent Management lists for OpenCode agents). Modern Codex runs tools from JavaScript `exec` scripts: their commands and patches are the calls the script contains, read without running it: each such `shell_command` or `patch` entry carries `executed: "unknown"`, because a call in a branch that never ran is listed the same way, and a script whose commands are computed is returned whole as one command.',
       inputSchema: {
         path: z.string(),
         provider: providerSchema.optional(),
