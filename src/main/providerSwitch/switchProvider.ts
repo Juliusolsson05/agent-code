@@ -370,8 +370,9 @@ export async function switchProvider(
     now: new Date().toISOString(),
     targetProfile,
   })
-  // Summarized BEFORE the write, so the evidence exists even if publication
-  // fails (#918 §6.2); the report is otherwise discarded with `projection`.
+  // Summarized before the write, from the projection that is written. It is
+  // returned only on success; a rejected publication is an ambiguous outcome
+  // for #918 B07's receipts (see summarizeProjectionReport).
   const projectionFidelity = summarizeProjectionReport(projection)
   const targetProviderSessionId = target.sessionId(projection)
   const targetFilePath = await target.write(targetCwd, projection)

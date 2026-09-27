@@ -7,8 +7,11 @@
 // the only account a user or a caller ever saw was the switch's
 // `shrinkSummary`. That describes context REDUCTION (the fit ladder) and is
 // null whenever nothing had to be shrunk, even when the projection itself
-// dropped content. Every recorded Stage 0 sequence loses something in at
-// least one direction; a Codex -> Codex duplicate drops opaque records too.
+// dropped content. Every recorded Codex sequence loses something in both
+// directions, a Codex -> Codex duplicate included (opaque records). Two
+// recorded Claude sequences (prompts, tool-cycle) lose nothing either way, so
+// "lossless" is a real outcome too (#1384 review b corrected the first
+// version of this sentence).
 //
 // WHY a curated summary and not the parser's report as-is: this crosses IPC
 // and reaches pane toasts. `ProjectionChange.message` is projector prose, and

@@ -1,5 +1,5 @@
 import { describeRewindAttachmentLoss } from '@renderer/workspace/hook/actions/rewindAttachmentLoss'
-import { materialProjectionLoss } from '@shared/types/projectionFidelity'
+import { materialProjectionLoss, type NativeProjectionFidelity } from '@shared/types/projectionFidelity'
 import { sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { tldrIdentityForSession } from '@renderer/features/tldr/identity'
@@ -39,7 +39,14 @@ import { providerChoiceLabel } from '@renderer/workspace/providerChoices'
 // Promise<void> cannot distinguish a declined operation from a replacement;
 // the transport must not infer success from a toast or a changed session census.
 export type AgentLifecycleResult =
-  | { status: 'completed'; sourceSessionId: SessionId; newSessionId: SessionId }
+  | {
+      status: 'completed'
+      sourceSessionId: SessionId
+      newSessionId: SessionId
+      /** Present for a rewind, which re-projects the transcript (#927). The
+       *  control plane relays it so an external caller can inspect it. */
+      projectionFidelity?: NativeProjectionFidelity
+    }
   | { status: 'skipped'; reason: string }
   | { status: 'failed'; message: string }
 
@@ -102,11 +109,17 @@ export function useProviderActions(
       // demote content the target cannot carry (Codex -> Claude drops foreign
       // reasoning and developer messages on every recorded sequence), so
       // before this a lossy switch could toast as a clean one.
+      //
+      // The loss goes FIRST (#1384 review a, steering q90): PaneToast clamps
+      // to three lines, and a shrink summary can be a long sentence ("1
+      // attachment omitted, 130 oldest entries dropped (17k -> 13k chars)"),
+      // which pushed a trailing "history: 132 demoted" out of sight on a
+      // recorded oversized switch.
       const loss = materialProjectionLoss(result.projectionFidelity)
-      const note = (result.strategy === 'native'
-        ? ''
-        : ` · ${result.strategy}${result.shrinkSummary ? ` (${result.shrinkSummary})` : ''}`)
-        + (loss ? ` · ${loss}` : '')
+      const note = (loss ? ` · ${loss}` : '')
+        + (result.strategy === 'native'
+          ? ''
+          : ` · ${result.strategy}${result.shrinkSummary ? ` (${result.shrinkSummary})` : ''}`)
       showPaneToast(
         result.newSessionId,
         `Switched to ${providerChoiceLabel(result.targetKind, targetProviderRuntime)}${note}`,
@@ -316,11 +329,16 @@ export function useProviderActions(
         const attachmentLoss = describeRewindAttachmentLoss(result.promptAttachments, {
           composerCarriesImages: getRendererProviderCapabilities(kind).supportsImageAttachments,
         })
+        // #927: a rewind re-projects the kept prefix and can lose content too.
+        // Named first, like the switch toast, so the three-line clamp cannot
+        // hide it behind the attachment sentence.
+        const projectionLoss = materialProjectionLoss(result.projectionFidelity)
+        const rewound = projectionLoss ? `Rewound to prompt · ${projectionLoss}` : 'Rewound to prompt'
         showPaneToast(
           newSessionId,
           attachmentLoss
-            ? `Rewound to prompt, but ${attachmentLoss} Undo Rewind available until next submit`
-            : 'Rewound to prompt - Undo Rewind available until next submit',
+            ? `${rewound}, but ${attachmentLoss} Undo Rewind available until next submit`
+            : `${rewound} - Undo Rewind available until next submit`,
           // WHY a longer toast for the loss case (#1100 review): the default is
           // 2000 ms and `PaneToast` clamps to three lines, which for a sentence
           // naming two files and two reasons is a message nobody finishes
@@ -328,9 +346,9 @@ export function useProviderActions(
           // are 5-6 s (a copied command, a saved path), and this is the same
           // kind of thing. The ordinary success toast keeps the default,
           // because "it worked" needs no reading time.
-          attachmentLoss ? 6000 : undefined,
+          attachmentLoss || projectionLoss ? 6000 : undefined,
         )
-        return { status: 'completed', sourceSessionId, newSessionId }
+        return { status: 'completed', sourceSessionId, newSessionId, projectionFidelity: result.projectionFidelity }
       } catch (err) {
         const message =
           err instanceof Error && err.message.length > 0

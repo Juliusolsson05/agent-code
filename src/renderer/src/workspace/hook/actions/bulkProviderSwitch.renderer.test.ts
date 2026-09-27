@@ -287,6 +287,23 @@ describe('bulk switch reporting', () => {
 // #1271: a batch holds the app (the modal locks input) for up to five minutes
 // per agent. A stop requested during the batch ends it after the agent in
 // flight, and the summary says what was not attempted.
+// #1384 review b/c: the FORWARD batch has no per-pane toast, so its summary
+// note is that flow's only disclosure of projection loss.
+describe('switchAgentsToProvider projection loss', () => {
+  it('names the loss a native (unshrunk) switch reported', async () => {
+    const { result, state, toasts, toastDurations } = harness(null)
+    ;(state.sessions as Record<string, unknown>).a = { cwd: '/recorded', kind: 'claude', title: 'a' }
+    switchAgentProvider.mockResolvedValue({
+      status: 'switched', strategy: 'native', shrinkSummary: null, newSessionId: 'a-new', projectionFidelity: DEMOTING_SWITCH_FIDELITY,
+    })
+    await result.current.switchAgentsToProvider(['a'] as never, 'codex', {
+      allowSourceTurns: false, compactOnArrival: false, sourceCompactionConfirmed: false,
+    })
+    expect(toasts.at(-1)).toContain('history: 19 demoted')
+    expect(toastDurations.at(-1)).toBe(10_000)
+  })
+})
+
 describe('switchAgentsToProvider stop', () => {
   it('stops before the next agent and reports the rest as not attempted', async () => {
     const { result, state, toasts } = harness(null)

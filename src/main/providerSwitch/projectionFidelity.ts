@@ -9,8 +9,14 @@ import {
 /**
  * The bounded, curated summary of a real native-resume projection (#927).
  *
- * Called right after `projectNativeResume` and before `write`, so every
- * caller holds the summary even when publication fails afterwards. Pure: it
+ * Called right after `projectNativeResume` and before `write`. It is returned
+ * only on SUCCESS: if the write or publication rejects, the operation
+ * rejects with that error and the summary is not carried (Electron's IPC
+ * keeps only an error's message). A rejected publication can still have
+ * linked the native file (see `publishNativeTranscript`), so that outcome is
+ * ambiguous, and accounting for it is #918 B07's receipt, not this summary.
+ * (#1384 review a showed the first version of this comment claimed more.)
+ * Pure: it
  * reads the report and copies what it keeps, so a later reuse of the
  * projector's objects cannot change a summary already handed out (#918 §6.2).
  * See `@shared/types/projectionFidelity` for why messages and evidence are

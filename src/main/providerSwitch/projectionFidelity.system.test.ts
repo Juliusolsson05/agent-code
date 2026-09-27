@@ -15,6 +15,7 @@ import type { ConversationDocument } from 'agent-transcript-parser'
 const state = vi.hoisted(() => ({
   conversation: null as ConversationDocument | null,
   written: [] as unknown[],
+  failWrite: null as Error | null,
 }))
 
 vi.mock('node:crypto', () => ({ randomUUID: () => '00000000-0000-4000-8000-000000000927' }))
@@ -40,6 +41,7 @@ vi.mock('@main/providerSwitch/transcriptEngine.js', () => ({
       sessionId: () => 'new-session',
       write: async (_cwd: string, publication: unknown) => {
         state.written.push(publication)
+        if (state.failWrite) throw state.failWrite
         return '/recorded/new-session.jsonl'
       },
       draft: (content: unknown) => ({ promptText: JSON.stringify(content).slice(0, 20), promptMode: 'prompt', promptImages: [], promptAttachments: [] }),
@@ -56,6 +58,7 @@ import { loadFixtureConversation } from './testing/fixtureConversations.js'
 
 beforeEach(() => {
   state.written = []
+  state.failWrite = null
 })
 
 // The fidelity a caller receives must be the summary of the projection that
@@ -128,6 +131,24 @@ describe('projection fidelity through each real caller (#927)', () => {
   })
 })
 
+// #1384 review a / steering q90: the narrowed contract. The summary is
+// returned only on success. A publication that rejects AFTER the projection
+// (possibly after linking the native file) rejects the whole operation with
+// the write's error and carries no summary; accounting for that ambiguous
+// outcome is #918 B07's receipt. Pinned so a later change cannot quietly
+// return a success-shaped result for a failed publication.
+describe('a rejected publication', () => {
+  it('rejects the operation with the write error and returns no summary', async () => {
+    state.conversation = await loadFixtureConversation('claude-sequence-oversized', 'claude')
+    const failing = new Error('publication failed after link')
+    state.failWrite = failing
+    await expect(switchProvider({ sourceKind: 'claude', targetKind: 'codex', sourceProviderSessionId: 'source', cwd: '/recorded' })).rejects.toBe(failing)
+    await expect(duplicateSession({ provider: 'codex', sourceProviderSessionId: 'source', cwd: '/recorded' })).rejects.toBe(failing)
+    // The write really received the projection: the effect may exist.
+    expect(state.written.length).toBe(2)
+  })
+})
+
 describe('summarizeProjectionReport on a real report', () => {
   // Recorded: claude-sequence-oversized-turns -> Codex, 485 demoted encrypted
   // reasoning blocks: enough changes of one code to exercise the line cap.
@@ -146,6 +167,18 @@ describe('summarizeProjectionReport on a real report', () => {
     expect(listed + fidelity.sourceLinesOmitted).toBe(withLines)
     expect(fidelity.sourceLinesOmitted).toBeGreaterThan(0)
     expect(JSON.stringify(fidelity)).not.toMatch(/"message"|"evidence"/)
+    // #1384 review a/b: the evidence itself, not only its shape. Each row's
+    // lines are the real source addresses of that (kind, code), in order; the
+    // profile is the projector's own; `counts` is a copy, not the report's
+    // object (a later reuse of the report must not rewrite a summary).
+    for (const row of fidelity.codes) {
+      const lines = projection.report.changes
+        .filter(change => change.kind === row.kind && change.code === row.code && change.sourceLine !== null)
+        .map(change => change.sourceLine)
+      expect(row.sourceLines).toEqual(lines.slice(0, 20))
+    }
+    expect(fidelity.providerProfileId).toBe(projection.providerProfile.id)
+    expect(fidelity.counts).not.toBe(projection.report.counts)
     expect(materialProjectionLoss(fidelity)).toMatch(/demoted/)
   })
 })

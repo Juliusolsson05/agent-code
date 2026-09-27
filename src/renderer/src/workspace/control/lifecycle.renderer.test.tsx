@@ -6,6 +6,7 @@ import { useProviderActions } from '@renderer/workspace/hook/actions/provider'
 import { makeRefs, sessionActionsWithSpawn } from '@renderer/workspace/hook/actions/testing/paneActionsHarness'
 import type { Workspace } from '@renderer/workspace/hook'
 import { lifecycleControlCapabilities } from './lifecycle'
+import { DEMOTING_SWITCH_FIDELITY } from '@renderer/workspace/hook/actions/testing/recordedProjectionFidelity'
 
 const original = useAppStore.getState()
 const originalApi = window.api
@@ -78,6 +79,19 @@ it('keeps draft edits made during native rewind recoverable by undo', async () =
   await invoke('agents.rewind', { sessionId: 'source', revision: await revision(), address: { provider: 'codex', sessionId: 'native-source', line: 1 } })
   await vi.waitFor(() => expect(report).toHaveBeenCalledWith(expect.objectContaining({ capabilityId: 'operations.finish' })))
   expect(useAppStore.getState().workspaceRuntimes.replacement).toMatchObject({ draftInput: 'Historical prompt', pendingRewindUndo: { previousDraftInput: 'Edited during replacement' } })
+})
+
+// #1384 review c / steering q90: a control caller that rewinds an agent reads
+// the projection report from operations.read. Before, the lifecycle result
+// helper kept only the IDs, and the rewind action dropped the report before
+// anything could inspect it.
+it('relays the rewound copy\'s projection fidelity to the control result', async () => {
+  const { invoke, revision, report } = setup()
+  window.api.rewindToPrompt = vi.fn<typeof window.api.rewindToPrompt>().mockResolvedValue({ provider: 'codex', newProviderSessionId: 'rewound-native', newFilePath: '/recorded/rewound.jsonl', promptText: 'Historical prompt', promptImages: [], promptAttachments: [], promptMode: 'prompt', promptTimestamp: null, projectionFidelity: DEMOTING_SWITCH_FIDELITY })
+  await invoke('agents.rewind', { sessionId: 'source', revision: await revision(), address: { provider: 'codex', sessionId: 'native-source', line: 1 } })
+  await vi.waitFor(() => expect(report).toHaveBeenCalledWith(expect.objectContaining({ capabilityId: 'operations.finish', input: {
+    callId: 'original-call', result: { ok: true, value: { sourceSessionId: 'source', newSessionId: 'replacement', status: 'completed', projectionFidelity: DEMOTING_SWITCH_FIDELITY } },
+  } })))
 })
 
 it('refuses to rewind a native terminal agent (Pi), whose TUI has no composer for the rewound prompt', async () => {

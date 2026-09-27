@@ -53,3 +53,25 @@ Main-process tests drive the real entry points with real projectors; the app is 
 - **B07 receipts / operation records:** no receipt store exists yet. The summary is on the result, which is what the client can inspect today.
 - **The rewind toast in `pane.ts`:** open PR #1369 edits that file. The rewind result carries the field for a follow-up.
 - **Draft-restoration reports** (#929) and literal-markup provenance (#930).
+
+## Review round 1 (a and c: FIX-BEFORE-MERGE; b: FIX, test gaps) and steering q90
+- **a (major): a publication that rejects after the effect loses the summary.** It may have linked the native file.
+  - **Ruling:** narrow the claim instead of carrying the summary on the failure. Electron's IPC keeps only an error's message, so a summary on a thrown error never reaches the renderer. A new failure arm on all three results is #918 B07's receipt work.
+  - The comments now say the summary is returned only on success.
+  - A recorded-sequence test pins it: a write that rejects after receiving the projection rejects the operation with that error and returns no success-shaped result.
+- **c (major): the control entry points discarded the summary.**
+  - `agents.switchProvider` and `agents.rewind` (through the `result` helper) and `agents.duplicate` now return `projectionFidelity`, and their descriptions name it. Duplicate is no longer called "exact".
+  - The rewind action returns it and names material loss in its toast.
+  - Correction: the rewind toast lives in `provider.ts`, not in `pane.ts` as this plan first said, so it is in scope.
+- **a (major): toast order.** Material loss now comes before the shrink prose, because PaneToast clamps to three lines.
+- **Pins, each killing its surviving mutation:**
+  - the populated main → renderer relay (`providerSwitchCore`);
+  - the forward bulk note;
+  - the unplaced (row-menu) duplicate toast;
+  - the control relay, through the real rewind action;
+  - the rewind toast;
+  - exact source lines per code, the profile id, and `counts` copied rather than aliased.
+- **b:** the false comment "every recorded sequence loses something" is corrected (two Claude sequences are lossless).
+- **Still for the owner:**
+  - the material rule (b notes that `reasoning.encrypted-content-demoted` and `tool-result.error-status-demoted` keep their content, so every Claude → Codex switch toasts a demotion line);
+  - the wording.

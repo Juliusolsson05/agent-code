@@ -104,6 +104,28 @@ describe('Duplicate Agent command', () => {
     else expect(showPaneToast).not.toHaveBeenCalled()
   })
 
+  // #1384 review b/c: the Sessions-row menu's duplicate (explicit target) is
+  // left unplaced and says so in its own toast; the loss rides that toast.
+  it('names material projection loss in the unplaced (row-menu) duplicate toast', async () => {
+    const duplicateSession = vi.fn().mockResolvedValue({ newProviderSessionId: 'provider-clone', projectionFidelity: DEMOTING_SWITCH_FIDELITY })
+    Object.defineProperty(window, 'api', { configurable: true, value: { duplicateSession } })
+    const showPaneToast = vi.fn()
+    const workspace = {
+      state: {
+        activeTabId: 'tab-klay',
+        stage: oneLaneStage('source'), pinnedSessionIds: [],
+        sessions: { source: { cwd: '/projects/klay', kind: 'codex', providerSessionId: 'provider-source', projectId: 'tab-klay', joinedAt: 0 } },
+        tabs: [{ id: 'tab-klay' }],
+      },
+      createDetachedDispatchAgent: vi.fn().mockResolvedValue('clone-pane'),
+      splitFocused: vi.fn(),
+      showPaneToast,
+    } as unknown as Workspace
+    const context = { workspace, target: 'source', ui: { closePalette: vi.fn() }, flags: {} } as unknown as CommandContext
+    await sessionCommands.find(candidate => candidate.id === 'duplicate-agent')!.run(context)
+    expect(showPaneToast).toHaveBeenCalledWith('source', 'Duplicated — the copy is marked new in the Sessions list · history: 19 demoted', 8000)
+  })
+
   it('never hands a clone the root-management grant', async () => {
     const duplicateSession = vi.fn().mockResolvedValue({ newProviderSessionId: 'provider-clone' })
     Object.defineProperty(window, 'api', { configurable: true, value: { duplicateSession } })
