@@ -54,10 +54,25 @@ export class PasteDebugJournal {
   private queue: string[] = []
   private timer: NodeJS.Timeout | null = null
   private ensuredDir = false
-  private draining = false
+  // The append currently writing, if any (review of #1417, b and c). The old
+  // `draining` boolean made a second drain return at once, so flush() on a
+  // writer whose timer drain was mid-append resolved before that append
+  // landed: an evicted writer then escaped the shutdown drain and a quit could
+  // lose its events. flush() now joins this promise, then writes the rest.
+  private inFlight: Promise<void> | null = null
   private sessionStartedAtMs: number | null = null
 
-  constructor(private readonly filePath: string) {}
+  constructor(
+    private readonly filePath: string,
+    private readonly options: {
+      appendFile?: typeof appendFile
+      // A previous writer for the same file whose final flush is still
+      // landing (an evicted paste that is written to again). This writer's
+      // first append waits for it, so the file keeps event order: the reader
+      // takes a session's start from its first line.
+      after?: Promise<void>
+    } = {},
+  ) {}
 
   append(input: PasteDebugEventInput): void {
     const now = Date.now()
@@ -76,7 +91,16 @@ export class PasteDebugJournal {
       clearTimeout(this.timer)
       this.timer = null
     }
-    await this.drain()
+    for (;;) {
+      if (this.inFlight) {
+        // Another drain's failure is reported where it started; here we only
+        // need it settled before writing what follows it.
+        await this.inFlight.catch(() => {})
+        continue
+      }
+      if (this.queue.length === 0) return
+      await this.drain()
+    }
   }
 
   private scheduleDrain(): void {
@@ -87,27 +111,28 @@ export class PasteDebugJournal {
     }, FLUSH_INTERVAL_MS)
   }
 
-  private async drain(): Promise<void> {
-    if (this.draining) return
-    if (this.queue.length === 0) return
-    this.draining = true
-    try {
-      const batch = this.queue.splice(0).join('')
-      await this.appendRaw(batch)
-    } finally {
-      this.draining = false
-    }
-    if (this.queue.length > 0 && !this.timer) this.scheduleDrain()
+  private drain(): Promise<void> {
+    if (this.inFlight) return this.inFlight
+    if (this.queue.length === 0) return Promise.resolve()
+    const batch = this.queue.splice(0).join('')
+    const writing = this.appendRaw(batch).finally(() => {
+      this.inFlight = null
+      if (this.queue.length > 0 && !this.timer) this.scheduleDrain()
+    })
+    this.inFlight = writing
+    return writing
   }
 
   private async appendRaw(content: string): Promise<void> {
+    if (this.options.after) await this.options.after.catch(() => {})
+    const append = this.options.appendFile ?? appendFile
     try {
-      await appendFile(this.filePath, content, { mode: 0o600 })
+      await append(this.filePath, content, { mode: 0o600 })
     } catch {
       if (!this.ensuredDir) {
         await mkdir(dirname(this.filePath), { recursive: true, mode: 0o700 })
         this.ensuredDir = true
-        await appendFile(this.filePath, content, { mode: 0o600 })
+        await append(this.filePath, content, { mode: 0o600 })
       } else {
         throw new Error(`paste-debug append failed for ${this.filePath}`)
       }
@@ -130,6 +155,10 @@ export class PasteDebugJournalRegistry {
   private journals = new Map<string, PasteDebugJournal>()
   /** Flushes started by dispose(), until they settle; see flushAll. */
   private readonly disposing = new Set<Promise<void>>()
+  /** The same flushes by paste id, so a re-created writer appends after them. */
+  private readonly disposingById = new Map<string, Promise<void>>()
+
+  constructor(private readonly options: { appendFile?: typeof appendFile } = {}) {}
 
   get size(): number {
     return this.journals.size
@@ -138,7 +167,7 @@ export class PasteDebugJournalRegistry {
   get(pasteId: string): PasteDebugJournal {
     let j = this.journals.get(pasteId)
     if (!j) {
-      j = new PasteDebugJournal(pasteDebugLogPath(pasteId))
+      j = new PasteDebugJournal(pasteDebugLogPath(pasteId), { ...this.options, after: this.disposingById.get(pasteId) })
       this.journals.set(pasteId, j)
       // Insertion order is age: evict the oldest paste (flushing it first),
       // never the one just asked for.
@@ -169,7 +198,11 @@ export class PasteDebugJournalRegistry {
       console.warn('[pasteDebugJournal] dispose flush error:', err)
     })
     this.disposing.add(flushing)
-    void flushing.finally(() => this.disposing.delete(flushing))
+    this.disposingById.set(pasteId, flushing)
+    void flushing.finally(() => {
+      this.disposing.delete(flushing)
+      if (this.disposingById.get(pasteId) === flushing) this.disposingById.delete(pasteId)
+    })
     this.journals.delete(pasteId)
   }
 }
