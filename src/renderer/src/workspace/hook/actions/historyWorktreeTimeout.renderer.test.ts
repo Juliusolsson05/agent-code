@@ -78,6 +78,44 @@ describe('history read while git timed out (#1430 review a/b)', () => {
     expect(runtime.workContext?.worktreePath).toBe(codex.git.ui?.path)
   })
 
+  it('an older page read during the timeout never outranks the newest chunk (#1450 B6 verify)', async () => {
+    // B6's sequence: the initial history (newest) is handed over while git
+    // times out; the user scrolls up while it still times out, and the older
+    // page is handed over too; git recovers. The older page must stay OLDER
+    // evidence: the pane belongs where the newest records put it.
+    //
+    // Older page = the recorded worktree-2 window. Newest chunk = the same
+    // recorded records moved to worktree-1 and 1 h later (only cwd and
+    // timestamp change, so the record shape is the recorded one).
+    const worktree1 = catalog.find(w => w.path.endsWith('/worktree-1'))!.path
+    const newest = codex.records.map(record => {
+      const r = structuredClone(record) as { timestamp?: string; payload?: { item?: { cwd?: string } } }
+      if (r.timestamp) r.timestamp = new Date(Date.parse(r.timestamp) + 3_600_000).toISOString()
+      if (r.payload?.item?.cwd) r.payload.item.cwd = `file://${worktree1}`
+      return r
+    })
+    let gitAnswers = false
+    let runtime: SessionRuntime = emptyRuntime()
+    let reconciler!: LiveWorktreeReconciler
+    reconciler = new LiveWorktreeReconciler({
+      loadWorktrees: async () => gitAnswers ? { ok: true, worktrees: catalog } : { ok: false, gitMissing: false, timedOut: true } as never,
+      onCatalogReady: cwd => {
+        const projection = reconciler.project({ sessionId: 'resumed', cwd, projection: runtime })
+        runtime = { ...runtime, ...projection }
+      },
+    })
+    const refs = { worktreeReconcilerRef: { current: reconciler }, latestRuntimesRef: { current: { resumed: runtime } } }
+
+    handHistoryToReconciler(refs as never, 'resumed', codex.git.main.path, newest)
+    expect(await reconciler.refresh(codex.git.main.path)).toBe('failed')
+    handHistoryToReconciler(refs as never, 'resumed', codex.git.main.path, codex.records, 'older')
+    expect(await reconciler.refresh(codex.git.main.path)).toBe('failed')
+    gitAnswers = true
+    expect(await reconciler.refresh(codex.git.main.path)).toBe('ready')
+
+    expect(runtime.workContext?.worktreePath).toBe(worktree1)
+  })
+
   it('does nothing without a reconciler or without records', () => {
     expect(() => handHistoryToReconciler({ worktreeReconcilerRef: { current: null }, latestRuntimesRef: { current: {} } } as never, 's', '/x', [{}])).not.toThrow()
   })

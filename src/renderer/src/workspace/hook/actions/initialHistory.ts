@@ -612,10 +612,14 @@ export function handHistoryToReconciler(
   sessionId: SessionId,
   cwd: string,
   entries: readonly unknown[],
+  // 'older' for an older-history page: it enters the reconciler's window as
+  // the OLDEST evidence, so a scroll-up during a git timeout never outranks
+  // the newest chunk (#1450 B6 verify).
+  position: 'newest' | 'older' = 'newest',
 ): void {
   const reconciler = refs.worktreeReconcilerRef.current
   if (!reconciler || entries.length === 0) return
-  reconciler.observe(sessionId, cwd, entries.map(entry => ({ entry })), refs.latestRuntimesRef.current[sessionId] ?? emptyRuntime())
+  reconciler.observe(sessionId, cwd, entries.map(entry => ({ entry })), refs.latestRuntimesRef.current[sessionId] ?? emptyRuntime(), position)
   // 'cached' means a fresh catalog was already there, so no onCatalogReady is
   // coming: replay now or the chunk waits for an unrelated event (#1450
   // verification a). 'ready' already replayed; 'failed' is retried by the

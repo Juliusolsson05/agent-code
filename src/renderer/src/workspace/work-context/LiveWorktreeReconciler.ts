@@ -109,6 +109,12 @@ export class LiveWorktreeReconciler {
     cwd: string,
     entries: ReadonlyArray<{ entry: unknown }>,
     projection: WorktreeRuntimeProjection,
+    // 'older' = an older-history page (#1450 B6 verify). Its records predate
+    // everything already retained, so they enter at the OLD end of the
+    // window. Appended like a live batch, a scroll-up during a git timeout
+    // became the newest evidence and moved the pane to the older worktree
+    // once git recovered: folding is in window order, and the last write wins.
+    position: 'newest' | 'older' = 'newest',
   ): WorktreeRuntimeProjection {
     if (this.disposed) return projection
     let evidence = this.evidenceBySession.get(sessionId)
@@ -160,6 +166,13 @@ export class LiveWorktreeReconciler {
     const relevantRaw = entries
       .map(({ entry }) => entry)
       .filter(entry => extractWorktreeActivityEvents(entry, this.now()).length > 0)
+    if (position === 'older') {
+      this.retainOlder(cwd, evidence, relevantRaw)
+      this.evidenceBySession.set(sessionId, evidence)
+      const next = this.rebuild(cwd, evidence)
+      evidence.lastEmitted = next
+      return next
+    }
     evidence.recentRaw.push(...relevantRaw)
     // Length is not a generation: after eviction this window stays at 500
     // while its contents keep changing. Irrelevant transport batches do not
@@ -215,6 +228,41 @@ export class LiveWorktreeReconciler {
     const cached = this.cache.get(cwd)
     if (!cached || cached.refreshedAt <= 0) return
     this.onCatalogReady(cwd)
+  }
+
+  /**
+   * Put an older page's relevant records at the OLD end of the retained
+   * evidence, under the same 2 × recentRawLimit bound as live batches.
+   *
+   * Order of age, oldest first: deferredRaw, then recentRaw. The page predates
+   * both, so it goes in front of whichever is non-empty first. What does not
+   * fit is the oldest evidence there is, so it is what gets dropped:
+   * - With a cached catalog the baseline already holds folded records that are
+   *   NEWER than this page, and folding the page on top of them would make it
+   *   the newest again. So the overflow is dropped, never folded; the window
+   *   is full of newer evidence anyway.
+   * - Without a catalog the overflow moves into deferredRaw's front, and what
+   *   deferredRaw cannot hold is counted in droppedBeforeCatalog, as for live
+   *   evictions.
+   */
+  private retainOlder(cwd: string, evidence: SessionEvidence, relevantRaw: unknown[]): void {
+    if (relevantRaw.length === 0) return
+    evidence.revision += 1
+    if (evidence.deferredRaw.length > 0) {
+      evidence.deferredRaw.unshift(...relevantRaw)
+    } else {
+      evidence.recentRaw.unshift(...relevantRaw)
+      if (evidence.recentRaw.length > this.recentRawLimit) {
+        const overflow = evidence.recentRaw.splice(0, evidence.recentRaw.length - this.recentRawLimit)
+        const cached = this.cache.get(cwd)
+        if (!(cached && cached.refreshedAt > 0)) evidence.deferredRaw.unshift(...overflow)
+      }
+    }
+    if (evidence.deferredRaw.length > this.recentRawLimit) {
+      const overflow = evidence.deferredRaw.length - this.recentRawLimit
+      evidence.deferredRaw.splice(0, overflow)
+      evidence.droppedBeforeCatalog += overflow
+    }
   }
 
   forgetSession(sessionId: SessionId): void {

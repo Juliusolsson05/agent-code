@@ -121,7 +121,7 @@ export function useHistoryActions(
         // older page handed over while the pane already knew a newer
         // worktree moved it back to the older one once git recovered.
         const worktrees = worktreesForAttribution(worktreesResult)
-        if (worktrees === null && !runtime.workContext) handHistoryToReconciler(refs, sessionId, meta.cwd, chunk.entries)
+        if (worktrees === null && !runtime.workContext) handHistoryToReconciler(refs, sessionId, meta.cwd, chunk.entries, 'older')
         let workActivity = runtime.workActivity
         let workContext = runtime.workContext
         let oldestMarker: string | null = runtime.historyOldestMarker

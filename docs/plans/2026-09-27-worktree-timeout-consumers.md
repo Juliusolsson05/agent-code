@@ -155,3 +155,26 @@ Both findings are gaps in the round-1 hand-off.
   - Pinned: a pane with a known context hands nothing over and keeps it.
   - Ruling: initial history needs no such guard. It is the transcript's
     tail, the newest evidence there is.
+
+## Manager verification (B6 at f5fc3585: FIX), fixed fail-first
+
+- **A scroll-up during a git timeout outranked the newest chunk.** The
+  sequence: the initial history (worktree-1) is handed over during a
+  timeout, then the user scrolls up while git still times out, and the
+  older page (worktree-2) is handed over too. It was appended as the
+  newest evidence, and once git recovered the pane landed on worktree-2.
+  - Fix: `observe(..., position)`. An older page enters at the OLD end of
+    the window (`retainOlder`), under the same 2 × limit bound.
+  - Overflow is the oldest evidence there is, so it is dropped rather than
+    folded when a catalog is cached. The folded baseline holds newer
+    records, and folding on top of them would make the page newest again.
+  - `handHistoryToReconciler(..., 'older')` is used by the older-history
+    loader.
+  - Pinned: the recorded `codex-0151` window as the older page, with the
+    same records moved to worktree-1 and 1 h later as the newest chunk,
+    and the recorded three-worktree catalog. It now lands on worktree-1.
+  - Mutations: appending instead of prepending, and the loader passing
+    newest, are each 1 red.
+- The `resolveRepoRoot.ts` header now says Unknown, not the cwd.
+- Filed separately by B6, out of scope here: a git failure that is not a
+  timeout is still read as "not a repository".

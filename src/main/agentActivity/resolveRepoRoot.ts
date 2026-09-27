@@ -8,9 +8,11 @@
  * itself — a silent, persisted mis-grouping. A timeout is almost always the
  * git queue being busy (#1429's shared queue of five), which drains, so one
  * retry usually answers. Two timeouts are "unknown", and unknown is thrown:
- * the recorder's existing catch then uses the cwd for that one interval and
- * says so, and the next interval asks again. Never a loop — the recorder
- * awaits this on every interval open.
+ * the recorder records that one interval's repository as UNKNOWN (`''`, the
+ * store's "no repository" value) and warns, and the next interval asks again.
+ * Not the cwd (steering q126): the store persisted it, and a worktree folder
+ * became a repository of its own that no later interval could fold back.
+ * Never a loop — the recorder awaits this on every interval open.
  *
  * A non-repository (git answered, no worktrees) is not a timeout: the cwd is
  * then the honest root, exactly as before.

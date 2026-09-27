@@ -216,13 +216,14 @@ async function loadOlderPageWhileGitTimesOut(initial: Partial<SessionRuntime> = 
     session: { ...emptyRuntime(), hasOlderHistory: true, historyOldestMarker: 'anchor', ...initial },
   }
   const observed: unknown[][] = []
+  const positions: Array<string | undefined> = []
   const refresh = vi.fn(async () => 'failed' as const)
   const refs = {
     stateRef: ref({ sessions: { session: { kind: 'claude', cwd: '/tmp/project', providerSessionId: 'provider-session' } } }),
     latestRuntimesRef: ref(runtimes),
     seenUuidsRef: ref({}),
     worktreeReconcilerRef: ref({
-      observe: (_s: string, _c: string, entries: Array<{ entry: unknown }>, projection: unknown) => { observed.push(entries.map(e => e.entry)); return projection },
+      observe: (_s: string, _c: string, entries: Array<{ entry: unknown }>, projection: unknown, position?: string) => { observed.push(entries.map(e => e.entry)); positions.push(position); return projection },
       refresh,
       replayCachedCatalog: vi.fn(),
     }),
@@ -247,15 +248,17 @@ async function loadOlderPageWhileGitTimesOut(initial: Partial<SessionRuntime> = 
   const { result } = renderHook(() => useHistoryActions(setRuntimes, refs, updateRuntime, ipcSessionFeed))
   let outcome: unknown
   await act(async () => { outcome = await result.current.loadOlderHistory('session') })
-  return { outcome, observed, refresh, older, runtime: () => runtimes.session }
+  return { outcome, observed, positions, refresh, older, runtime: () => runtimes.session }
 }
 
 describe('an older page read while git timed out (#1430)', () => {
   it('hands the page to the reconciler, asks it to refresh, and attributes nothing', async () => {
-    const { outcome, observed, refresh, older, runtime } = await loadOlderPageWhileGitTimesOut()
+    const { outcome, observed, positions, refresh, older, runtime } = await loadOlderPageWhileGitTimesOut()
 
     expect(outcome).not.toBe('failed')
     expect(observed).toEqual([[{ entries: [older], historyMarker: 'older-1' }]])
+    // As the OLDEST evidence, never the newest (#1450 B6 verify).
+    expect(positions).toEqual(['older'])
     expect(refresh).toHaveBeenCalledWith('/tmp/project')
     // Nothing was attributed against the unknown family: no activity folded
     // from the page, no work context derived from it.
