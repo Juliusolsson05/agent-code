@@ -149,8 +149,15 @@ export class AgentActivityStore {
         const context = parseContext(line)
         if (context) ids.set(contextKey(context), line.c)
       }
-    } catch {
-      // No file yet for this month.
+    } catch (error) {
+      // Only a missing file means "no contexts yet" (#1414 review a round 2,
+      // q115 "unknown is never empty"). A file that exists but cannot be read
+      // was treated as empty: ids restarted at 1, a second agent got the id
+      // the first agent's lines already use, and once readable the first
+      // agent's later hours read back as the second's. Refuse the append
+      // instead (the interval is lost, as for any failed write); nothing is
+      // cached, so the next append reads again.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
     this.monthContexts.set(month, ids)
     this.monthNextId.set(month, highest + 1)

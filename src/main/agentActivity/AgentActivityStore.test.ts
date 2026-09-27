@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { appendFile, chmod, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -174,5 +174,61 @@ describe('a partially written context', () => {
     await restarted.appendInterval({ context: a, startedAt: start + 2 * HOUR, endedAt: start + 3 * HOUR })
     const read = await new AgentActivityStore(dir).readIntervals(start, start + 4 * HOUR)
     expect(read.map(interval => interval.context.agentKey)).toEqual(['B', 'A'])
+  })
+})
+
+// #1414 review a round 2 (q115, "unknown is never empty"): an existing month
+// file that cannot be READ was treated as absent, so a restarted store started
+// ids at 1 and gave a second agent the id the first agent's lines already use.
+// Once readable again, the first agent's later hours read back as the second
+// agent's. Only ENOENT means "no file yet"; any other failure refuses the
+// append, and the bytes stay as they were.
+describe('an unreadable month file', () => {
+  it('refuses the append instead of restarting ids, and ids continue once it is readable', async () => {
+    const start = Date.parse('2026-09-01T09:00:00Z')
+    const a = { ...context, agentKey: 'A', label: 'A' }
+    const b = { ...context, agentKey: 'B', label: 'B' }
+    await new AgentActivityStore(dir).appendInterval({ context: a, startedAt: start, endedAt: start + HOUR })
+    const file = join(dir, '2026-09.jsonl')
+    const before = await readFile(file)
+    await chmod(file, 0o200)
+    try {
+      await expect(new AgentActivityStore(dir).appendInterval({ context: b, startedAt: start + HOUR, endedAt: start + 2 * HOUR })).rejects.toThrow()
+    } finally {
+      await chmod(file, 0o600)
+    }
+    expect(await readFile(file)).toEqual(before)
+    const restarted = new AgentActivityStore(dir)
+    await restarted.appendInterval({ context: b, startedAt: start + HOUR, endedAt: start + 2 * HOUR })
+    await restarted.appendInterval({ context: a, startedAt: start + 2 * HOUR, endedAt: start + 3 * HOUR })
+    const read = await new AgentActivityStore(dir).readIntervals(start, start + 4 * HOUR)
+    expect(read.map(interval => interval.context.agentKey)).toEqual(['A', 'B', 'A'])
+  })
+})
+
+// #1414 review b round 2 (test gap): a failed write that wrote NOTHING still
+// consumed its id, and a restart must continue from the highest id on disk,
+// not from the count of contexts (which would reissue a live id).
+describe('an id gap left by a failed write', () => {
+  it('is never filled by a later context after a restart', async () => {
+    const store = new AgentActivityStore(dir)
+    const internal = store as unknown as { appendLines: (file: string, lines: string[]) => Promise<void> }
+    const realAppend = internal.appendLines.bind(store)
+    let failNext = true
+    internal.appendLines = async (file, lines) => {
+      if (failNext) { failNext = false; throw Object.assign(new Error('no space left'), { code: 'ENOSPC' }) }
+      return realAppend(file, lines)
+    }
+    const start = Date.parse('2026-09-01T09:00:00Z')
+    const a = { ...context, agentKey: 'A', label: 'A' }
+    const b = { ...context, agentKey: 'B', label: 'B' }
+    const c = { ...context, agentKey: 'C', label: 'C' }
+    await expect(store.appendInterval({ context: a, startedAt: start, endedAt: start + HOUR })).rejects.toThrow('no space left')
+    await store.appendInterval({ context: b, startedAt: start + HOUR, endedAt: start + 2 * HOUR })
+    const restarted = new AgentActivityStore(dir)
+    await restarted.appendInterval({ context: c, startedAt: start + 2 * HOUR, endedAt: start + 3 * HOUR })
+    await restarted.appendInterval({ context: b, startedAt: start + 3 * HOUR, endedAt: start + 4 * HOUR })
+    const read = await new AgentActivityStore(dir).readIntervals(start, start + 5 * HOUR)
+    expect(read.map(interval => interval.context.agentKey)).toEqual(['B', 'C', 'B'])
   })
 })
