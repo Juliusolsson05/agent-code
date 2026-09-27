@@ -181,6 +181,14 @@ function withDeclaredRequiredKeys(schema: z.ZodType, jsonSchema: unknown): z.Zod
       ? schema
       : schema.clone({ ...schema._zod.def, options: repaired } as never) as z.ZodType
   }
+  // A record comes back as ZodPipe(transform -> object whose catchall is the
+  // value schema), verified on zod 4.6.5 (verification b of #1366). Repair the
+  // output side; the object branch below repairs the catchall.
+  if (schema instanceof z.ZodPipe) {
+    const out = schema._zod.def.out as z.ZodType
+    const repaired = withDeclaredRequiredKeys(out, jsonSchema)
+    return repaired === out ? schema : schema.clone({ ...schema._zod.def, out: repaired } as never) as z.ZodType
+  }
   if (schema instanceof z.ZodArray) {
     const element = schema.element as z.ZodType
     const repaired = withDeclaredRequiredKeys(element, jsonSchema.items)
@@ -196,6 +204,13 @@ function withDeclaredRequiredKeys(schema: z.ZodType, jsonSchema: unknown): z.Zod
     if (repaired !== child) nested[key] = repaired
   }
   if (Object.keys(nested).length > 0) result = result.extend(nested)
+  // Record values (and any object with typed additional properties) live in
+  // the catchall; its own `required` is lost on re-export like any nested one.
+  const catchall = schema._zod.def.catchall as z.ZodType | undefined
+  if (catchall && isJsonObjectSchema(jsonSchema.additionalProperties)) {
+    const repairedCatchall = withDeclaredRequiredKeys(catchall, jsonSchema.additionalProperties)
+    if (repairedCatchall !== catchall) result = result.catchall(repairedCatchall)
+  }
   const required = Array.isArray(jsonSchema.required)
     ? jsonSchema.required.filter((key): key is string => typeof key === 'string' && key in shape)
     : []
