@@ -543,6 +543,8 @@ Next in Stage 1: rewrite PARTLY-FIXED bodies down to what remains (decision
 
 ## 12. Progress log (newest first)
 
+- 2026-09-26 (17:52) — **#1324 MERGED** (`d15a9756`, Fixes #1267, closed). session:spawn launders provider exceptions before they cross IPC and journals a fixed signature. Merged alone: 3 reviewers × 2 rounds, disposition plus q42 addendum, exact-head CI green, contained main. Main moved, so #1319/#1325/#1326/#1331 are merging it in; #1326 applies the q42 Map integration first. Holds: q50 atp#37 (managed statusLine runs), q51 #1328 (live-Goal eviction race), #1330 (owner retention window). New reviews: claude-code-headless#64 (#1273).
+
 - 2026-09-26 (17:47) — **workflow-mcp#64 MERGED** (`80363d77`). It pins libexpat 2.8.5-r0 (fixes CVE-2026-93990), which repairs the image-contract check on every workflow-mcp PR. 3/3 reviewers MERGE-READY; exact-head CI 8/8 green. #1331 (Fixes #1320, stacked on #1325) is in review. q48: #1319 becomes Refs #800. q49: #1330 must retain tasks, quarantines and unknown outcomes.
 
 - 2026-09-26 (17:40) — **codex-headless#55 MERGED** (`6334d5ac`). A settled-screen API: no parse pending, no open DEC 2026 synchronized update, and the provider has painted since the last resize. 3 reviewers; A/B verified MERGE-READY in round 2; exact-head CI green. W1 now bumps #1319 to it. Also: q44 holds atp#37 (env allowlist); q47 holds #1330 for the owner's retention decision; #1326 is back to W3 (q47 point 2). Reviewers are running for #1330 and wfm#64.
