@@ -49,11 +49,17 @@ says it or stays unknown, and none caches or records the wrong family.
   `agentActivity/`.
   - It retries once when the list timed out: the git queue is the usual
     cause, and it drains.
-  - If it times out again it throws. The recorder already catches with
-    the cwd, and it now warns that this row's repository is unknown.
+  - If it times out again it throws `RepoRootUnknown`. The recorder then
+    records the interval's repository as UNKNOWN (`''`, the store's
+    existing "no repository" value, which the summary labels Unknown) and
+    warns. The worktree row keeps its `cwd`, and the next interval asks git
+    again.
+  - Steering q126: the first version fell back to the cwd. The store
+    persisted it, and summarize grouped by it, so a worktree folder became
+    a repository of its own that no later interval could fold back. It
+    never healed.
   - Ruling: one retry, never a loop. The recorder awaits this on every
-    interval open. Cost if wrong: one mis-filed interval, which heals on
-    the next.
+    interval open.
 - **Renderer history:** a `gitWorktrees` answer with `timedOut` skips
   worktree attribution for that chunk, and `workActivity`/`workContext`
   stay as they were. "Unknown" stays unknown; the live reconciler fills it
@@ -71,6 +77,10 @@ says it or stays unknown, and none caches or records the wrong family.
   - timeout then success → the main checkout;
   - two timeouts → throws;
   - a success first → no retry.
+- `AgentActivityRecorder` (steering q126), the real interval path and a real
+  store: two timeouts, then success. The first interval is under Unknown,
+  the second under the repository, and there is never a bucket keyed by the
+  worktree folder. Before: a `/dev/agent-code/.worktrees/fix` repository.
 - `loadWorktreeDump` / `formatWorktreeDump`: the activity line says the
   git timeout.
 - `initialHistory`: a `timedOut` worktrees answer leaves `workActivity`

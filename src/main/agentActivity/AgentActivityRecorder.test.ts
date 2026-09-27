@@ -474,3 +474,57 @@ describe('AgentActivityRecorder', () => {
     expect(summary.totals.agentMs).toBe(10 * MINUTE)
   })
 })
+
+// #1430 / steering q126: git timing out twice made resolveRepoRoot throw, the
+// recorder's catch answered the CWD, and the store persisted the worktree folder
+// as the interval's repository. summarize groups by that stored key, so the
+// worktree became a repository of its own and a later successful interval could
+// never fold the earlier one back. An unresolved repository is recorded as
+// UNKNOWN ('' — the store's existing "no repository" value, labelled Unknown),
+// never as a false one; the cwd still names the worktree row.
+describe('AgentActivityRecorder when git times out resolving the repository', () => {
+  it('files the interval under Unknown, never under the worktree folder, and later intervals under the repository', async () => {
+    const { resolveRepoRootAfterGit } = await import('@main/agentActivity/resolveRepoRoot.js')
+    let gitTimingOut = true
+    const manager = new EventEmitter()
+    const recorder = new AgentActivityRecorder({
+      manager: manager as unknown as Pick<SessionManager, 'on'>,
+      store: new AgentActivityStore(dir),
+      // The REAL retry-once policy over a git lister that times out, then answers.
+      resolveRepoRoot: cwd => resolveRepoRootAfterGit(async () => gitTimingOut
+        ? { worktrees: [], timedOut: true }
+        : { worktrees: [{ path: '/dev/agent-code' }, { path: '/dev/agent-code/.worktrees/fix' }], timedOut: false }, cwd),
+      identityOf: () => undefined,
+    })
+    recorders.push(recorder)
+    await recorder.start()
+    recorder.updateWorkspace(windows(), { 'name-1': 'Ada' })
+    manager.emit('started', { sessionId: 'child', kind: 'codex' })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      manager.emit('semantic-event', { sessionId: 'child', event: { type: 'stream_phase', phase: 'responding' } })
+      vi.setSystemTime(T0 + HOUR)
+      manager.emit('semantic-event', { sessionId: 'child', event: { type: 'stream_phase', phase: 'idle' } })
+      await vi.waitFor(async () => expect((await recorder.summary('24h')).totals.agentMs).toBe(HOUR))
+
+      gitTimingOut = false
+      vi.setSystemTime(T0 + 2 * HOUR)
+      manager.emit('semantic-event', { sessionId: 'child', event: { type: 'stream_phase', phase: 'responding' } })
+      vi.setSystemTime(T0 + 3 * HOUR)
+      manager.emit('semantic-event', { sessionId: 'child', event: { type: 'stream_phase', phase: 'idle' } })
+      vi.setSystemTime(T0 + 4 * HOUR)
+      await vi.waitFor(async () => expect((await recorder.summary('24h')).totals.agentMs).toBe(2 * HOUR))
+
+      const [project] = (await recorder.summary('24h')).projects
+      const repositories = project!.repositories.map(r => [r.repoRoot, r.label, r.agentMs, r.worktrees.map(w => w.cwd)])
+      expect(repositories).toEqual(expect.arrayContaining([
+        ['', 'Unknown', HOUR, ['/dev/agent-code/.worktrees/fix']],
+        ['/dev/agent-code', 'agent-code', HOUR, ['/dev/agent-code/.worktrees/fix']],
+      ]))
+      // The false repository — the worktree folder as its own repository — never exists.
+      expect(project!.repositories.some(r => r.repoRoot === '/dev/agent-code/.worktrees/fix')).toBe(false)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})
