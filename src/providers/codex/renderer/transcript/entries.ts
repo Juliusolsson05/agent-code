@@ -133,8 +133,11 @@ function partToBlock(part: ResultPart): { type: string; text?: string; [key: str
   }
 }
 
-/** Codex's `exec_command_end` wraps its output in a "Chunk ID: …\nOutput:\n<real output>"
- *  envelope. The user never wants to see that wrapper — strip it. */
+/** Codex's `exec_command` result (the `function_call_output` rollout line,
+ *  through 0.144) wraps its output in a "Chunk ID: …\nOutput:\n<real output>"
+ *  envelope. The user never wants to see that wrapper — strip it. (This used
+ *  to say the envelope came from `exec_command_end`; that event is never
+ *  persisted, #1321.) */
 export function stripCodexExecWrapper(output: string): string {
   const marker = '\nOutput:\n'
   const idx = output.indexOf(marker)
@@ -142,15 +145,29 @@ export function stripCodexExecWrapper(output: string): string {
   return output.slice(idx + marker.length)
 }
 
-/** True for ANY exec-wrapped output ("Chunk ID: …" with a "Process exited
- *  with code …" line), stdout or not. The rollout mapper drops these
- *  `function_call_output` lines because the correlated `exec_command_end`
- *  event carries the same result, with exit code and command, and renders
- *  the card; keeping both would duplicate it. (This comment used to say
- *  "only the wrapper and nothing else", which the code never did; #1298
- *  review B.) */
-export function isCodexExecWrapperOutput(output: string): boolean {
-  return output.startsWith('Chunk ID:') && output.includes('\nProcess exited with code ')
+/** The exit code in an exec-wrapped output's header ("Chunk ID: …" …
+ *  "Process exited with code N" … "Output:"), or null when the output is not
+ *  wrapped or the process was still running ("Process running with session
+ *  ID …", a partial chunk a later write_stdin/poll continues).
+ *
+ *  WHY only the header is read: the body is the command's own bytes, and a
+ *  command can print "Process exited with code 0" itself (a cat of a captured
+ *  transcript). The old `includes` test scanned the whole string.
+ *
+ *  WHY this replaced `isCodexExecWrapperOutput` (#1321): that predicate made the
+ *  rollout mapper DROP every wrapped result, on the belief that a correlated
+ *  `exec_command_end` event carried the same result. Codex never persists that
+ *  event: codex-rs `rollout/src/policy.rs` lists `EventMsg::ExecCommandEnd`
+ *  under transient events, and a census of 2,541 local rollouts found 0 of
+ *  them against 85,355 wrapped outputs with an exit line. The drop therefore
+ *  removed the ONLY copy of every `exec_command` result (Codex through 0.144)
+ *  from resumed history, and the card showed no output or exit status. */
+export function codexExecWrapperExitCode(output: string): number | null {
+  if (!output.startsWith('Chunk ID:')) return null
+  const outputMarker = output.indexOf('\nOutput:\n')
+  const header = outputMarker === -1 ? output : output.slice(0, outputMarker)
+  const match = /\nProcess exited with code (-?\d+)(?:\n|$)/.exec(header)
+  return match ? Number(match[1]) : null
 }
 
 /** Build a Claude-shaped assistant Entry containing a single

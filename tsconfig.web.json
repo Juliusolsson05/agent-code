@@ -57,6 +57,7 @@
     // tests read the real pasted-prompt row rather than an invented one.
     "testing/fixtures/prompt-acceptance/*.json",
     "testing/fixtures/transcript-disconnect/*.json",
+    "testing/fixtures/codex-exec-output/*.json",
     "src/control-sdk/**/*",
     "src/renderer/**/*",
     // Renderer specs use the DOM matchers installed by the Vitest setup module. The setup lived

@@ -9,7 +9,7 @@ import {
   codexToolResultEntry,
   codexToolUseEntry,
   codexOutputText,
-  isCodexExecWrapperOutput,
+  codexExecWrapperExitCode,
   parseCodexJson,
   stripCodexExecWrapper,
 } from '@providers/codex/renderer/transcript/entries'
@@ -324,6 +324,13 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
       // its result was persisted. The provider renderer absorbs this empty
       // result after it has updated the command card, so retaining terminal
       // evidence does not reintroduce a blank standalone row.
+      //
+      // WHERE this event comes from (#1321): not from rollouts. codex-rs
+      // persists `ExecCommandEnd` as a transient event, and 0 of 2,541 local
+      // rollouts contain one. The durable carrier of an exec_command result is
+      // the wrapped `function_call_output` below, which is stamped with this
+      // same metadata. This branch stays for any stream that does carry the
+      // event; the existing mapper tests feed it directly.
       return [
         codexToolResultEntry(
           uuid,
@@ -434,9 +441,28 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
       return [codexToolResultEntry(uuid, timestamp, payload.call_id, structured)]
     }
     const output = stripCodexExecWrapper(structured)
-    if (!output.trim() || isCodexExecWrapperOutput(structured)) {
-      return []
+    const exitCode = codexExecWrapperExitCode(structured)
+    if (exitCode !== null) {
+      // A finished exec: the wrapper is the durable carrier of the result AND
+      // its exit status (#1321; see codexExecWrapperExitCode for why nothing
+      // else in the rollout carries them). It is stamped with the same
+      // `exec_command_end` metadata the live event produced, so the command
+      // card reads it as the native transport it is: bytes are the command's
+      // own, is_error and exitCode come from the real exit line. An EMPTY
+      // successful result is kept on purpose, exactly as for the event: it is
+      // the only proof the command finished rather than being interrupted,
+      // and the row dispatcher absorbs it once the card has its status.
+      return [
+        codexToolResultEntry(uuid, timestamp, payload.call_id, output, exitCode !== 0, {
+          kind: 'exec_command_end',
+          parsedCmd: [],
+          command: [],
+          cwd: null,
+          exitCode,
+        }),
+      ]
     }
+    if (!output.trim()) return []
     return [codexToolResultEntry(uuid, timestamp, payload.call_id, output)]
   }
 
