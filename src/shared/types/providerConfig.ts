@@ -436,6 +436,17 @@ export type PromptDeliveryIo = PromptDeliveryOptions & {
   imagePaths?: string[]
   /** Non-blocking forensic sink. Correctness must never await or depend on it. */
   record?: (event: string, data?: Record<string, unknown>) => void
+  /**
+   * The native composer can only hold THIS app's own stranded write (#1350).
+   * Set by SessionManager when an earlier delivery wrote prompt bytes it could
+   * not submit and no other writer has touched the PTY since. A provider may
+   * then clear an occupied composer under this delivery's reservation instead
+   * of refusing it as a human draft. Absent: an occupied composer is someone
+   * else's, exactly as before. `strandedAt` is when the earlier delivery gave
+   * up; its bytes may still be unpainted (they painted 0.7-3.8 s later in the
+   * recorded incidents), so a provider waits a bounded window from it.
+   */
+  strandedComposer?: { strandedAt: number }
 }
 
 export type PromptAcceptance =

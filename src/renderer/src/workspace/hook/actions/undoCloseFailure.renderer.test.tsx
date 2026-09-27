@@ -227,3 +227,47 @@ it('does not push a deleted-folder member back with its group when a sibling fai
   expect(harness.showToast).toHaveBeenLastCalledWith('Could not restore "ProviderDown": Session failed to start. Check provider setup and retry.', 8000)
   harness.unmount()
 })
+
+// #1347: an agent whose TLDR/Goal identity is DERIVED (a reporting domain on,
+// no explicit field) is identified by its session id (tldrIdentityForSession).
+// Undo Close passed only the explicit field, so the restored agent got a fresh
+// identity and Agent Analytics split its time; Reload Agents already used the
+// derived rule.
+it('restores an agent with its derived TLDR identity, and an explicit one unchanged', async () => {
+  const { state, refs, writer } = setup()
+  refs.undoStackRef.current.pop()
+  refs.undoStackRef.current.push({
+    type: 'session', closedAt: Date.now(), sessionId: 'explicit-pane',
+    sessionMeta: { cwd: '/projects/agent-code', kind: 'claude', title: 'Explicit', projectId: 'tab-parent', joinedAt: 1, tldrIdentity: 'tldr-explicit', builtInMcpDomains: ['tldr'] },
+  })
+  refs.undoStackRef.current.push({
+    type: 'session', closedAt: Date.now(), sessionId: 'derived-pane',
+    sessionMeta: { cwd: '/projects/agent-code', kind: 'claude', title: 'Derived', projectId: 'tab-parent', joinedAt: 1, builtInMcpDomains: ['tldr'] },
+  })
+  const spawn = vi.fn().mockResolvedValueOnce('restored-derived').mockResolvedValueOnce('restored-explicit')
+  const harness = mount(state, refs, writer, spawn)
+  await act(async () => { await harness.undo() })
+  await act(async () => { await harness.undo() })
+  expect(spawn.mock.calls.map(([, opts]) => (opts as { tldrIdentity?: string }).tldrIdentity)).toEqual(['derived-pane', 'tldr-explicit'])
+  harness.unmount()
+})
+
+// #1356 review b: the project-restore call site passes each MEMBER's closed id;
+// a fresh id there survived the single-pane case above.
+it('restores each agent of a project with its own derived TLDR identity', async () => {
+  const { state, refs, writer } = setup()
+  refs.undoStackRef.current.pop()
+  const meta = { cwd: '/projects/agent-code', kind: 'claude' as const, projectId: 'closed-tab', joinedAt: 1, builtInMcpDomains: ['goal'] as never }
+  refs.undoStackRef.current.push({
+    type: 'tab', closedAt: Date.now(), tab: { id: 'closed-tab', title: 'agent-code' }, tabIndex: 0,
+    // Two DERIVED members (#1356 verification c): with only one, passing the
+    // first member's closed id for every member went unnoticed.
+    sessions: [{ sessionId: 'derived-member', meta }, { sessionId: 'second-derived-member', meta }, { sessionId: 'explicit-member', meta: { ...meta, tldrIdentity: 'tldr-explicit-member' } }],
+  })
+  const spawn = vi.fn().mockResolvedValueOnce('restored-one').mockResolvedValueOnce('restored-two').mockResolvedValueOnce('restored-three')
+  const harness = mount(state, refs, writer, spawn)
+  await act(async () => { await harness.undo() })
+  expect(spawn.mock.calls.map(([, opts]) => (opts as { tldrIdentity?: string }).tldrIdentity)).toEqual(['derived-member', 'second-derived-member', 'tldr-explicit-member'])
+  harness.unmount()
+})
+

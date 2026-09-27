@@ -171,7 +171,11 @@ describe('WorkflowViewSelector', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Show All' }))
     expect(await screen.findByRole('dialog', { name: 'Workflow History' })).toBeInTheDocument()
-    await waitFor(() => expect(getSnapshot).toHaveBeenCalledTimes(5))
+    // Five dialog reads (one per history entry) plus the selector's single
+    // check of the one tab that claims to be running (run-5), which is how a
+    // tab learns its run is gone (#1440). Completed tabs are not checked.
+    await waitFor(() => expect(getSnapshot).toHaveBeenCalledTimes(6))
+    expect(getSnapshot.mock.calls.filter(([scope]) => scope.runId === 'run-5')).toHaveLength(2)
     await waitFor(() => expect(screen.queryByText('Loading timestamps…')).not.toBeInTheDocument())
 
     expect(screen.getAllByRole('listitem')).toHaveLength(5)
@@ -197,10 +201,12 @@ describe('WorkflowViewSelector', () => {
     const historyReferences: WorkflowRunReference[] = [
       { runId: 'run-missing', cwd: '/repo', status: 'queued', workflow: { name: 'missing' } },
       { runId: 'run-error', cwd: '/repo', status: 'running', workflow: { name: 'error' } },
+      // No cwd of its own: still a global lookup by run id (#1440 review b).
+      { runId: 'run-elsewhere', status: 'failed', workflow: { name: 'elsewhere' } },
     ]
     let errorAttempts = 0
     const getSnapshot = vi.fn<WorkflowClient['getSnapshot']>(async ({ cwd, runId }) => {
-      if (runId === 'run-missing') return null
+      if (runId === 'run-missing' || runId === 'run-elsewhere') return null
       errorAttempts += 1
       if (errorAttempts === 1) throw new Error('IPC unavailable')
       return {
@@ -229,7 +235,10 @@ describe('WorkflowViewSelector', () => {
     render(
       <WorkflowClientProvider value={client}>
         <WorkflowViewSelector
-          references={historyReferences}
+          // The tabs show only the missing run: the selector reads what its
+          // tabs claim is live, and run-error's read sequence belongs to the
+          // dialog below.
+          references={historyReferences.filter(reference => reference.runId === 'run-missing')}
           historyReferences={historyReferences}
           cwd="/repo"
           selectedRunId={null}
@@ -238,6 +247,12 @@ describe('WorkflowViewSelector', () => {
       </WorkflowClientProvider>,
     )
 
+    // #1440 reviews a+b: the TAB must agree with the dialog. A reference that
+    // launched `queued` but whose run is gone is not Active.
+    const missingTab = screen.getByRole('tab', { name: /missing/ })
+    await waitFor(() => expect(missingTab).toHaveAttribute('data-workflow-activity', 'inactive'))
+    expect(within(missingTab).getByLabelText('Status: Inactive (Expired)')).toBeInTheDocument()
+
     fireEvent.click(screen.getByRole('button', { name: 'Show All' }))
     await waitFor(() => expect(screen.queryByText('Loading timestamps…')).not.toBeInTheDocument())
     const historyList = screen.getByRole('list', { name: 'Previous workflow runs' })
@@ -245,8 +260,14 @@ describe('WorkflowViewSelector', () => {
       .closest('[role="listitem"]') as HTMLElement
     const errorRow = within(historyList).getByText('error')
       .closest('[role="listitem"]') as HTMLElement
-    expect(within(missingRow).getByText('Unknown · Status unavailable')).toBeInTheDocument()
-    expect(within(missingRow).getByText('Timestamp unavailable')).toBeInTheDocument()
+    // #1348: a run whose stored data is gone is expired and inactive, not a
+    // fault, whatever its launch-time `queued` said. The lookup is global by
+    // run id (review b), so a reference without its own cwd is expired too.
+    expect(within(missingRow).getByText('Inactive · Expired')).toBeInTheDocument()
+    expect(within(missingRow).getByText(/stored data is gone/)).toBeInTheDocument()
+    const elsewhereRow = within(historyList).getByText('elsewhere')
+      .closest('[role="listitem"]') as HTMLElement
+    expect(within(elsewhereRow).getByText('Inactive · Expired')).toBeInTheDocument()
     expect(within(errorRow).getByText('Unknown · Status unavailable')).toBeInTheDocument()
     expect(within(errorRow).getByRole('alert')).toHaveTextContent('Could not load details.')
 
@@ -307,4 +328,84 @@ describe('WorkflowViewSelector', () => {
     await waitFor(() => expect(getSnapshot).toHaveBeenCalledTimes(16))
     expect(maxActive).toBe(8)
   })
+
+  // #1440 round-2 review b: the tab check must hold each run's answer on its
+  // own. Batching every visible tab through one Promise.all let a later
+  // transient failure clear a tab already proven Expired, and let one slow
+  // read hold back another tab's answer.
+  describe('selector expiry check', () => {
+    const ref = (runId: string): WorkflowRunReference => ({ runId, cwd: '/repo', status: 'running', workflow: { name: runId } })
+    const tab = (name: string) => screen.getByRole('tab', { name: new RegExp(name) })
+    const mount = (client: WorkflowClient, references: WorkflowRunReference[]) => (
+      <WorkflowClientProvider value={client}>
+        <WorkflowViewSelector references={references} cwd="/repo" selectedRunId={null} onSelect={vi.fn()} />
+      </WorkflowClientProvider>
+    )
+
+    it('keeps a proven Expired tab when a later check of it would fail, and asks each run once', async () => {
+      const calls: string[] = []
+      const client: WorkflowClient = {
+        ...unavailableWorkflowClient,
+        available: true,
+        getSnapshot: vi.fn<WorkflowClient['getSnapshot']>(async ({ runId }) => {
+          calls.push(runId)
+          if (runId === 'run-a' && calls.filter(id => id === 'run-a').length > 1) throw new Error('IPC unavailable')
+          if (runId === 'run-a') return null
+          return { runId, cwd: '/repo', cursor: 0, state: createWorkflowState(runId) }
+        }),
+      }
+      const { rerender } = render(mount(client, [ref('run-a')]))
+      await waitFor(() => expect(tab('run-a')).toHaveAttribute('data-workflow-activity', 'inactive'))
+      rerender(mount(client, [ref('run-a'), ref('run-b')]))
+      await waitFor(() => expect(calls).toContain('run-b'))
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(tab('run-a')).toHaveAttribute('data-workflow-activity', 'inactive')
+      expect(calls.filter(id => id === 'run-a')).toHaveLength(1)
+    })
+
+    // #1440 review c: the failure path. A failed read proves nothing (the
+    // tab stays Active) and is forgotten, so a later change asks again.
+    it('keeps a tab active when its read fails, and asks again on a later change', async () => {
+      let failures = 1
+      const calls: string[] = []
+      const client: WorkflowClient = {
+        ...unavailableWorkflowClient,
+        available: true,
+        getSnapshot: vi.fn<WorkflowClient['getSnapshot']>(async ({ runId }) => {
+          calls.push(runId)
+          if (runId === 'run-a' && failures-- > 0) throw new Error('IPC unavailable')
+          return runId === 'run-a' ? null : { runId, cwd: '/repo', cursor: 0, state: createWorkflowState(runId) }
+        }),
+      }
+      const { rerender } = render(mount(client, [ref('run-a')]))
+      await waitFor(() => expect(calls).toEqual(['run-a']))
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(tab('run-a')).toHaveAttribute('data-workflow-activity', 'active')
+      rerender(mount(client, [ref('run-a'), ref('run-b')]))
+      await waitFor(() => expect(tab('run-a')).toHaveAttribute('data-workflow-activity', 'inactive'))
+      expect(calls.filter(id => id === 'run-a')).toHaveLength(2)
+    })
+
+    // #1440 review c: a reference that names its own project is looked up
+    // there, not in the session's.
+    it('asks in the reference\'s own project when it names one', async () => {
+      const getSnapshot = vi.fn<WorkflowClient['getSnapshot']>(async () => null)
+      const client: WorkflowClient = { ...unavailableWorkflowClient, available: true, getSnapshot }
+      render(mount(client, [{ ...ref('run-elsewhere'), cwd: '/other-project' }]))
+      await waitFor(() => expect(getSnapshot).toHaveBeenCalled())
+      expect(getSnapshot.mock.calls[0]![0]).toMatchObject({ cwd: '/other-project', runId: 'run-elsewhere' })
+    })
+
+    it('shows one tab expired while another tab\'s read is still pending', async () => {
+      const client: WorkflowClient = {
+        ...unavailableWorkflowClient,
+        available: true,
+        getSnapshot: vi.fn<WorkflowClient['getSnapshot']>(({ runId }) => runId === 'run-slow' ? new Promise(() => {}) : Promise.resolve(null)),
+      }
+      render(mount(client, [ref('run-slow'), ref('run-gone')]))
+      await waitFor(() => expect(tab('run-gone')).toHaveAttribute('data-workflow-activity', 'inactive'))
+      expect(tab('run-slow')).toHaveAttribute('data-workflow-activity', 'active')
+    })
+  })
 })
+

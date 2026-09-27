@@ -28,6 +28,7 @@ import {
   findAgentCodeInstalledSkillPathCollision,
   isSafeAgentCodeInstalledSkillPath,
 } from '@shared/types/agentCodeInstalledSkills.js'
+import { userFacingSkillError } from './userFacingError.js'
 
 export type AgentCodeConventionsStateReadResult =
   | { kind: 'ok'; document: AgentCodeConventionsDocument }
@@ -425,7 +426,7 @@ export async function readAgentCodeConventionsState(
     return {
       kind: 'recovery-required',
       document: createEmptyAgentCodeConventionsDocument(),
-      message: `Agent Code could not safely read managed skill state: ${safeErrorMessage(error)}`,
+      message: `Agent Code could not safely read managed skill state: ${userFacingSkillError(error)}`,
       stateFilePath,
     }
   }
@@ -478,7 +479,3 @@ export async function resetAgentCodeConventionsState(stateFilePath: string): Pro
   })
 }
 
-function safeErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message
-  return 'unknown filesystem error'
-}

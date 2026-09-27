@@ -1,6 +1,7 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { Entry } from '@shared/types/transcript'
 import { emptyRuntime } from '@renderer/session-runtime/state'
+import { worktreesForAttribution } from '@renderer/workspace/work-context/worktreesForAttribution'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId, SessionMeta } from '@renderer/workspace/types'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
@@ -300,11 +301,14 @@ export async function loadInitialHistoryForSession({
       historyRead,
       window.api.gitWorktrees(meta.cwd),
     ])
-    const worktrees = worktreesResult.ok ? worktreesResult.worktrees : []
+    // #1430: null = git timed out, family unknown → skip attribution for this
+    // chunk (see worktreesForAttribution).
+    const worktrees = worktreesForAttribution(worktreesResult)
     if (superseded()) {
       span.end({ fetched: chunk.entries.length, hasMore: chunk.hasMore, superseded: true })
       return settleSuperseded()
     }
+    if (worktrees === null) handHistoryToReconciler(refs, sessionId, meta.cwd, chunk.entries)
 
     setRuntimes(prev => {
       const current = prev[sessionId]
@@ -339,13 +343,15 @@ export async function loadInitialHistoryForSession({
       const toolResultIndex = current.toolResultIndex
 
       for (const [rawIndex, raw] of chunk.entries.entries()) {
-        workActivity = ingestWorktreeRawEvent({
-          state: workActivity,
-          raw,
-          worktrees,
-          sessionCwd: meta.cwd,
-        })
-        workContext = deriveAgentWorkContext(workActivity)
+        if (worktrees !== null) {
+          workActivity = ingestWorktreeRawEvent({
+            state: workActivity,
+            raw,
+            worktrees,
+            sessionCwd: meta.cwd,
+          })
+          workContext = deriveAgentWorkContext(workActivity)
+        }
 
         const { entries: mapped, historyMarker: marker } = mapper.map(raw)
         // Marker policy (site-owned): the FIRST kept line of the
@@ -585,4 +591,40 @@ export function reconcileStuckTranscriptLoads({
     void loadInitialHistoryForSession({ sessionId, refs, setRuntimes, meta })
   }
   return reKicked
+}
+
+/**
+ * A history chunk read while `git worktree list` timed out (#1430 review a/b).
+ *
+ * WHY hand it to the live reconciler instead of skipping it: skipping avoided
+ * a wrong attribution (against an empty family) but threw the chunk's worktree
+ * evidence away for good — the reconciler only replays what it observed, so a
+ * quiet session whose writes were in a linked worktree stayed on the launch
+ * folder after git recovered. observe() keeps the chunk's RELEVANT records in
+ * its bounded window (deferred while no catalog is cached) and refresh() asks
+ * git again; when the catalog lands, onCatalogReady replays the window against
+ * it and repaints the pane. Outside any setState updater, because observe is
+ * a side effect and an updater may run twice. The current runtime is the
+ * baseline, as for a live batch.
+ */
+export function handHistoryToReconciler(
+  refs: Pick<WorkspaceRefs, 'worktreeReconcilerRef' | 'latestRuntimesRef'>,
+  sessionId: SessionId,
+  cwd: string,
+  entries: readonly unknown[],
+  // 'older' for an older-history page: it enters the reconciler's window as
+  // the OLDEST evidence, so a scroll-up during a git timeout never outranks
+  // the newest chunk (#1450 B6 verify).
+  position: 'newest' | 'older' = 'newest',
+): void {
+  const reconciler = refs.worktreeReconcilerRef.current
+  if (!reconciler || entries.length === 0) return
+  reconciler.observe(sessionId, cwd, entries.map(entry => ({ entry })), refs.latestRuntimesRef.current[sessionId] ?? emptyRuntime(), position)
+  // 'cached' means a fresh catalog was already there, so no onCatalogReady is
+  // coming: replay now or the chunk waits for an unrelated event (#1450
+  // verification a). 'ready' already replayed; 'failed' is retried by the
+  // next refresh, which notifies when git answers.
+  void reconciler.refresh(cwd).then(outcome => {
+    if (outcome === 'cached') reconciler.replayCachedCatalog(cwd)
+  })
 }

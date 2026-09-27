@@ -77,7 +77,10 @@ export type ConversationListResponse = {
   total: number
   hiddenChildren: number
   nextCursor: string | null
-  family: { repoRoot: string | null; roots: string[] }
+  /** `gitTimedOut` (#1430): `git worktree list` did not answer in time, so the
+   *  repository's other worktrees could not be included; the rows may be
+   *  missing some. Absent when git answered. */
+  family: { repoRoot: string | null; roots: string[]; gitTimedOut?: true }
   timing: { ms: number }
 }
 

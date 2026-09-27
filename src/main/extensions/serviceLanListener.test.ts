@@ -26,13 +26,26 @@ afterEach(async () => {
   upstream = null
 })
 
+// WHY `GET /` is not recorded (#1409 / #1452 review b): when this suite runs
+// inside an Agent Code lane, the browser pocket's LanePortWatcher finds both
+// sockets in the lane's process tree. Once one has listened for its 5 s settle
+// window (only a stalled run gets that far), the watcher sends it one `GET /`.
+// Aimed at the LAN listener, that request is forwarded here WITHOUT its
+// identifying User-Agent, because the listener's header allow-list drops it,
+// correctly. So the upstream cannot tell the probe by header. It can tell it
+// by shape: `send()` below never uses `/`, so no request this suite makes is
+// `GET /`. Residual: a forwarding regression that emits an extra `GET /`
+// would be excused. Any other extra request still fails `toHaveLength(1)`.
+const WATCHER_PROBE_PATH = '/'
+const TEST_PATH = '/lan-contract'
+
 async function wire(responseHeaders: Record<string, string> = {}): Promise<{ seen: Seen[]; port: number }> {
   const seen: Seen[] = []
   upstream = createServer((req, res) => {
     let body = ''
     req.on('data', chunk => { body += chunk })
     req.on('end', () => {
-      seen.push({ method: req.method, url: req.url, headers: req.headers, body })
+      if (!(req.method === 'GET' && req.url === WATCHER_PROBE_PATH)) seen.push({ method: req.method, url: req.url, headers: req.headers, body })
       res.writeHead(200, { 'content-type': 'application/json', ...responseHeaders })
       res.end('{"ok":true}')
     })
@@ -46,7 +59,7 @@ async function wire(responseHeaders: Record<string, string> = {}): Promise<{ see
  *  forwarding headers, and a hostile LAN peer is under no such restriction. */
 function send(port: number, options: { method?: string; path?: string; headers?: Record<string, string>; body?: string }) {
   return new Promise<{ status: number; headers: IncomingHttpHeaders; body: string }>((resolve, reject) => {
-    const req = httpRequest({ host: '127.0.0.1', port, method: options.method ?? 'GET', path: options.path ?? '/', headers: options.headers }, res => {
+    const req = httpRequest({ host: '127.0.0.1', port, method: options.method ?? 'GET', path: options.path ?? TEST_PATH, headers: options.headers }, res => {
       let body = ''
       res.on('data', chunk => { body += chunk })
       res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body }))
@@ -92,6 +105,16 @@ describe('service LAN listener forwarding contract', () => {
     expect(headers.host).toBe(`127.0.0.1:${(upstream!.address() as AddressInfo).port}`)
     expect(headers.cookie).toBeUndefined()
     expect(headers['x-evil']).toBeUndefined()
+  })
+
+  // #1452 review b's failure sequence, on real sockets: the lane port watcher's
+  // probe reaches the LAN listener mid-test, loses its User-Agent in
+  // forwarding, and must not turn the contract's one request into two.
+  it('a lane port watcher probe forwarded mid-test does not count as a contract request', async () => {
+    const { seen, port } = await wire()
+    await send(port, { method: 'GET', path: '/', headers: { 'user-agent': 'AgentCode-LanePortProbe/1' } })
+    await send(port, { method: 'POST', body: '{"kind":"check"}', headers: { 'content-type': 'application/json' } })
+    expect(seen.map(s => `${s.method} ${s.url}`)).toEqual(['POST /lan-contract'])
   })
 
   // The security property the whole contract rests on: a guest must not be

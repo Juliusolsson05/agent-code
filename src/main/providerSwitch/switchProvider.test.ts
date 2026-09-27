@@ -47,6 +47,7 @@ vi.mock('@main/providerSwitch/transcriptEngine.js', () => ({
 import { describeShrink, switchProvider } from './switchProvider.js'
 import type { ShrinkReport } from 'agent-transcript-parser'
 import { loadFixtureConversation } from './testing/fixtureConversations.js'
+import { summarizeProjectionReport } from './projectionFidelity.js'
 
 const conversation = {
   schemaVersion: 1 as const,
@@ -141,6 +142,7 @@ describe('switchProvider neutral hub integration', () => {
       truncatedBeforeSwitch: false,
       strategy: 'native',
       shrinkSummary: null,
+      projectionFidelity: summarizeProjectionReport(projection),
     })
   })
 

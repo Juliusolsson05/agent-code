@@ -459,6 +459,18 @@ describe('session:spawn rejections', () => {
     expect(signatureOf(new Error('Session recovery was cancelled'))).toBe('unclassified')
   })
 
+  // #1439 review c: the patched node-pty (scripts/patch-node-pty.mjs) throws
+  // "posix_spawnp failed: <call>: <strerror>" instead of the bare
+  // "posix_spawnp failed.", and the prefix is what this classifier keys on. The
+  // first message is the one a reviewer recorded from the patched build (a
+  // missing spawn-helper); the second is the #1437 shape, a full PTY table.
+  // Both must keep their signature, and neither may fall to enoent.
+  it('classifies the patched node-pty spawn failures the same way', () => {
+    const signatureOf = (error: unknown) => classifySpawnFailure(error, false).signature
+    expect(signatureOf(new Error('posix_spawnp failed: posix_spawn failed: No such file or directory'))).toBe('posix-spawnp')
+    expect(signatureOf(new Error('posix_spawnp failed: posix_openpt failed: Device not configured'))).toBe('posix-spawnp')
+  })
+
   // #1324 review C: the laundered rejection is all the incident journal and
   // a debug bundle see, so the failure's identity is journaled as a fixed
   // signature, never its text.

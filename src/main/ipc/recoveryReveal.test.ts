@@ -57,3 +57,49 @@ describe('recovery-file reveal', () => {
     expect(shell.showItemInFolder).toHaveBeenCalledWith(statePath)
   })
 })
+
+// Review of #1456 (a), #1427: when shell.openPath fails, Electron returns a
+// string such as `Failed to open /Users/…/skills`, and the four Reveal
+// handlers returned it as the IPC message the Skills rows show. A real
+// directory in the scratch dir; openPath (the OS) is the replaced edge.
+describe('target and source reveal', () => {
+  const raw = 'Failed to open /Users/Alice/.claude/skills'
+  const reveals: Array<[string, unknown[]]> = [
+    ['agent-code-conventions:reveal-target', ['claude-personal-skills']],
+    ['agent-code-custom-skills:reveal-target', ['skill-1', 'claude-personal-skills']],
+    ['agent-code-installed-skills:reveal-target', ['skill-1', 'claude-personal-skills']],
+    ['agent-code-installed-skills:reveal-source', ['skill-1']],
+  ]
+  beforeEach(async () => {
+    const target = join(dir, 'skills', 'agent-code-conventions')
+    await mkdir(target, { recursive: true })
+    handlers.clear()
+    shell.openPath.mockReset()
+    const service = {
+      resolveRevealTarget: async () => target,
+      resolveCustomSkillRevealTarget: async () => target,
+      resolveInstalledSkillRevealTarget: async () => target,
+      resolveInstalledSkillSource: async () => target,
+    } as never
+    registerAgentCodeConventionsIpc(service)
+    registerAgentCodeCustomSkillsIpc(service)
+    registerAgentCodeInstalledSkillsIpc(service)
+  })
+
+  it.each(reveals)('%s answers a failed open in fixed words and logs Electron\'s text', async (channel, args) => {
+    shell.openPath.mockResolvedValue(raw)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const result = await handlers.get(channel)!({}, ...args) as { ok: boolean; message?: string }
+      expect(result).toEqual({ ok: false, message: 'Agent Code could not open this folder.' })
+      expect(warn).toHaveBeenCalledWith(expect.any(String), raw)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it.each(reveals)('%s reports success when the folder opens', async (channel, args) => {
+    shell.openPath.mockResolvedValue('')
+    expect(await handlers.get(channel)!({}, ...args)).toEqual({ ok: true })
+  })
+})

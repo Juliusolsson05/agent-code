@@ -77,7 +77,14 @@ export function dismissKey(cli: CliUpdateKind, state: CliUpdateState): string {
     case 'updated':
       return `${cli}:updated:${state.to}`
     case 'failed':
-      return `${cli}:failed:${state.wantedLatest}`
+      // A could-not-start row offers Update now as its retry (#1425), so it
+      // is keyed per ATTEMPT, like a user deferral: a dismissed failure must
+      // not swallow the answer to the next click. Other failures stay per
+      // version — their retry is the next launch, and re-showing the same
+      // failure every launch after a dismissal would nag.
+      return state.reason === 'could-not-start'
+        ? `${cli}:failed:${state.wantedLatest}:${state.finishedAt}`
+        : `${cli}:failed:${state.wantedLatest}`
     case 'deferred':
       // A user-requested deferral is keyed per CLICK (#1265 review A): the
       // row's Update now retries, and a dismissed explanation must not

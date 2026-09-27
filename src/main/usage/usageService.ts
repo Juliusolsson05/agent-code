@@ -123,6 +123,17 @@ export function getUsageSnapshot(request: UsageSnapshotRequest = {}): Promise<Us
   return fetchPromise
 }
 
+/**
+ * The snapshot exactly as tools hand it to an agent (#1339): root
+ * management's `usage.read` and the `usage` domain's `usage_read` both call
+ * this, so the two can never disagree. The JSON round trip is the
+ * sanitization: it drops anything that is not plain data (a Date, an Error
+ * with a stack, a function) before it leaves main.
+ */
+export async function readUsageSnapshotForTools(request: UsageSnapshotRequest = {}): Promise<unknown> {
+  return JSON.parse(JSON.stringify(await getUsageSnapshot(request)))
+}
+
 /** Resolved-enablement source list for the modal skeleton + empty state. */
 export async function listUsageSources(): Promise<Array<{ id: UsageSourceId; label: string }>> {
   const enablement = await getProviderEnablementSnapshot()

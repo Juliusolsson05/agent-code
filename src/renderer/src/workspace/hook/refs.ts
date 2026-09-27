@@ -10,6 +10,7 @@ import type {
 } from '@renderer/workspace/types'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import type { BuiltInMcpDefaultsInput } from '@mcp/shared/types'
+import type { LiveWorktreeReconciler } from '@renderer/workspace/work-context/LiveWorktreeReconciler'
 
 // -----------------------------------------------------------------------------
 // Ref factory for the workspace hook.
@@ -42,6 +43,13 @@ export type WorkspaceRefs = {
    *  semantic suffixes must be dropped until a fresh turn_started (the pure
    *  owner's awaiting gate; api_error passes because it is diagnostic). */
   historyAwaitingTurnStartRef: MutableRefObject<Set<SessionId>>
+  /** The live worktree reconciler, owned by useIpcSubscriptions' effect and
+   *  published here (null outside it). #1430 review a/b: a history chunk read
+   *  while `git worktree list` timed out cannot be attributed, and dropping it
+   *  lost its worktree evidence for good. The loaders hand such a chunk to
+   *  the reconciler instead, whose bounded window replays it when the
+   *  catalog answers. */
+  worktreeReconcilerRef: MutableRefObject<Pick<LiveWorktreeReconciler, 'observe' | 'refresh' | 'replayCachedCatalog'> | null>
   undoStackRef: MutableRefObject<UndoCloseStack>
   bootstrapTimersRef: MutableRefObject<Map<SessionId, ReturnType<typeof setTimeout>>>
   persistedFeedDebugIdRef: MutableRefObject<Record<SessionId, number>>
@@ -104,6 +112,7 @@ export function useWorkspaceRefs(
   const seenUuidsRef = useRef<Record<SessionId, Set<string>>>({})
   const historyWindowsRef = useRef<Record<SessionId, HistoryWindow>>({})
   const historyAwaitingTurnStartRef = useRef<Set<SessionId>>(new Set())
+  const worktreeReconcilerRef = useRef<Pick<LiveWorktreeReconciler, 'observe' | 'refresh' | 'replayCachedCatalog'> | null>(null)
   const undoStackRef = useRef(new UndoCloseStack())
   const bootstrapTimersRef = useRef<Map<SessionId, ReturnType<typeof setTimeout>>>(new Map())
   const pendingAdoptionWindowIdsRef = useRef<string[]>([])
@@ -141,6 +150,7 @@ export function useWorkspaceRefs(
     seenUuidsRef,
     historyWindowsRef,
     historyAwaitingTurnStartRef,
+    worktreeReconcilerRef,
 
     // Latest screen per session — mirrored from state into a ref so
     // the Enter handler in TileLeaf can capture a baseline

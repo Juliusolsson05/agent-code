@@ -104,3 +104,48 @@ describe('CliUpdateBanner View Log', () => {
     expect(screen.queryByRole('alert')).toBeNull()
   })
 })
+
+// #1425: an update that could not start used to leave an undismissable
+// "Updating…" row forever (main), and a rejected Update now request was dropped
+// by `void` (renderer). The first is now its own failed state; the second is
+// said on the row that was clicked.
+describe('CliUpdateBanner: an update that could not start', () => {
+  const couldNotStart = { kind: 'failed' as const, cli: 'claude' as const, from: '2.1.281', wantedLatest: '2.1.282', installMethod: 'npm' as const, reason: 'could-not-start' as const, logPath: null, finishedAt: 5 }
+
+  it('says so in fixed words, offers a retry instead of a log, and can be dismissed', async () => {
+    const updateNow = vi.fn(async () => DEFAULT_CLI_UPDATE_SNAPSHOT)
+    Object.defineProperty(window, 'api', { configurable: true, value: { ...(window as { api?: object }).api, cliUpdatesUpdateNow: updateNow } })
+    useCliUpdateStore.setState({ snapshot: { ...DEFAULT_CLI_UPDATE_SNAPSHOT, claude: couldNotStart }, dismissed: new Set() })
+    render(<CliUpdateBanner />)
+    expect(screen.getByText("Couldn't start the Claude Code update: Agent Code couldn't create its update log. Still at 2.1.281.")).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'View Log' })).toBeNull()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Update now' })) })
+    expect(updateNow).toHaveBeenCalledWith('claude')
+    // A request that resolves says nothing (#1447 review c: the success half
+    // of the action was unpinned).
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(describeState('claude', couldNotStart)?.undismissable).not.toBe(true)
+    // The hint is user-visible copy too: fixed words, no OS text (q22).
+    expect(describeState('claude', couldNotStart)?.hint).toBe('Check that the disk has free space and that the Agent Code data folder is writable, then choose Update now.')
+  })
+
+  it('keys each attempt separately, so a dismissed failure does not hide the next click\'s', () => {
+    expect(dismissKey('claude', couldNotStart)).not.toBe(dismissKey('claude', { ...couldNotStart, finishedAt: 6 }))
+  })
+
+  it.each([
+    ['the offer', { kind: 'notify' as const, cli: 'claude' as const, installed: '2.1.281', latest: '2.1.282', severity: 'patch' as const, installMethod: 'npm' as const, checkedAt: 1 }, 'Update Now'],
+    ['a deferral of the user\'s click', { ...deferred('claude'), requestedByUser: true as const }, 'Update now'],
+    // #1447 review b: the could-not-start row's own retry must say a rejection too.
+    ['the could-not-start retry', { kind: 'failed' as const, cli: 'claude' as const, from: '2.1.281', wantedLatest: '2.1.282', installMethod: 'npm' as const, reason: 'could-not-start' as const, logPath: null, finishedAt: 5 }, 'Update now'],
+  ] as const)('says a rejected Update now request on %s instead of dropping it', async (_name, state, label) => {
+    const updateNow = vi.fn(async () => { throw new Error('Error invoking remote method \'cli-updates:update-now\': EACCES /state') })
+    Object.defineProperty(window, 'api', { configurable: true, value: { ...(window as { api?: object }).api, cliUpdatesUpdateNow: updateNow } })
+    useCliUpdateStore.setState({ snapshot: { ...DEFAULT_CLI_UPDATE_SNAPSHOT, claude: state }, dismissed: new Set() })
+    render(<CliUpdateBanner />)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: label })) })
+    // Fixed words; the IPC/OS text never reaches the screen (q22).
+    expect(screen.getByRole('alert')).toHaveTextContent("Couldn't start the update. Try again.")
+    expect(screen.getByRole('alert').textContent).not.toContain('EACCES')
+  })
+})

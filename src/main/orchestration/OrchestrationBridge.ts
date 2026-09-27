@@ -96,10 +96,13 @@ export class OrchestrationOutcomeUnknownError extends Error {
     readonly requestId: string,
     readonly requestType: OrchestrationRendererRequest['type'],
     readonly parentSessionId: string,
+    /** Appended to the message when the caller must also be told what happens next (#1370). */
+    note?: string,
   ) {
     super(
       `The renderer did not answer ${requestType} in time. It may still complete, so the outcome is UNKNOWN: `
-      + `do not repeat it. Call orchestration_list_agents for this parent to see what exists before acting.`,
+      + `do not repeat it. Call orchestration_list_agents for this parent to see what exists before acting.`
+      + (note ? ` ${note}` : ''),
     )
     this.name = 'OrchestrationOutcomeUnknownError'
   }
@@ -253,8 +256,35 @@ export class OrchestrationBridge {
    * every POST — a map owned by the server would never see the duplicate.
    */
   private readonly createCallsInFlight = new Map<string, Promise<unknown>>()
+  /**
+   * What to do with a child whose create answered AFTER the caller gave up, keyed by requestId
+   * (#1370). The tool handler registers its bootstrap delivery here; `adoptLateResponse` runs it.
+   *
+   * WHY: a healthy provider can take longer than the 30 s bridge deadline to start (OpenCode took
+   * 43 s under load). The caller then got "outcome unknown — do not repeat", the handler returned
+   * without delivering the prompt, and the late child was adopted idle, with no brief, and nothing
+   * told the parent. Running the same delivery the punctual path runs, at adoption time, keeps the
+   * promise the create made. An entry lives only while its request is outstanding: it is removed
+   * when the create answers in time, fails outright, or is adopted.
+   */
+  private readonly lateCreates = new Map<string, (agent: OrchestrationAgentRecord) => Promise<void>>()
   private readonly closedAgents = new Map<string, ClosedAgentRecord>()
   private readonly parentSessionByChildSession = new Map<string, string>()
+  /**
+   * Replaced parent id -> its successor (#1283 item 1). The renderer remaps a
+   * LIVE child's orchestrationParentId/RootId when its parent pane gets a new
+   * session id (reload, provider switch, resume, rewind, Reload Agents,
+   * rehydrate), but tombstones live only here, so carryParent is how main
+   * hears about it.
+   *
+   * WHY an alias map on top of rewriting the tombstones in carryParent: a
+   * rewrite only reaches tombstones that already exist. closeAgent reads the
+   * child BEFORE the renderer closes it, so a replacement landing between the
+   * two hands noteClosed a record that still names the old parent; noteClosed
+   * resolves it through these edges. Bounded by the tombstones' own TTL and
+   * cap: an alias older than every tombstone it could still serve is useless.
+   */
+  private readonly replacedParents = new Map<string, { to: string; at: number }>()
   private readonly listAgentsCache = new Map<string, CachedValue<OrchestrationAgentRecord[]>>()
   private readonly readRunOutputsCache = new Map<string, CachedValue<OrchestrationAgentOutput[]>>()
   private lastPrunedAt = 0
@@ -276,6 +306,8 @@ export class OrchestrationBridge {
     runId?: string
     builtInMcpDomains?: BuiltInMcpDomain[]
     inheritParentContext?: boolean
+    /** Runs if this create times out and the renderer's answer is adopted late (#1370). */
+    onLateCreate?: (agent: OrchestrationAgentRecord) => Promise<void>
   }): Promise<OrchestrationAgentRecord> {
     // WHY validate before sending a renderer request: an unsupported launch
     // must fail before a child or ownership record can exist. The factory is
@@ -285,12 +317,39 @@ export class OrchestrationBridge {
     if (params.providerRuntime === 'terminal' && !getMainProvider(params.kind).createTerminalSession) {
       throw new Error(`${getMainProvider(params.kind).name} does not support a terminal runtime`)
     }
+    // The continuation is main-side only: a function cannot cross into the renderer.
+    const { onLateCreate, ...requestParams } = params
     const attempt: OrchestrationRendererRequest = {
       requestId: randomUUID(),
       type: 'create-agent',
-      ...params,
+      ...requestParams,
     }
-    const response = await this.request(attempt)
+    if (onLateCreate) this.lateCreates.set(attempt.requestId, onLateCreate)
+    let response: OrchestrationRendererResponse
+    try {
+      response = await this.request(attempt)
+    } catch (error) {
+      if (!(error instanceof OrchestrationOutcomeUnknownError)) {
+        this.lateCreates.delete(attempt.requestId)
+        throw error
+      }
+      // Still outstanding: keep the continuation for a late answer, and tell the caller about it,
+      // or its natural next move — sending the brief once list_agents shows the child — would
+      // deliver it twice.
+      if (!onLateCreate) throw error
+      throw new OrchestrationOutcomeUnknownError(
+        error.requestId,
+        error.requestType,
+        error.parentSessionId,
+        // Honest about what automatic means (review of #1375, a and c): delivery
+        // is only ATTEMPTED, and only if the renderer later confirms a live
+        // child; a renderer that never answers, a child never ready, or a
+        // parent that closed means no delivery. So the parent is told how to
+        // check rather than promised one.
+        'If the renderer later confirms the child, Agent Code tries to deliver its bootstrap prompt automatically, retrying for about a minute while it starts. That can fail (the child never answers, is never ready, or you close first), so check orchestration_list_agents and orchestration_read_agent (promptSubmitted) before sending the brief yourself, or it may arrive twice.',
+      )
+    }
+    this.lateCreates.delete(attempt.requestId)
     if (!response.ok) throw new Error(response.message)
     if (response.type !== 'create-agent') {
       throw new Error(`Unexpected orchestration response: ${response.type}`)
@@ -299,9 +358,7 @@ export class OrchestrationBridge {
       createdAt: Date.now(),
       promptSubmissionCount: 0,
     })
-    this.parentSessionByChildSession.set(response.agent.sessionId, params.parentSessionId)
-    this.closedAgents.delete(response.agent.sessionId)
-    this.invalidateStatusCache(params.parentSessionId)
+    this.noteCreatedChild(response.agent.sessionId, params.parentSessionId)
     return this.enrichAgent(response.agent)
   }
 
@@ -509,6 +566,18 @@ export class OrchestrationBridge {
     this.invalidateStatusCacheForSession(sessionId)
   }
 
+  /**
+   * Whether an Agent Code window still owns this parent session: the same lease
+   * check dispatch uses. The late bootstrap asks before EVERY attempt, not only
+   * at adoption (review of #1375, round 1 b): a parent can close during a retry
+   * delay, and its brief must not then start an ownerless child.
+   */
+  isParentAttached(parentSessionId: string): boolean {
+    // Through the alias chain (#1369): a parent REPLACED during the late window is carried to its
+    // successor, and the brief follows it; only a parent with no live successor is gone.
+    return Boolean(windowForSession(this.currentParentId(parentSessionId)))
+  }
+
   promptSubmissionCount(sessionId: string): number {
     return this.promptDeliveries.get(sessionId)?.promptSubmissionCount ?? 0
   }
@@ -517,17 +586,27 @@ export class OrchestrationBridge {
     parentSessionId: string
     sessionId: string
   }): Promise<OrchestrationAgentRecord> {
+    // WHY resolve (q85): the mark is the LAST step of a bootstrap delivery,
+    // which can land long after the create began: when the prompt waited for
+    // the child's composer, or when a create outlived the 30 s deadline and was
+    // adopted late (#1370). The caller addresses it with the parent id its
+    // tool call captured. If that parent was replaced meanwhile, the retired
+    // id has no window (the request could not be routed) and owns no children
+    // in the renderer (ownership checks compare ids), so the mark was lost and
+    // the child looked never-bootstrapped. The live successor owns both.
+    const parentSessionId = this.currentParentId(params.parentSessionId)
     const response = await this.request({
       requestId: randomUUID(),
       type: 'mark-bootstrap-prompt-delivered',
-      parentSessionId: params.parentSessionId,
+      parentSessionId,
       sessionId: params.sessionId,
     })
     if (!response.ok) throw new Error(response.message)
     if (response.type !== 'mark-bootstrap-prompt-delivered') {
       throw new Error(`Unexpected orchestration response: ${response.type}`)
     }
-    this.invalidateStatusCache(params.parentSessionId)
+    // Re-resolved: the parent may have been replaced while the mark waited.
+    this.invalidateStatusCache(this.currentParentId(parentSessionId))
     return this.enrichAgent(response.agent)
   }
 
@@ -584,15 +663,21 @@ export class OrchestrationBridge {
    * status cache keeps a stale answer.
    */
   private adoptLateResponse(response: OrchestrationRendererResponse): void {
+    const onLateCreate = this.lateCreates.get(response.requestId)
+    this.lateCreates.delete(response.requestId)
     if (!response.ok || response.type !== 'create-agent') return
     const parentSessionId = response.agent.orchestrationParentId
-    this.promptDeliveries.set(response.agent.sessionId, {
-      createdAt: Date.now(),
-      promptSubmissionCount: 0,
-    })
-    this.parentSessionByChildSession.set(response.agent.sessionId, parentSessionId)
-    this.closedAgents.delete(response.agent.sessionId)
-    this.invalidateStatusCache(parentSessionId)
+    // Only when there is no record yet (review of #1375, round 2 c): the renderer files the child
+    // BEFORE its create answer reaches main, so the parent can find it with list_agents and
+    // send_prompt to it first. Overwriting that record with a zero count erased the submission,
+    // and the late bootstrap then delivered a second brief.
+    if (!this.promptDeliveries.has(response.agent.sessionId)) {
+      this.promptDeliveries.set(response.agent.sessionId, {
+        createdAt: Date.now(),
+        promptSubmissionCount: 0,
+      })
+    }
+    this.noteCreatedChild(response.agent.sessionId, parentSessionId)
     this.journal?.recordIncident({
       kind: 'orchestration.late_response_adopted',
       severity: 'warn',
@@ -605,7 +690,34 @@ export class OrchestrationBridge {
         // running work nobody is waiting on. Worth an incident even though
         // recovery succeeded.
         bootstrapPromptDelivered: false,
+        // Whether the create's own bootstrap delivery now runs for it (#1370).
+        bootstrapFollows: onLateCreate !== undefined,
       },
+    })
+    if (!onLateCreate) return
+    // The parent may have closed while the renderer was still spawning: the
+    // renderer checks the parent BEFORE its slow spawn and files the child
+    // after it, so a close in between can miss the child (review of #1375,
+    // a). Starting the parent's brief then puts an ownerless agent to work.
+    // The same lease check dispatch uses decides it; the child itself is left
+    // for the user, because closing an agent is not this path's call.
+    if (!this.isParentAttached(parentSessionId)) {
+      this.journal?.recordIncident({
+        kind: 'orchestration.prompt_delivery_failed',
+        severity: 'warn',
+        reason: 'create_agent_late_bootstrap_parent_gone',
+        context: { sessionId: response.agent.sessionId, parentSessionId },
+      })
+      return
+    }
+    const agent = this.enrichAgent(response.agent)
+    void onLateCreate(agent).catch((error: unknown) => {
+      this.journal?.recordIncident({
+        kind: 'orchestration.prompt_delivery_failed',
+        severity: 'error',
+        reason: 'create_agent_late_bootstrap',
+        context: { sessionId: agent.sessionId, message: error instanceof Error ? error.message : 'unknown error' },
+      })
     })
   }
 
@@ -837,8 +949,19 @@ export class OrchestrationBridge {
   }
 
   private async dispatchRendererRequest(
-    request: OrchestrationRendererRequest,
+    queued: OrchestrationRendererRequest,
   ): Promise<OrchestrationRendererResponse> {
+    // WHY a bootstrap mark resolves its parent HERE, at dispatch (#1369
+    // verification a, round 3): the bridge serves one renderer request at a
+    // time, so a mark can sit in the queue while another request runs. A
+    // replacement landing in that wait makes the parent it was queued with a
+    // retired id: no window to route to, no ownership of the child. Resolving
+    // when it was queued (markBootstrapPromptDelivered) is too early. Only the
+    // mark is rewritten: every other request is a question or an action BY
+    // that parent, and answering it for a different session would be wrong.
+    const request = queued.type === 'mark-bootstrap-prompt-delivered'
+      ? { ...queued, parentSessionId: this.currentParentId(queued.parentSessionId) }
+      : queued
     return await new Promise<OrchestrationRendererResponse>((resolve, reject) => {
       const TIMEOUT_MS = 30_000
       const timer = setTimeout(() => {
@@ -947,10 +1070,92 @@ export class OrchestrationBridge {
     }
   }
 
+  /**
+   * The parent pane `from` now runs as session `to` (#1283 item 1): closed
+   * children filed under `from` belong to `to`. Called by the renderer at the
+   * same commit points where it remaps live children (see replacedParents).
+   *
+   * WHY not piggyback on workflows:carry-session: workflow runs follow the
+   * CONVERSATION and are deliberately not carried when a different
+   * conversation is swapped into the pane; orchestration pointers follow the
+   * PANE, and the renderer remaps live children in both cases. One channel
+   * cannot honour both rules.
+   */
+  carryParent(from: unknown, to: unknown): void {
+    // Clone-boundary input from the renderer; a malformed carry must be a
+    // no-op, never an alias keyed by `undefined`.
+    if (typeof from !== 'string' || typeof to !== 'string' || !from || !to || from === to) return
+    // `to` is a live pane. None of today's callers (replace, Reload Agents,
+    // Undo Close) passes a `to` that already has an edge out: each mints a
+    // fresh id (#1369 review c). The delete is what keeps the edges acyclic
+    // by construction anyway: after it, `to` reaches nothing, so `from -> to`
+    // cannot close a loop, even if a future caller revives a replaced id
+    // (an edge out of it would then send its new children elsewhere).
+    this.replacedParents.delete(to)
+    this.replacedParents.delete(from)
+    this.replacedParents.set(from, { to, at: Date.now() })
+    for (const record of this.closedAgents.values()) {
+      const agent = record.output.agent
+      if (agent.orchestrationParentId !== from && agent.orchestrationRootId !== from) continue
+      record.output = {
+        ...record.output,
+        agent: {
+          ...agent,
+          orchestrationParentId: agent.orchestrationParentId === from ? to : agent.orchestrationParentId,
+          orchestrationRootId: agent.orchestrationRootId === from ? to : agent.orchestrationRootId,
+        },
+      }
+    }
+    // The prompt-boundary hint: a child of `from` changing state must
+    // invalidate `to`'s status cache, the one its parent now polls.
+    for (const [child, parent] of this.parentSessionByChildSession) {
+      if (parent === from) this.parentSessionByChildSession.set(child, to)
+    }
+    this.invalidateStatusCache(from)
+    this.invalidateStatusCache(to)
+    this.pruneCoordinationMetadata()
+  }
+
+  /**
+   * Record a child that a create answered for, under its parent's LIVE id.
+   *
+   * WHY resolve here (#1369 review a): a create is requested under parent A
+   * and can be answered after A was replaced by B (the spawn can take tens of
+   * seconds; a timed-out create is adopted even later). carryParent only
+   * rewrites hints that already exist, so storing A made the child's prompt
+   * boundaries invalidate A's status cache while B kept serving the empty
+   * list it cached during the spawn, and `wait_agents` on B could report done
+   * with an active child. Both A's and B's caches are invalidated: A's may
+   * still hold a list computed before the swap.
+   */
+  private noteCreatedChild(childSessionId: string, requestedParentId: string): void {
+    const parentSessionId = this.currentParentId(requestedParentId)
+    this.parentSessionByChildSession.set(childSessionId, parentSessionId)
+    this.closedAgents.delete(childSessionId)
+    this.invalidateStatusCache(requestedParentId)
+    if (parentSessionId !== requestedParentId) this.invalidateStatusCache(parentSessionId)
+  }
+
+  /** The live successor of a possibly replaced parent id (see replacedParents). */
+  private currentParentId(sessionId: string): string {
+    let current = sessionId
+    // carryParent keeps the edges acyclic; the cap is a backstop so a future
+    // edit that breaks that can never hang main.
+    for (let hops = 0; hops <= this.replacedParents.size; hops++) {
+      const next = this.replacedParents.get(current)
+      if (!next) return current
+      current = next.to
+    }
+    return current
+  }
+
   private noteClosed(output: OrchestrationAgentOutput): void {
     const closedAt = Date.now()
     const agent: OrchestrationAgentRecord = {
       ...this.enrichAgent(output.agent),
+      // The read may predate a replacement of the parent (see replacedParents).
+      orchestrationParentId: this.currentParentId(output.agent.orchestrationParentId),
+      orchestrationRootId: this.currentParentId(output.agent.orchestrationRootId),
       lifecycleState: 'closed',
       completedAt: output.agent.completedAt ?? output.agent.lastActivityAt,
       lastActivityAt: closedAt,
@@ -1150,7 +1355,8 @@ export class OrchestrationBridge {
     if (
       now - this.lastPrunedAt < PRUNE_INTERVAL_MS &&
       this.promptDeliveries.size <= MAX_PROMPT_DELIVERIES &&
-      this.closedAgents.size <= MAX_CLOSED_AGENTS
+      this.closedAgents.size <= MAX_CLOSED_AGENTS &&
+      this.replacedParents.size <= MAX_CLOSED_AGENTS
     ) {
       return
     }
@@ -1184,6 +1390,11 @@ export class OrchestrationBridge {
       }
     }
     trimMapToNewest(this.closedAgents, MAX_CLOSED_AGENTS)
+    // Same lifetime as the tombstones they serve (see replacedParents).
+    for (const [from, edge] of this.replacedParents) {
+      if (now - edge.at > ORCHESTRATION_METADATA_TTL_MS) this.replacedParents.delete(from)
+    }
+    trimMapToNewest(this.replacedParents, MAX_CLOSED_AGENTS)
   }
 }
 

@@ -129,6 +129,27 @@ describe('a bootstrap prompt waits for a child that is not ready YET (#854)', ()
     expect(session.asked()).toBe(answers.length + 1)
   })
 
+  // Review of #1375, round 2 (a, b): a late create bootstrap's waiter can fire long after its
+  // parent closed; its guard is asked the moment the gate opens, and nothing is written if it says no.
+  it('writes nothing when its shouldDeliver guard refuses at the moment the gate opens', async () => {
+    const session = scriptedSession([warming(), { kind: 'ready', waitedMs: 1 } as GateAnswer])
+    const manager = managerWith(session)
+    let parentAttached = true
+    const pending = manager.deliverPromptWhenReady('child', 'the brief', undefined, { shouldDeliver: () => parentAttached })
+    parentAttached = false
+    const result = await pending
+    expect(result).toMatchObject({ ok: false, stage: 'before-write', disposition: 'do-not-retry', promptWritten: false })
+    expect(session.write).not.toHaveBeenCalled()
+  })
+
+  it('delivers as before when its guard allows it', async () => {
+    const session = scriptedSession([{ kind: 'ready', waitedMs: 1 } as GateAnswer])
+    const manager = managerWith(session)
+    const result = await manager.deliverPromptWhenReady('child', 'the brief', undefined, { shouldDeliver: () => true })
+    expect(result.ok).toBe(true)
+    expect(session.write.mock.calls.map(([data]) => data)).toEqual(['the brief', '\r'])
+  })
+
   it('gives up when the session cannot accept prompts at all', async () => {
     // The control that keeps "wait for it" from meaning "wait forever". A
     // terminal verdict is the provider saying there is nothing to wait for.

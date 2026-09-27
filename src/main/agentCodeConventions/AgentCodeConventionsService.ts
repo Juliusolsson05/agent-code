@@ -145,6 +145,7 @@ import {
   type SetAgentCodeInstalledSkillProvidersRequest,
 } from '@shared/types/agentCodeInstalledSkills.js'
 import type { AgentCodeCustomSkillRecord } from '@shared/types/agentCodeConventions.js'
+import { userFacingSkillError } from './userFacingError.js'
 
 // See docs/design/agent-code-conventions.md for the canonical ownership and
 // reconciliation invariants enforced by this service.
@@ -291,7 +292,7 @@ export class AgentCodeManagedSkillsService {
           providers: [],
           displayPath: this.displayPath(this.stateFilePath),
           state: 'error',
-          message: safeErrorMessage(error),
+          message: userFacingSkillError(error),
         }]
         for (const skill of Object.values(this.document.customSkills)) {
           this.customTargetStatuses.set(skill.id, [{
@@ -299,7 +300,7 @@ export class AgentCodeManagedSkillsService {
             providers: [],
             displayPath: this.displayPath(this.stateFilePath),
             state: 'error',
-            message: safeErrorMessage(error),
+            message: userFacingSkillError(error),
           }])
         }
         for (const skill of Object.values(this.document.installedSkills)) {
@@ -308,7 +309,7 @@ export class AgentCodeManagedSkillsService {
             providers: [],
             displayPath: this.displayPath(this.stateFilePath),
             state: 'error',
-            message: safeErrorMessage(error),
+            message: userFacingSkillError(error),
           }])
         }
       }
@@ -1915,7 +1916,7 @@ export class AgentCodeManagedSkillsService {
       } catch (error) {
         this.installedTargetStatuses.set(
           skill.id,
-          targets.targets.map(target => this.installedStatus(target, 'error', safeErrorMessage(error))),
+          targets.targets.map(target => this.installedStatus(target, 'error', userFacingSkillError(error))),
         )
         return
       }
@@ -1949,7 +1950,7 @@ export class AgentCodeManagedSkillsService {
         } catch (error) {
           this.installedTargetStatuses.set(
             skill.id,
-            targets.targets.map(target => this.installedStatus(target, 'error', safeErrorMessage(error))),
+            targets.targets.map(target => this.installedStatus(target, 'error', userFacingSkillError(error))),
           )
           return
         }
@@ -1974,7 +1975,7 @@ export class AgentCodeManagedSkillsService {
       } catch (error) {
         this.installedTargetStatuses.set(
           skill.id,
-          targets.targets.map(target => this.installedStatus(target, 'error', safeErrorMessage(error))),
+          targets.targets.map(target => this.installedStatus(target, 'error', userFacingSkillError(error))),
         )
         return
       }
@@ -2100,7 +2101,7 @@ export class AgentCodeManagedSkillsService {
           providers: [],
           displayPath: this.displayPath(this.stateFilePath),
           state: 'error',
-          message: safeErrorMessage(error),
+          message: userFacingSkillError(error),
         })
         this.installedTargetStatuses.set(skill.id, statuses)
       }
@@ -2207,7 +2208,7 @@ export class AgentCodeManagedSkillsService {
     return {
       ok: false,
       code: 'io-error',
-      message: safeErrorMessage(error),
+      message: userFacingSkillError(error),
       snapshot: this.installedSnapshot(),
     }
   }
@@ -3004,7 +3005,7 @@ export class AgentCodeManagedSkillsService {
       delete this.document.pendingOperations[item.target.id]
       return this.status(item.target, 'installed')
     } catch (error) {
-      return this.status(item.target, 'error', safeErrorMessage(error))
+      return this.status(item.target, 'error', userFacingSkillError(error))
     }
   }
 
@@ -3089,7 +3090,7 @@ export class AgentCodeManagedSkillsService {
       // Keep the journal on unexpected failure. In particular, a crash-safe
       // delete may have captured bytes in its operation-derived quarantine;
       // dropping the pending id would make that exact sidecar unrecoverable.
-      return baseStatus('error', safeErrorMessage(error))
+      return baseStatus('error', userFacingSkillError(error))
     }
   }
 
@@ -3147,7 +3148,7 @@ export class AgentCodeManagedSkillsService {
       delete this.document.pendingOperations[item.key]
       return this.customStatus(item.target, 'installed')
     } catch (error) {
-      return this.customStatus(item.target, 'error', safeErrorMessage(error))
+      return this.customStatus(item.target, 'error', userFacingSkillError(error))
     }
   }
 
@@ -3235,7 +3236,7 @@ export class AgentCodeManagedSkillsService {
       delete this.document.pendingOperations[key]
       return baseStatus('not-installed')
     } catch (error) {
-      return baseStatus('error', safeErrorMessage(error))
+      return baseStatus('error', userFacingSkillError(error))
     }
   }
 
@@ -3388,14 +3389,14 @@ export class AgentCodeManagedSkillsService {
       this.targetResolutionError = null
       return true
     } catch (error) {
-      this.targetResolutionError = safeErrorMessage(error)
+      this.targetResolutionError = userFacingSkillError(error)
       this.targets = { targets: [], unsupportedProviders: [] }
       this.targetStatuses = [{
         id: 'provider-target-resolution',
         providers: [],
         displayPath: '',
         state: 'error',
-        message: safeErrorMessage(error),
+        message: userFacingSkillError(error),
       }]
       // A previous successful audit may have left every custom AND installed
       // target marked Installed. Once discovery itself fails, those paths are
@@ -3409,7 +3410,7 @@ export class AgentCodeManagedSkillsService {
         providers: [],
         displayPath: '',
         state: 'error',
-        message: safeErrorMessage(error),
+        message: userFacingSkillError(error),
       }
       for (const skill of Object.values(this.document.customSkills)) {
         this.customTargetStatuses.set(skill.id, [{ ...resolutionError }])
@@ -3430,7 +3431,7 @@ export class AgentCodeManagedSkillsService {
         providers: [],
         displayPath: this.displayPath(this.stateFilePath),
         state: 'error',
-        message: safeErrorMessage(error),
+        message: userFacingSkillError(error),
       })
     }
   }
@@ -3448,13 +3449,13 @@ export class AgentCodeManagedSkillsService {
       // would leave bytes that Agent Code can neither prove nor safely clean.
       // Availability loses to ownership truth at this exact boundary.
       statuses.push(target
-        ? this.status(target, 'error', safeErrorMessage(error))
+        ? this.status(target, 'error', userFacingSkillError(error))
         : {
             id: 'managed-skills-state',
             providers: [],
             displayPath: this.displayPath(this.stateFilePath),
             state: 'error',
-            message: safeErrorMessage(error),
+            message: userFacingSkillError(error),
           })
       return false
     }
@@ -3641,7 +3642,7 @@ export class AgentCodeManagedSkillsService {
     return {
       ok: false,
       code: 'io-error',
-      message: safeErrorMessage(error),
+      message: userFacingSkillError(error),
       snapshot: this.snapshot(),
     }
   }
@@ -3650,7 +3651,7 @@ export class AgentCodeManagedSkillsService {
     return {
       ok: false,
       code: 'io-error',
-      message: safeErrorMessage(error),
+      message: userFacingSkillError(error),
       snapshot: this.customSnapshot(),
     }
   }
@@ -3696,17 +3697,13 @@ export { AgentCodeManagedSkillsService as AgentCodeConventionsService }
 // WHY a fixed sentence for a failed recovery reset (#1424 review a): the
 // unlink error carries the state file's absolute path and the OS code, and
 // the recovery panel shows the result's message as it is. The raw error stays
-// in the main log for diagnosis (q22). The rest of this service still passes
-// error.message through; that wider sweep is a separate issue.
+// in the main log for diagnosis (q22). Every other message in this service
+// goes through userFacingSkillError (#1427).
 function recoveryResetError(error: unknown): Error {
   console.warn('[agent-code-conventions] recovery reset failed:', error)
   return new Error("Couldn't remove the unreadable state file. Check that Agent Code's data folder is writable, then try again.")
 }
 
-function safeErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message
-  return 'Unknown filesystem error'
-}
 
 function installedDiscoveryError(error: unknown): {
   ok: false
@@ -3716,7 +3713,7 @@ function installedDiscoveryError(error: unknown): {
   if (error instanceof GitHubSkillSourceError) {
     return { ok: false, code: error.code, message: error.message }
   }
-  return { ok: false, code: 'io-error', message: safeErrorMessage(error) }
+  return { ok: false, code: 'io-error', message: userFacingSkillError(error) }
 }
 
 function installedAcquisitionError(error: unknown): AgentCodeInstalledSkillsMutationResult {

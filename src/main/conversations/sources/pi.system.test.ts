@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 
@@ -8,6 +8,7 @@ import { encodeCwdForSessionDir } from 'pi-terminal-headless'
 
 import { resolveFamily } from '../family.js'
 import { PiConversationSource } from './pi.js'
+import { ConversationPromptsUnreadable } from './types.js'
 
 // The Pi conversation source over Stage 0 recordings of the real pi 0.87.1,
 // laid out the way pi lays them out: one directory per cwd under
@@ -74,6 +75,23 @@ describe('Pi conversation source', () => {
     const source = new PiConversationSource({ env: {}, homeDirectory: home })
     const prompts = await source.prompts(tree.id, repo)
     expect(prompts.map(prompt => prompt.text)).toEqual(userTexts(referenceActiveBranch(tree.rows)).reverse())
+    expect(await source.prompts('no-such-session', repo)).toEqual([])
+  })
+
+  // #1306: a session file that is THERE but cannot be read used to answer
+  // [] like a missing one, so View Prompts said "no prompts". A missing file
+  // still answers [] (a new session has none yet); an unreadable one throws.
+  it('says an unreadable session file instead of answering no prompts', async () => {
+    const { home, place } = sandbox()
+    const repo = join(home, 'repo')
+    const tree = place(Object.values(loadLiveFixture('tree').files)[0]!, repo)
+    const source = new PiConversationSource({ env: {}, homeDirectory: home })
+    chmodSync(tree.file, 0o000)
+    try {
+      await expect(source.prompts(tree.id, repo)).rejects.toBeInstanceOf(ConversationPromptsUnreadable)
+    } finally {
+      chmodSync(tree.file, 0o600)
+    }
     expect(await source.prompts('no-such-session', repo)).toEqual([])
   })
 
