@@ -366,11 +366,10 @@ function ghostContextForBlock(
  *           landing validates all provisional blocks for that turn.
  *
  *   Codex:  rollout emits one entry per content block with its own
- *           uuid. We match by (turnId, blockIndex). turnId for Codex
- *           comes from the response id when available; Agent Code's
- *           Codex ingest path already exposes it on the mapped
- *           entry. When the mapping is not available we fall back
- *           to tool_use id pairing for tool blocks.
+ *           uuid, and never the proxy response id a ghost is keyed by.
+ *           We match one block at a time on the provider item id: the
+ *           ghost's `context.itemId` against the entry's `codexItemId`
+ *           (#1231). Tool blocks can also pair by tool_use id.
  *
  *   Both:   if the upstream entry has a tool_use block whose id
  *           matches a ghost's `context.toolUseId`, supersede that

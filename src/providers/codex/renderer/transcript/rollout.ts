@@ -247,11 +247,13 @@ export function codexTurnIdFromRollout(entry: Record<string, unknown>): string |
 }
 
 /**
- * Stamp a mapped Codex feed entry with the rollout turn id so the
- * ghost reconciler can supersede by turn id. The field is added as
- * an Agent Code-local extension to the shared `Entry` type via cast —
- * consumers that don't care about it ignore it, and
- * `reconcileUpstream` reads it defensively.
+ * Stamp a mapped Codex feed entry with the rollout turn id. Its consumer is
+ * the feed's committed-text ownership keys (features/feed/ui/semantic/
+ * renderUnits.ts). The ghost reconciler does NOT use it: a ghost is keyed by
+ * the proxy response id, never this turn UUID, so ghosts match on
+ * `codexItemId` instead (`stampCodexItemId`, #1231). The field is an Agent
+ * Code-local extension to the shared `Entry` type via cast; consumers that
+ * don't care about it ignore it.
  */
 export function stampCodexTurnId(entry: Entry, turnId: string | null): Entry {
   if (turnId === null) return entry
