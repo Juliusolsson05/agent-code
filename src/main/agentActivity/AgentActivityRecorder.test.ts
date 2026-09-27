@@ -343,6 +343,40 @@ describe('AgentActivityRecorder', () => {
     expect(summary.projects[0].topAgents.map(agent => agent.agentMs)).toEqual([2 * HOUR])
   })
 
+  // #1342 verification b (round 5, surviving mutant): the alias can also land
+  // after the summary's snapshot but BEFORE the closed intervals are read.
+  // Only passing that snapshot into readIntervals keeps both sets on it.
+  it('keys closed intervals by the summary\'s snapshot even when an alias lands before they are read', async () => {
+    const store = new AgentActivityStore(dir)
+    const manager = new EventEmitter()
+    const recorder = new AgentActivityRecorder({
+      manager: manager as unknown as Pick<SessionManager, 'on'>,
+      store,
+      resolveRepoRoot: async cwd => cwd.split('/.worktrees/')[0],
+    })
+    recorders.push(recorder)
+    await recorder.start()
+    const [window] = windows() as unknown as Array<{ workspace: { sessions: Record<string, Record<string, unknown>> } }>
+    window.workspace.sessions.lead = { ...window.workspace.sessions.lead, tldrIdentity: 'tldr-lead' }
+    recorder.updateWorkspace([window] as unknown as PersistedWindow[], { 'name-1': 'Ada' })
+    manager.emit('started', { sessionId: 'lead', kind: 'claude' })
+    const phase = (value: string) => manager.emit('semantic-event', { sessionId: 'lead', event: { type: 'stream_phase', phase: value } })
+    phase('thinking')
+    vi.setSystemTime(T0 + HOUR)
+    phase('idle')
+    phase('thinking')
+    vi.setSystemTime(T0 + 2 * HOUR)
+    await recorder.flush()
+    const read = store.readIntervals.bind(store)
+    vi.spyOn(store, 'readIntervals').mockImplementation(async (...args) => {
+      await store.appendAliases([['a', 'name-1']])
+      return read(...args)
+    })
+
+    const summary = await recorder.summary('24h')
+    expect(summary.totals.agents.user).toBe(1)
+  })
+
   // An agent that gets a name later: its tldrIdentity rows join the name.
   it('joins an agent\'s earlier rows when it gets a name', async () => {
     const { recorder, phase } = await mount()
