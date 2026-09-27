@@ -9,12 +9,19 @@ import { defineCapability, type ControlHistory, type ControlResult } from '@cont
 import { FileControlHistory } from './FileControlHistory'
 import { historyCapabilities } from './control'
 
+// The recorded rows in real-rows-2026-09.json were written on 2026-09-05. The
+// history's retention clock (#1274) is pinned there, so a recorded unkeyed
+// call is "recent" as it was when recorded, not pruned for being weeks old by
+// the wall clock. Rows these tests append are stamped with the wall clock,
+// which is later still, so they are recent too. Retention itself is tested
+// against its own clock at the end of the file.
+const RECORDED_AT = () => new Date('2026-09-05T09:00:00.000Z')
 const directories: string[] = []
 afterEach(async () => { await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true }))) })
 async function setup() {
   const directory = await mkdtemp(join(tmpdir(), 'ac-control-history-'))
   directories.push(directory)
-  return { directory, history: new FileControlHistory(directory) }
+  return { directory, history: new FileControlHistory(directory, { now: RECORDED_AT }) }
 }
 const caller = { kind: 'external' as const, id: 'trial-client' }
 function executor(history: ControlHistory, handler: () => Promise<unknown> = async () => 'done') {
@@ -150,7 +157,7 @@ async function seeded() {
 type Recovery = { kind: string; quarantinePath: string; sha256: string; keyedCallsBlocked: boolean }
 function reopen(directory: string) {
   const reports: Recovery[] = []
-  return { history: new FileControlHistory(directory, { onRecovered: report => reports.push(report as Recovery) }), reports }
+  return { history: new FileControlHistory(directory, { now: RECORDED_AT, onRecovered: report => reports.push(report as Recovery) }), reports }
 }
 // The real keyed row as its own external caller would retry it.
 const realCaller = { kind: 'external' as const, id: realRows.keyedReceived.caller.replace(/^external:/, '') }
@@ -456,5 +463,104 @@ describe('damaged history recovery (#1240) keeps request keys idempotent', () =>
     expect((await nextLaunch.events()).map(event => event.sequence)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9])
     expect(reports).toEqual([])
     await access(path)
+  })
+})
+
+// #1274: the journal and its payloads grew forever (129 MB after 22 days on
+// the owner's machine, 105 MB of it read-only transcripts.page results) and
+// the whole journal lived in memory. Retention may only drop calls that can
+// never be looked up for dedupe (steering q12): unkeyed, finished, not reused.
+const retentionRows = JSON.parse(await readFile(join(import.meta.dirname,
+  '../../../../testing/fixtures/control-history/retention-rows-2026-09-27.json'), 'utf8')) as {
+  rows: Array<{ sequence: number; callId: string; kind: string; payload?: string; requestKey?: string }>
+}
+const RETENTION_NOW = new Date('2026-09-27T12:00:00.000Z')
+const OLD_UNKEYED = ['95caa49c-eb60-44e2-9b62-938ce2243d11', '5ea10842-a1c8-463c-aee9-5d0e238c56e1', '37763f2f-c479-49b7-8d79-4c990bc0784c']
+const KEPT = ['95c97fce-bca0-4bc7-9901-90b45d988d1c', '13e43d53-5120-41ae-88d7-820dc9088728', 'a346f752-9eec-4b37-b7df-145dfaf1aaf5',
+  'e8a21d19-b139-4012-8e09-6139b5643bb5', '2ebe82c0-c877-4bb6-9877-56ded38d4739']
+// The old unkeyed externalControl.status call's `received` digest is also the
+// keyed app.windowFocus call's; pruning the first must not take it away.
+const SHARED_DIGEST = 'e5624e8c0ef7518948b17f88486be4658cdb3ba0e9c92a02aea6ad365bb92fd1'
+const ORPHAN_DIGEST = 'f'.repeat(64)
+
+describe('control history retention (#1274)', () => {
+  async function seededJournal(rows = retentionRows.rows) {
+    const { directory } = await setup()
+    await writeFile(join(directory, 'events.jsonl'), rows.map((row, index) => `${JSON.stringify({ ...row, sequence: index + 1 })}\n`).join(''), { mode: 0o600 })
+    // Payload CONTENTS are not recorded (they hold prompts and results);
+    // retention decides by the digest in the row, so a placeholder body is
+    // enough. An orphan, as a failed append leaves, sits beside them.
+    const { mkdir } = await import('node:fs/promises')
+    await mkdir(join(directory, 'payloads'), { recursive: true })
+    for (const digest of new Set([...rows.map(row => row.payload!).filter(Boolean), ORPHAN_DIGEST])) {
+      await writeFile(join(directory, 'payloads', `${digest}.json`), '{}')
+    }
+    return directory
+  }
+  const open = (directory: string, onRecovered?: () => void) =>
+    new FileControlHistory(directory, { now: () => RETENTION_NOW, onRecovered })
+
+  it('drops old unkeyed finished calls and their payloads, and keeps every keyed, reused and recent call', async () => {
+    const directory = await seededJournal()
+    const events = await open(directory).events()
+    expect([...new Set(events.map(event => event.callId))].sort()).toEqual([...KEPT].sort())
+    // Kept rows are the recorded rows, in order, with only sequences renumbered.
+    const expected = retentionRows.rows.filter(row => KEPT.includes(row.callId))
+    expect(events.map(({ sequence: _s, ...rest }) => rest)).toEqual(expected.map(({ sequence: _s, ...rest }) => rest))
+    expect(events.map(event => event.sequence)).toEqual(expected.map((_, index) => index + 1))
+    const payloads = new Set(await readdir(join(directory, 'payloads')))
+    const keptDigests = new Set(expected.map(row => row.payload!).filter(Boolean))
+    expect(payloads).toEqual(new Set([...keptDigests].map(digest => `${digest}.json`)))
+    expect(payloads.has(`${SHARED_DIGEST}.json`)).toBe(true)
+    expect(payloads.has(`${ORPHAN_DIGEST}.json`)).toBe(false)
+    // The rewrite is durable and clean: a second launch prunes nothing and
+    // reports no recovery.
+    const reports: unknown[] = []
+    expect(await open(directory, () => reports.push(1)).events()).toEqual(events)
+    expect(reports).toEqual([])
+  })
+
+  it('keeps a call with no result row however old it is', async () => {
+    const rows = retentionRows.rows.filter(row => !(row.callId === OLD_UNKEYED[2] && row.kind === 'result'))
+    const directory = await seededJournal(rows)
+    const events = await open(directory).events()
+    expect(events.some(event => event.callId === OLD_UNKEYED[2])).toBe(true)
+    expect(events.some(event => event.callId === OLD_UNKEYED[0])).toBe(false)
+  })
+
+  it('does not prune in a launch that had to recover the journal', async () => {
+    const directory = await seededJournal()
+    await appendFile(join(directory, 'events.jsonl'), '{"sequence":31,"kind":"resu')
+    const reports: unknown[] = []
+    const events = await open(directory, () => reports.push(1)).events()
+    expect(reports).toHaveLength(1)
+    expect(events.some(event => event.callId === OLD_UNKEYED[0])).toBe(true)
+  })
+
+  it('still replays an old keyed call after its unkeyed neighbours were pruned', async () => {
+    const { directory } = await setup()
+    const then = new Date('2026-09-01T00:00:00.000Z')
+    let effects = 0
+    const at = (clock: () => Date, history: ControlHistory) => {
+      const registry = createControlRegistry()
+      registry.register({ kind: 'main', generation: 'trial' }, [defineCapability({
+        id: 'trial.act', title: 'Harmless trial', description: 'Exercise durable admission',
+        execution: 'main', effect: 'mutation', input: z.object({ text: z.string() }), output: z.unknown(),
+        handler: async () => { effects++; return 'sent' },
+      })])
+      return createControlExecutor({ history, instanceId: randomUUID(), id: randomUUID, now: () => clock().toISOString(),
+        catalog: () => registry.list(), dispatch: (req, context) => registry.invoke(req, context) })
+    }
+    const old = new FileControlHistory(directory, { now: () => then })
+    const first = await at(() => then, old).invoke(request, caller)
+    await at(() => then, old).invoke({ ...request, requestKey: undefined, input: { text: 'unkeyed' } }, caller)
+    expect(effects).toBe(2)
+
+    const later = new FileControlHistory(directory, { now: () => RETENTION_NOW })
+    const replay = await at(() => RETENTION_NOW, later).invoke(request, caller)
+    expect(replay).toMatchObject({ ok: true, value: 'sent', operation: { reusedCallId: first.operation?.callId } })
+    expect(effects).toBe(2)
+    const kept = await new FileControlHistory(directory, { now: () => RETENTION_NOW }).events()
+    expect(kept.every(event => event.requestKey === request.requestKey)).toBe(true)
   })
 })

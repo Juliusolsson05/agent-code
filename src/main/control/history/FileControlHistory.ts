@@ -56,6 +56,12 @@ const EXECUTOR_KINDS = new Set<string>(['received', 'dispatched', 'result', 'dup
 // A malformed recovery.json preserved aside when a new recovery must rewrite
 // the marker: its block cannot be read, so it stays a global block of its own.
 const INVALID_MARKER = /^recovery\.invalid-.+\.json$/
+// How long a call that can never be looked up for dedupe stays readable
+// (#1274). UNCONFIRMED product default: history.read/list serve an agent or
+// operator inspecting recent work, which is hours, not weeks. On the owner's
+// rate (~5 MB of payloads a day, nearly all transcripts.page reads) a week is
+// about 20-35 MB instead of an unbounded journal held whole in memory.
+export const CONTROL_HISTORY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 const recoveryFileSchema = z.object({
   quarantines: z.array(z.object({
     file: z.string().refine(name => QUARANTINE.test(name) || INVALID_MARKER.test(name)),
@@ -105,7 +111,12 @@ export class FileControlHistory implements ControlHistory {
   private guards: Guard[] = []
   constructor(
     private readonly directory: string,
-    private readonly options: { onRecovered?: (recovery: ControlHistoryRecovery) => void } = {},
+    private readonly options: {
+      onRecovered?: (recovery: ControlHistoryRecovery) => void
+      /** Clock for retention; injectable so tests can age a real journal. */
+      now?: () => Date
+      retentionMs?: number
+    } = {},
   ) {}
 
   private load(): Promise<HistoryEvent[]> {
@@ -120,13 +131,73 @@ export class FileControlHistory implements ControlHistory {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
     let events: HistoryEvent[] = []
+    let recovered = false
     if (bytes) {
       const analysis = analyze(bytes.toString('utf8'))
       events = analysis.events
-      if (analysis.torn || analysis.damaged) await this.recover(bytes, analysis)
+      recovered = analysis.torn || analysis.damaged
+      if (recovered) await this.recover(bytes, analysis)
     }
     this.guards = await this.readGuards()
+    // WHY a launch that recovered does not also prune: the operator is about
+    // to reconcile a damaged ledger against what it showed at recovery time,
+    // and a second rewrite in the same launch would change it under them.
+    // The next clean launch prunes.
+    if (!recovered) events = await this.prune(events)
     return events
+  }
+
+  // Retention (#1274). WHY on load and nowhere else: load is the one moment
+  // no append is in flight (appends wait on `load()`), so the rewrite cannot
+  // race a writer, and the app relaunches often (updates, restarts). A
+  // process running for weeks grows until its next launch; that is the
+  // accepted residual, bounded by the same rate.
+  //
+  // WHY whole calls, and only these (steering q12): the journal is the
+  // executor's dedupe ledger and request keys have no lifetime in the
+  // contract, so any call carrying a key is kept forever (815 of 6,089 rows
+  // on the owner's machine). A call with no `result` may still be in flight
+  // or is evidence of an interrupted one; a call a kept `duplicate` names
+  // via reusedCallId is where that duplicate's answer lives. Dropping WHOLE
+  // calls keeps the per-call key consistency analyze() checks, so the
+  // pruned ledger reloads as clean instead of being quarantined.
+  private async prune(events: HistoryEvent[]): Promise<HistoryEvent[]> {
+    const cutoff = (this.options.now?.() ?? new Date()).getTime() - (this.options.retentionMs ?? CONTROL_HISTORY_RETENTION_MS)
+    const calls = new Map<string, { keyed: boolean; finished: boolean; newest: number }>()
+    const reused = new Set<string>()
+    for (const event of events) {
+      const call = calls.get(event.callId) ?? { keyed: false, finished: false, newest: 0 }
+      if (event.requestKey !== undefined) call.keyed = true
+      if (event.kind === 'result') call.finished = true
+      // An unparseable time counts as NEW: unknown age is never a reason to
+      // delete evidence.
+      const at = Date.parse(event.at)
+      call.newest = Math.max(call.newest, Number.isFinite(at) ? at : Number.POSITIVE_INFINITY)
+      calls.set(event.callId, call)
+      if (event.reusedCallId) reused.add(event.reusedCallId)
+    }
+    const expired = new Set([...calls].filter(([id, call]) =>
+      !call.keyed && call.finished && !reused.has(id) && call.newest < cutoff).map(([id]) => id))
+    const kept = expired.size > 0 ? events.filter(event => !expired.has(event.callId)) : events
+    if (expired.size > 0) {
+      // Same renumbering as recovery: sequences are process-local cursors.
+      kept.forEach((event, index) => { event.sequence = index + 1 })
+      await this.writeAtomic(join(this.directory, JOURNAL), kept.map(event => `${JSON.stringify(event)}\n`).join(''))
+    }
+    // Payload GC runs only AFTER the rewrite is durable: a crash in between
+    // leaves unreferenced files (collected next launch), never a kept row
+    // pointing at a deleted payload. It also collects orphans from appends
+    // that stored a payload and then failed. A digest shared with a kept row
+    // is referenced, so it stays.
+    const referenced = new Set(kept.flatMap(event => event.payload ? [`${event.payload}.json`] : []))
+    for (const name of await readdir(join(this.directory, 'payloads'))) {
+      // Only finished payload files: a `.tmp` belongs to a write that has not
+      // renamed yet (none can be in flight here, but that is the writer's
+      // business, not GC's).
+      if (!/^[a-f0-9]{64}\.json$/.test(name) || referenced.has(name)) continue
+      await rm(join(this.directory, 'payloads', name), { force: true })
+    }
+    return kept
   }
 
   private async recover(bytes: Buffer, analysis: Analysis): Promise<void> {
