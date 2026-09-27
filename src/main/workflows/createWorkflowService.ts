@@ -15,14 +15,32 @@ import { prepareGitWorkflowWorktree } from '@main/workflows/GitWorkflowWorktree.
 import { WorkflowSourceApprovalStore } from '@main/workflows/WorkflowSourceApprovalStore.js'
 import { withVisibleControls } from '@shared/text/visibleControls.js'
 
+function workflowStateRoot(): string {
+  return join(app.getPath('userData'), 'workflows')
+}
+
+/**
+ * Where WorkflowBridge keeps replaced-pane aliases (#1280).
+ *
+ * WHY inside the workflow state root (#1325 round-2 review c4): the aliases
+ * are part of who owns each stored run, so they must travel with the run
+ * store when a user backs up or moves `workflows/`; a sibling in userData was
+ * left behind and every carried run fell back to a dead id. It sits beside
+ * source-approvals.json, the other app-owned file there. workflow-mcp's
+ * FileWorkflowStore only scans `workflows/runs`, so it never reads this file.
+ */
+export function workflowSessionAliasFile(): string {
+  return join(workflowStateRoot(), 'session-aliases.json')
+}
+
 export async function createWorkflowService(options: {
   isCodexCliUpdateReserved?: () => boolean
   onCreated?: (service: WorkflowService) => void
 } = {}): Promise<WorkflowService> {
-  const workflowStateRoot = join(app.getPath('userData'), 'workflows')
-  const store = new FileWorkflowStore(workflowStateRoot)
+  const stateRoot = workflowStateRoot()
+  const store = new FileWorkflowStore(stateRoot)
   const sourceApprovals = new WorkflowSourceApprovalStore(
-    join(workflowStateRoot, 'source-approvals.json'),
+    join(stateRoot, 'source-approvals.json'),
   )
 
   // WHY the worker path is relative to THIS BUILT MODULE rather than
@@ -33,7 +51,7 @@ export async function createWorkflowService(options: {
   const workerFilePath = fileURLToPath(new URL('./workflowWorker.js', import.meta.url))
   const providerHostFilePath = fileURLToPath(new URL('./workflowProviderHost.js', import.meta.url))
   const interactiveCodexHome = process.env.CODEX_HOME ?? join(app.getPath('home'), '.codex')
-  const workflowCodexHome = join(workflowStateRoot, 'codex-home')
+  const workflowCodexHome = join(stateRoot, 'codex-home')
   const authenticationBroker = new CodexWorkflowAuthenticationBroker({
     interactiveCodexHome,
     // WHY the broker writes directly to the isolated home's auth path: a second "staging" file
