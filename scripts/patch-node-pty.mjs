@@ -79,9 +79,9 @@
 // =============================================================================
 
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 
 // sha256 of node-pty 1.1.0's src/unix/pty.cc as published on npm, and of the
 // same file after this patch. Both are exact: the patch output is
@@ -332,7 +332,22 @@ export function patchPtyFile(file) {
 
 // CLI entry (postinstall). Resolved from the repo root, not the cwd, because
 // npm runs postinstall with cwd = package root but a manual run may not.
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+//
+// WHY real paths on both sides (#1439 review b): Node resolves import.meta.url
+// to the REAL path of the module, while process.argv[1] is the path as typed.
+// Run through a symlink (/tmp -> /private/tmp on macOS, a symlinked checkout)
+// the two differed, this body never ran, and the script exited 0 without
+// patching or a word — the silent skip the whole script exists to prevent.
+// An unresolvable argv[1] (no script path at all) is simply "not run as a
+// command", which is the import-for-tests case.
+const invokedAs = (() => {
+  try {
+    return process.argv[1] ? realpathSync(process.argv[1]) : null
+  } catch {
+    return null
+  }
+})()
+if (invokedAs !== null && invokedAs === realpathSync(fileURLToPath(import.meta.url))) {
   const root = join(dirname(fileURLToPath(import.meta.url)), '..')
   const file = join(root, 'node_modules', 'node-pty', 'src', 'unix', 'pty.cc')
   if (!existsSync(file)) {

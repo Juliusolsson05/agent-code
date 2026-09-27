@@ -123,4 +123,17 @@ app never reaches `kern.tty.ptmx_max` (511) and never fails every spawn with
   pre-existing ones (1.1.0's kqueue initialisers), and the shared
   `node_modules` was untouched. Unit test 7/7. Restoring the countdown
   loop turns 2 tests red.
-- Not yet run: the system test. It is gated on q117 capacity.
+- System test, run after the q117 pause lifted:
+  - it FAILS on the shared, unpatched build (`expected 20 to be less than or
+    equal to 0`), one leaked master per spawn;
+  - an isolated copy patched by the script and rebuilt with node-gyp gives
+    0 → 0.
+  - Reviewers a and b reproduced both numbers independently.
+- Review round 1 (a, b MERGE-READY with minors), both fixed fail-first:
+  - a: the unit test now pins the DIRECTION of the `low_fds[i] != -1`
+    guard and of the final `spawn_err != 0` check. Each inversion, even
+    with `PATCHED_SHA256` updated to match, turns a test red. Linux CI
+    never runs the macOS fd test, so this is the CI-side pin.
+  - b: the CLI entry compares real paths, so a run through a symlinked
+    path patches instead of silently exiting 0. It is pinned by running the
+    real script through a symlinked directory.

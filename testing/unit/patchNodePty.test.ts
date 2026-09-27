@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -55,11 +56,18 @@ describe('node-pty 1.1.0 /dev/ptmx leak patch (#1437)', () => {
     const fn = macSpawnFunction(patchPtySource(PRISTINE))
     expect(fn).not.toContain('count--')
     expect(fn).toContain('for (size_t i = 0; i <= count && i < 3; i++) {')
-    expect(fn).toContain('close(low_fds[i]);')
+    // The guard's DIRECTION, not just its presence (#1439 review a): inverted to
+    // `== -1`, every valid low_fds[0] is skipped again — the exact leak — and a
+    // hash updated to match would hide it from the sha256 guard. Linux CI never
+    // runs the macOS fd test, so this text is the only CI-side pin.
+    expect(fn).toContain('if (low_fds[i] != -1) {\n      close(low_fds[i]);')
     expect(fn).toContain('if (slave != -1) {\n    close(slave);')
     // Every early failure must reach `done:` (the only place fds are
     // released); a bare `return` would reintroduce a per-failure leak.
     expect(fn).not.toMatch(/\n\s+return;/)
+    // A failed posix_spawn is reported, a successful one is not (#1439 review a:
+    // inverted, every spawn would throw "posix_spawnp failed").
+    expect(fn).toContain('if (spawn_err != 0) {\n    *err = format_error("posix_spawn failed", spawn_err);')
     // 10 = posix_openpt, grantpt, unlockpt, TIOCPTYGNAME, open(slave),
     // tcsetattr, TIOCSWINSZ and the three posix_spawnattr_set* calls.
     expect(fn.match(/goto done;/g)?.length).toBe(10)
@@ -97,5 +105,30 @@ describe('node-pty 1.1.0 /dev/ptmx leak patch (#1437)', () => {
     const file = tempCopy(other)
     expect(() => patchPtyFile(file)).toThrow(/unexpected pty\.cc/)
     expect(readFileSync(file, 'utf8')).toBe(other)
+  })
+})
+
+// #1439 review b: the CLI entry compared import.meta.url (Node resolves it to
+// the REAL path) with process.argv[1] (the path as typed). Through a symlink —
+// /tmp -> /private/tmp on macOS, a symlinked checkout anywhere — the two
+// differ, the guarded body never ran, and the script exited 0 without
+// patching or saying so: the silent skip the script exists to prevent.
+describe('patch-node-pty run as a command', () => {
+  it('patches when invoked through a symlinked path, not only its real one', () => {
+    const root = mkdtempSync(join(tmpdir(), 'patch-node-pty-cli-'))
+    dir = root
+    const real = join(root, 'real')
+    mkdirSync(join(real, 'scripts'), { recursive: true })
+    mkdirSync(join(real, 'node_modules', 'node-pty', 'src', 'unix'), { recursive: true })
+    copyFileSync(join(__dirname, '../../scripts/patch-node-pty.mjs'), join(real, 'scripts', 'patch-node-pty.mjs'))
+    const target = join(real, 'node_modules', 'node-pty', 'src', 'unix', 'pty.cc')
+    writeFileSync(target, PRISTINE)
+    const linked = join(root, 'linked')
+    symlinkSync(real, linked, 'dir')
+
+    const out = execFileSync(process.execPath, [join(linked, 'scripts', 'patch-node-pty.mjs')], { encoding: 'utf8' })
+
+    expect(out).toContain('patch-node-pty: patched')
+    expect(readFileSync(target, 'utf8')).toBe(patchPtySource(PRISTINE))
   })
 })
