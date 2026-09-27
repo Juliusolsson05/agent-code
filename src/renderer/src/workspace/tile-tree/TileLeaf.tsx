@@ -116,6 +116,10 @@ type Props = {
   showWorktreeBadges?: boolean
 }
 
+
+export const OLDER_HISTORY_FAILED = "Couldn't load older messages. Scroll up again to retry."
+const OLDER_HISTORY_TOAST_COALESCE_MS = 5_000
+
 export function TileLeaf({
   sessionId,
   runtime,
@@ -508,9 +512,20 @@ export function TileLeaf({
     }
   }, [acknowledgeSession, feed, runtime.conditions, sessionId, showToast])
 
+  // WHY a pane toast on a failed page (#1250 row 12): the loader used to
+  // clear its spinner and nothing else, so the feed looked as if it had
+  // nothing older. Fixed words (q22): the error can name a transcript path.
+  // Coalesced, because while the scroller sits near the top every scroll
+  // tick retries, and each failure must not stack another toast.
+  const lastOlderHistoryToastAtRef = useRef(0)
   const loadOlderHistory = useCallback(async () => {
-    await workspace.loadOlderHistory(sessionId)
-  }, [sessionId, workspace.loadOlderHistory])
+    const result = await workspace.loadOlderHistory(sessionId)
+    if (result !== 'failed') return
+    const now = Date.now()
+    if (now - lastOlderHistoryToastAtRef.current < OLDER_HISTORY_TOAST_COALESCE_MS) return
+    lastOlderHistoryToastAtRef.current = now
+    workspace.showPaneToast(sessionId, OLDER_HISTORY_FAILED)
+  }, [sessionId, workspace.loadOlderHistory, workspace.showPaneToast])
 
   const appendRenderDebug = useCallback((entry: Parameters<typeof workspace.appendFeedDebug>[1]) => {
     workspace.appendFeedDebug(sessionId, entry)

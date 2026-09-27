@@ -126,3 +126,55 @@ describe('older history and the ingest watermark (#915)', () => {
     })
   })
 })
+
+// #1250 row 12: a failed page used to clear the spinner and nothing else, and
+// returned nothing, so no caller could tell the user. The hook now answers
+// what happened, and a failure leaves `hasOlderHistory` set so the next
+// scroll to the top retries.
+describe('what an older-history request reports', () => {
+  function harness(runtime: Partial<SessionRuntime>) {
+    let runtimes: Record<string, SessionRuntime> = { session: { ...emptyRuntime(), ...runtime } }
+    const refs = {
+      stateRef: ref({ sessions: { session: { kind: 'claude', cwd: '/tmp/project', providerSessionId: 'provider-session' } } }),
+      latestRuntimesRef: ref(runtimes),
+      seenUuidsRef: ref({}),
+    } as unknown as WorkspaceRefs
+    const setRuntimes: WorkspaceSetRuntimes = next => {
+      runtimes = typeof next === 'function' ? next(runtimes) : next
+      refs.latestRuntimesRef.current = runtimes
+    }
+    const updateRuntime = (id: string, patch: Partial<SessionRuntime>) => {
+      setRuntimes(prev => ({ ...prev, [id]: { ...prev[id]!, ...patch } }))
+    }
+    const { result } = renderHook(() => useHistoryActions(setRuntimes, refs, updateRuntime, ipcSessionFeed))
+    return { load: () => result.current.loadOlderHistory('session'), runtime: () => runtimes.session! }
+  }
+
+  it('answers failed when the page cannot be read, and leaves a retry possible', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    Object.defineProperty(window, 'api', { configurable: true, value: {
+      loadOlderHistory: vi.fn(async () => { throw new Error("ENOENT: no such file or directory, open '/Users/someone/.claude/projects/x.jsonl'") }),
+      gitWorktrees: vi.fn(async () => ({ ok: true, worktrees: [] })),
+    } })
+    const { load, runtime } = harness({ hasOlderHistory: true, historyOldestMarker: 'anchor' })
+    let answer: unknown
+    await act(async () => { answer = await load() })
+    expect(answer).toBe('failed')
+    expect(runtime()).toMatchObject({ hasOlderHistory: true, loadingOlderHistory: false })
+    vi.restoreAllMocks()
+  })
+
+  it('answers loaded for a page, and skipped when nothing was asked', async () => {
+    Object.defineProperty(window, 'api', { configurable: true, value: {
+      loadOlderHistory: vi.fn(async () => ({ entries: [], hasMore: false })),
+      gitWorktrees: vi.fn(async () => ({ ok: true, worktrees: [] })),
+    } })
+    const loaded = harness({ hasOlderHistory: true, historyOldestMarker: 'anchor' })
+    let answer: unknown
+    await act(async () => { answer = await loaded.load() })
+    expect(answer).toBe('loaded')
+    const noMarker = harness({ hasOlderHistory: true, historyOldestMarker: null })
+    await act(async () => { answer = await noMarker.load() })
+    expect(answer).toBe('skipped')
+  })
+})
