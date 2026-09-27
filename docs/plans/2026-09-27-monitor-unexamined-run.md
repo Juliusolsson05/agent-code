@@ -41,3 +41,13 @@ A second store's write can land between retention's final `touchedSince()` check
 - **Mutations, each killed on its own:** the `examinedRuns` guard dropped (2 red); `examinedRuns` never populated (2 red); examined kept after delete; unknown incidents unprotected; unparsed lines ignored; no touched check (2 red). Only the ELOOP case has two guards (indexing and `touchedSince`), as noted in its test.
 - **Docs:** residual 2 is closed; "deleted as before" is corrected (the incident file goes first, the emptied folder on a later pass).
 
+
+## Review b round 2, fixed
+- **The problem:** the index is only a snapshot of another live store's run. Expiring or compacting a foreign tier file, or rewriting its incidents, from that snapshot deleted what the other store wrote afterwards, including content appended after indexing.
+- **The fix:** each foreign tier and incident file's size and mtime are recorded at indexing (`foreignFiles`). Every expiry, compaction and incident rewrite of a foreign file first checks the file is unchanged. A changed or vanished file makes the run unknown (`unindexedRuns`) instead. After the store's own rewrite of a foreign file, the new fingerprint is recorded. The store's own run needs no check, since only it writes there.
+- **Tests (two live stores on one folder, real files and clock):**
+  - a foreign tier expired from a stale index;
+  - content appended to a foreign tier after indexing (compaction);
+  - a fresh incident added after indexing (incident rewrite).
+  With the check disabled, the first two fail; removing only the incident-loop check fails the third.
+- **Residual unchanged:** the sub-millisecond window between the check and the act (the review a round 2 cross-process residual).

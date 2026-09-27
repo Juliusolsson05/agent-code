@@ -290,4 +290,70 @@ describe('a run this store never examined', () => {
     await store.settled()
     expect(JSON.parse(await readFile(join(foreign, 'incidents.json'), 'utf8'))).toHaveLength(1)
   })
+
+  // #1455 review b round 2 (1): two LIVE stores. B indexed A's tier file when
+  // it held only an old point; A then appended a current point. B's retention
+  // expired the file from its stale index and deleted A's fresh data. A
+  // foreign file that changed since indexing now makes the run unknown.
+  it('never expires another live store\'s tier file from a stale index', async () => {
+    const { root } = await setup()
+    const now = Date.now()
+    let aNow = now - 2 * 60 * 60_000
+    const a = new MonitorHistoryStore(root, 'run-a', () => aNow)
+    a.record(snapshot(aNow), null, [], 0, 0)
+    await a.flush()
+    const b = new MonitorHistoryStore(root, 'run-b', () => now)
+    await b.settled()
+    aNow = now
+    a.record(snapshot(aNow), null, [], 0, 0)
+    await a.flush()
+    const tier = join(root, 'runs', 'run-a', '1s.jsonl')
+    const before = await readFile(tier, 'utf8')
+    b.record(snapshot(now), null, [], 0, 0)
+    await b.settled()
+    expect(await readFile(tier, 'utf8')).toBe(before)
+  })
+
+  // #1455 review b round 2 (2): content appended to a foreign tier after
+  // indexing (here, a record B cannot parse) must not be discarded by B's
+  // compaction of its stale view of that file.
+  it('never compacts away content appended to a foreign tier after indexing', async () => {
+    const { root, foreign } = await setup()
+    const now = Date.now()
+    // A real point line from the store's own writer, re-dated: one expired and
+    // one current, so B's view of the file is due for compaction.
+    const source = new MonitorHistoryStore(join(root, 'source'), 'run-src', () => now)
+    source.record(snapshot(now), null, [], 0, 0)
+    await source.flush()
+    const line = (await readFile(join(root, 'source', 'runs', 'run-src', '1s.jsonl'), 'utf8')).trim().split('\n')[0]!
+    const at = (value: number) => JSON.stringify({ ...JSON.parse(line), at: value })
+    await mkdir(foreign, { recursive: true })
+    const tier = join(foreign, '1s.jsonl')
+    await writeFile(tier, `${at(now - 20 * 60_000)}\n${at(now)}\n`)
+    const b = new MonitorHistoryStore(root, 'run-b', () => now)
+    await b.settled()
+    await appendFile(tier, '{"private":"appended-after-indexing"}\n')
+    b.record(snapshot(now), null, [], 0, 0)
+    await b.settled()
+    expect(await readFile(tier, 'utf8')).toContain('appended-after-indexing')
+  })
+
+  // #1455 review b round 2 (1, incidents): B cached run-a's only incident,
+  // which is expiring; the other store then added a fresh one. B's retention
+  // rewrote the file from its cache and removed the fresh incident.
+  it('never rewrites another live store\'s incidents from a stale index', async () => {
+    const { root, foreign } = await setup()
+    const now = Date.now()
+    await mkdir(foreign, { recursive: true })
+    const file = join(foreign, 'incidents.json')
+    const expiring = { ...incident, at: now - 8 * DAY }
+    await writeFile(file, JSON.stringify([expiring]))
+    const b = new MonitorHistoryStore(root, 'run-b', () => now)
+    await b.settled()
+    await writeFile(file, JSON.stringify([expiring, { ...incident, id: 2, at: now }]))
+    b.record(snapshot(now), null, [], 0, 0)
+    await b.settled()
+    expect(JSON.parse(await readFile(file, 'utf8'))).toHaveLength(2)
+  })
 })
+

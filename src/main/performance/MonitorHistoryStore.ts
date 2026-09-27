@@ -79,6 +79,15 @@ export class MonitorHistoryStore {
   // lock) is UNKNOWN, not empty, and waits for the next start to index it.
   // Only the capacity budget may still remove it, as with unindexedRuns.
   private examinedRuns = new Set<string>()
+  // Size and mtime of each OTHER run's tier and incident file as this store
+  // indexed it (#1455 review b round 2). Another live store sharing the folder
+  // may still be writing that run, so the index is only a snapshot of it:
+  // expiring, compacting or rewriting a foreign file from that snapshot
+  // deleted what the other store wrote afterwards. Every such action first
+  // checks the file is unchanged; a changed (or vanished) file makes the run
+  // unknown for retention instead. The store's own run needs no check: only
+  // this store writes it.
+  private foreignFiles = new Map<string, string>()
   private rollups: Record<MonitorHistoryResolution, TierRollup> = { '1s': new TierRollup('1s'), '10s': new TierRollup('10s'), '1m': new TierRollup('1m') }
   // Coalesced work. Incidents and operations are whole-value replacements, so
   // only the newest value matters; the old promise chain queued one rewrite
@@ -304,7 +313,7 @@ export class MonitorHistoryStore {
       await mkdir(this.runDir, { recursive: true })
       this.index.clear(); this.incidentRuns.clear(); this.repairedTails.clear(); this.indexed = true
       this.bytes = 0; this.shortened = false; this.degraded = false
-      this.operationFingerprint = ''; this.unindexedRuns.clear(); this.examinedRuns.clear()
+      this.operationFingerprint = ''; this.unindexedRuns.clear(); this.examinedRuns.clear(); this.foreignFiles.clear()
       this.lastMaintenanceAt = -Infinity
     } catch { this.degraded = true }
     return this.status()
@@ -367,11 +376,13 @@ export class MonitorHistoryStore {
             await this.repairTail(file)
             // Only a missing tier is absent (#1455 review b): any other stat
             // failure throws into the catch below, which marks the run unknown.
-            const size = await stat(file).then(value => value.size, (error: NodeJS.ErrnoException) => {
+            const fileStat = await stat(file).then(value => value, (error: NodeJS.ErrnoException) => {
               if (error.code === 'ENOENT') return null
               throw error
             })
-            if (size === null) continue
+            if (fileStat === null) continue
+            const size = fileStat.size
+            if (run !== this.runId) this.foreignFiles.set(file, `${fileStat.size}:${fileStat.mtimeMs}`)
             const entry: FileStat = { run, resolution, points: 0, bytes: size, oldestAt: null, newestAt: null }
             const failure = { failed: false }
             let unparsed = false
@@ -397,6 +408,7 @@ export class MonitorHistoryStore {
           this.unindexedRuns.add(run)
           continue
         }
+        if (run !== this.runId && stored.length) await this.noteForeign(file)
         // Every retained run is repaired, not only the current one. A crash or
         // force-quit in ANY earlier run left its last capture as "capturing"
         // forever, and only a helper restart within the same run fixed it.
@@ -542,11 +554,13 @@ export class MonitorHistoryStore {
   private async maintain(now: number): Promise<void> {
     for (const [file, entry] of [...this.index]) {
       const cutoff = now - RETENTION[entry.resolution]
+      if (await this.foreignChanged(file, entry.run)) continue
       if (entry.newestAt === null || entry.newestAt < cutoff) {
         // Fully expired: delete instead of rewriting an empty file forever.
         await rm(file, { force: true })
         this.index.delete(file)
         this.repairedTails.delete(file)
+        this.foreignFiles.delete(file)
         continue
       }
       if (entry.oldestAt === null || entry.oldestAt >= cutoff) continue
@@ -556,12 +570,19 @@ export class MonitorHistoryStore {
       // roughly uniform in time, so the expired share of the span estimates
       // the expired share of the file without reading it.
       const expired = (cutoff - entry.oldestAt) / Math.max(1, entry.newestAt - entry.oldestAt)
-      if (expired >= 0.25) await this.compact(file, entry, cutoff)
+      if (expired >= 0.25) {
+        await this.compact(file, entry, cutoff)
+        if (entry.run !== this.runId) await this.noteForeign(file)
+      }
     }
     const incidentCutoff = now - RETENTION['1m']
     for (const [run, rows] of [...this.incidentRuns]) {
       const kept = rows.filter(incident => incident.at >= incidentCutoff)
-      if (kept.length !== rows.length) await this.writeRunIncidents(run, kept)
+      if (kept.length === rows.length) continue
+      const file = join(this.root, RUNS_DIR, run, 'incidents.json')
+      if (await this.foreignChanged(file, run)) continue
+      await this.writeRunIncidents(run, kept)
+      if (run !== this.runId) await this.noteForeign(file)
     }
     // Expired runs used to live until the byte budget forced them out. A run
     // with no remaining points or incidents holds only an unattributable
@@ -761,6 +782,25 @@ export class MonitorHistoryStore {
         if (file.isFile() && file.name.endsWith('.tmp')) await rm(join(dir, file.name), { force: true }).catch(() => {})
       }
     }
+  }
+
+  /** Record a foreign file's current size and mtime (after indexing it, or
+   *  after this store rewrote it). A file that is gone is forgotten. */
+  private async noteForeign(file: string): Promise<void> {
+    const current = await stat(file).catch(() => null)
+    if (current) this.foreignFiles.set(file, `${current.size}:${current.mtimeMs}`)
+    else this.foreignFiles.delete(file)
+  }
+
+  /** True, and the run marked unknown, when a foreign file changed since this
+   *  store last saw it (or cannot be stat-ed). Always false for the own run. */
+  private async foreignChanged(file: string, run: string): Promise<boolean> {
+    if (run === this.runId) return false
+    const seen = this.foreignFiles.get(file)
+    const current = await stat(file).then(value => `${value.size}:${value.mtimeMs}`, () => null)
+    if (seen !== undefined && current === seen) return false
+    this.unindexedRuns.add(run)
+    return true
   }
 
   /** Whether any file in the run changed at or after `since`. Unknown (any
