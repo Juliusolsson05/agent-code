@@ -37,26 +37,39 @@ export function createCodexTranscriptEntryMapper(
   initialTurnCursor: string | null = null,
 ): TranscriptEntryMapper {
   let turnCursor = initialTurnCursor
-  // WHY (#1395 review a, P2): one exec_command can have TWO terminal carriers.
-  // The wrapped function_call_output is always durable. The exec_command_end
-  // event is transient in current Codex, but rust-v0.107.0 through v0.131.0
-  // persisted it in extended-history mode (app-server
-  // `persist_extended_history`). Both carry the same call_id, and both map to
-  // an `exec_command_end` result, so the feed would get two result rows for
-  // one card, and the card would take whichever came last. The first carrier
-  // wins; the other is dropped. Scoped to this mapper's stream: a history
-  // page starts a new mapper, so a pair split across a page boundary is not
-  // caught (none in the local corpus, which has no persisted event at all).
-  const execTerminalCalls = new Set<string>()
-  const keepFirstExecTerminal = (entry: ReturnType<typeof mapCodexRolloutToFeedEntries>[number]): boolean => {
+  // WHY (#1395 reviews a and b): one exec_command can have TWO terminal
+  // carriers. The wrapped function_call_output is always durable. The
+  // exec_command_end event is transient in current Codex, but the
+  // extended-history policy persisted it through rust-v0.136.0 (0.137.0 is
+  // transient again). Both carry the same call_id and both map to an
+  // `exec_command_end` result.
+  //
+  // The WRAPPER wins, because it is the fuller one: the persisted event's
+  // aggregated_output is sanitized to 10,000 bytes (rollout policy.rs), while
+  // the wrapper keeps the whole model-visible output. The feed's result index
+  // is later-wins (buildToolResultIndex), and Codex emits the end event BEFORE
+  // the function result (core tools/events.rs ToolEventEmitter::finish), so:
+  //  - event first, wrapper later: both are kept, and the wrapper wins the
+  //    index (the command card owns and absorbs both result rows);
+  //  - wrapper first, event later: the event is dropped here, so a late,
+  //    truncated event cannot replace the wrapper.
+  // A first version kept whichever came FIRST, which kept the truncated event
+  // (review b). The memory is per mapper, and history pages, previews and
+  // live bursts each build their own; across such a boundary both results
+  // are kept and later-wins decides, which again favours the wrapper in
+  // Codex's own emit order. No local rollout (0 of 2,555) has both carriers.
+  const wrapperResolvedCalls = new Set<string>()
+  const keepExecTerminal = (raw: Record<string, unknown>) => (entry: ReturnType<typeof mapCodexRolloutToFeedEntries>[number]): boolean => {
     const callId = execTerminalCallId(entry)
     if (callId === null) return true
-    if (execTerminalCalls.has(callId)) return false
-    execTerminalCalls.add(callId)
-    if (execTerminalCalls.size > EXEC_TERMINAL_MEMORY) {
-      execTerminalCalls.delete(execTerminalCalls.values().next().value as string)
+    if (raw.type === 'response_item') {
+      wrapperResolvedCalls.add(callId)
+      if (wrapperResolvedCalls.size > EXEC_TERMINAL_MEMORY) {
+        wrapperResolvedCalls.delete(wrapperResolvedCalls.values().next().value as string)
+      }
+      return true
     }
-    return true
+    return !wrapperResolvedCalls.has(callId)
   }
   return {
     map(raw: Record<string, unknown>): MappedTranscriptEntry {
@@ -66,7 +79,7 @@ export function createCodexTranscriptEntryMapper(
       if (payloadTurnId !== null) turnCursor = payloadTurnId
 
       const entries = mapCodexRolloutToFeedEntries(raw)
-        .filter(keepFirstExecTerminal)
+        .filter(keepExecTerminal(raw))
         .map(entry => stampCodexTurnId(entry, turnCursor))
       const marker = codexHistoryMarker(raw)
 

@@ -2,7 +2,7 @@
 
 ## Evidence
 - **Census of 2,541 local rollouts.** It found 85,355 `function_call_output` lines whose output is wrapped: `Chunk ID:`, `Wall time:`, `Process exited with code N`, `Original token count:`, then `Output:`. It found **0** `exec_command_end` events in any file.
-- **Current Codex never writes that event.** codex-rs `rollout/src/policy.rs` puts `EventMsg::ExecCommandEnd` under "Transient, non-durable events". rust-v0.107.0 through v0.131.0 did persist it in extended-history mode (review a), and none of the local rollouts use that mode.
+- **Current Codex never writes that event.** codex-rs `rollout/src/policy.rs` puts `EventMsg::ExecCommandEnd` under "Transient, non-durable events". rust-v0.107.0 through v0.136.0 did persist it in extended-history mode (review a), and none of the local rollouts use that mode.
 - **The drop rule.** `mapCodexRolloutToFeedEntries` drops every wrapped output that has an exit line (`isCodexExecWrapperOutput`), on the stated belief that "the correlated `exec_command_end` event carries the same result". That belief is false, so the dropped line was the only copy. Every `exec_command` card in resumed history showed no output and no exit status. That covers Codex through 0.144: `exec_command` wrapped outputs occur in 0.1xx through 0.144, and 0.15x uses the `exec` tool.
 - **A second bug.** The predicate searched the WHOLE string for "Process exited with code". A still-running chunk whose command output contains those words was dropped too.
 
@@ -27,3 +27,8 @@ The 0.15x `exec` tool's `custom_tool_call_output` results are a different carrie
 - **P2: two carriers.** In extended-history rollouts, one call can have both the event and the wrapper. `createCodexTranscriptEntryMapper` keeps the first exec terminal result per call_id, remembering the last 512 per stream. A pair split across a history page boundary is not caught.
 - **P3: no `Output:` marker.** Without the LF `\nOutput:\n` marker the wrapper is not parsed, so no exit claim and no stripping. None of the 85,355 local wrappers lacks it.
 - **Unpinned metadata.** The exact `codex` metadata is now asserted, which kills the kind/parsedCmd/command/cwd mutations.
+
+## Review b (round 2)
+- **P2: a wrapper with no LF `Output:` marker still painted success.** The mapper returned a plain, metadata-less result, and the native adapter proves every unmarked result. Any `Chunk ID:` wrapper whose header cannot be parsed is now marked `exec_command_unparsed` and kept whole; the adapter shows `unknown` for it, as for `exec_command_running`. Test: that wrapper, through the adapter, shows `unknown` with a null exit.
+- **P2: first-carrier dedupe kept the truncated event.** The persisted event's `aggregated_output` is sanitized to 10,000 bytes, and extended mode persisted it through v0.136.0, not v0.131.0. The wrapper now wins. An event that arrives after its wrapper is dropped. A wrapper that follows its event is kept, and later-wins `buildToolResultIndex` hands the card the wrapper. Codex emits the event before the function result (`ToolEventEmitter::finish`).
+- **P2: page and burst boundaries bypass the per-mapper memory.** Accepted and documented. Across a boundary both results are kept and later-wins decides, which again favours the wrapper in Codex's emit order. No local rollout has both carriers.

@@ -160,8 +160,8 @@ export function stripCodexExecWrapper(output: string): string {
  *  persists that event (codex-rs `rollout/src/policy.rs` lists
  *  `EventMsg::ExecCommandEnd` as transient), and a census of 2,541 local
  *  rollouts found 0 of them against 85,355 wrapped outputs with an exit line.
- *  (rust-v0.107.0 through v0.131.0 did persist it in extended-history mode;
- *  the transcript mapper keeps the first of the two carriers.) The drop therefore
+ *  (rust-v0.107.0 through v0.136.0 did persist it in extended-history mode;
+ *  the transcript mapper then prefers this wrapper, the fuller carrier.) The drop therefore
  *  removed the ONLY copy of every `exec_command` result (Codex through 0.144)
  *  from resumed history, and the card showed no output or exit status. */
 export function codexExecWrapperExitCode(output: string): number | null {

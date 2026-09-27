@@ -722,8 +722,10 @@ function commandResultEvidence(
       // write_stdin result with a different call_id, which this card cannot
       // see. rollout.ts marks it `exec_command_running`. Claiming success for
       // it painted long-running and later-failing commands green (9,896 such
-      // chunks in the local corpus); its honest state is "unknown".
-      exitProven: codex?.kind === 'exec_command_running' ? failed : true,
+      // chunks in the local corpus); its honest state is "unknown". The same
+      // holds for a wrapper whose header could not be parsed
+      // (`exec_command_unparsed`, #1395 review b).
+      exitProven: codex?.kind === 'exec_command_running' || codex?.kind === 'exec_command_unparsed' ? failed : true,
       running: false,
       owned: true,
     }

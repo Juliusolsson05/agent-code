@@ -118,23 +118,36 @@ describe('wrapped exec_command results in resumed history (#1321)', () => {
     expect(operation?.model.exitCode).toBeNull()
   })
 
-  it('keeps one result when a rollout persisted both carriers for a call (#1395 review a, P2)', () => {
-    // rust-v0.107.0..v0.131.0 persisted exec_command_end in extended-history
-    // mode, next to the always-durable wrapped output, with the same call_id.
-    const [call, output] = cases.ok.records
-    const callId = (call!.payload as { call_id: string }).call_id
-    const event = {
-      type: 'event_msg',
-      timestamp: '2026-07-09T21:40:40.000Z',
-      payload: { type: 'exec_command_end', call_id: callId, exit_code: 0, aggregated_output: 'ok\n' },
-    }
+  // Extended-history rollouts (through rust-v0.136.0) can persist the event
+  // next to the always-durable wrapper, with the same call_id. The wrapper is
+  // the fuller carrier (the event's aggregated_output is sanitized to 10,000
+  // bytes), so it must be the result the card ends up with (#1395 reviews a,
+  // b). The feed's result index is later-wins.
+  const cardResult = (records: Array<Record<string, unknown>>) => {
     const mapper = createCodexTranscriptEntryMapper()
-    const results = [call!, event, output!]
+    const results = records
       .flatMap(record => mapper.map(record).entries)
       .flatMap(entry => (entry as { message: { content: Array<Record<string, unknown>> } }).message.content)
       .filter(block => block.type === 'tool_result')
+    return { results, card: results.at(-1) }
+  }
+  const [okCallRecord, okOutputRecord] = cases.ok.records
+  const truncatedEvent = {
+    type: 'event_msg',
+    timestamp: '2026-07-09T21:40:40.000Z',
+    payload: { type: 'exec_command_end', call_id: (okCallRecord!.payload as { call_id: string }).call_id, exit_code: 0, aggregated_output: 'truncated\n' },
+  }
+  const wrapperBody = () => String((okOutputRecord!.payload as { output: string }).output).split('\nOutput:\n')[1]
+
+  it('hands the card the wrapper when the event came first (#1395 review b)', () => {
+    const { card } = cardResult([okCallRecord!, truncatedEvent, okOutputRecord!])
+    expect(card!.content).toBe(wrapperBody())
+  })
+
+  it('drops an event that arrives after its wrapper (#1395 review b)', () => {
+    const { results } = cardResult([okCallRecord!, okOutputRecord!, truncatedEvent])
     expect(results).toHaveLength(1)
-    expect(results[0]!.content).toBe('ok\n')
+    expect(results[0]!.content).toBe(wrapperBody())
   })
 
   it('makes no exit claim for a wrapper without its Output marker (#1395 review a, P3)', () => {
@@ -149,6 +162,25 @@ describe('wrapped exec_command results in resumed history (#1321)', () => {
     }
     const [entry] = mapCodexRolloutToFeedEntries(headerOnly)
     const block = (entry as { message: { content: Array<Record<string, unknown>> } }).message.content[0]!
-    expect(block.codex).toBeUndefined()
+    expect(block.codex).toEqual({ kind: 'exec_command_unparsed' })
+  })
+
+  it('shows an unparsed wrapper as unknown, never a success (#1395 review b)', () => {
+    const unparsed = {
+      type: 'response_item',
+      timestamp: '2026-07-09T21:40:40.079Z',
+      payload: {
+        type: 'function_call_output',
+        call_id: (okCall.payload as { call_id: string }).call_id,
+        output: 'Chunk ID: aaaaaa\r\nWall time: 0.1000 seconds\r\nProcess exited with code 1\r\nOriginal token count: 0\r\nOutput:\r\nfailed\r\n',
+      },
+    }
+    const blocks = [okCall, unparsed].flatMap(record => mapCodexRolloutToFeedEntries(record))
+      .flatMap(entry => (entry as { message: { content: Array<Record<string, unknown>> } }).message.content)
+    const toolUse = blocks.find(block => block.type === 'tool_use') as unknown as ToolUseBlock
+    const result = blocks.find(block => block.type === 'tool_result') as unknown as ToolResultBlock
+    const operation = fromCodexCommandOperation({ toolUse, result })
+    expect(operation?.model.status).toBe('unknown')
+    expect(operation?.model.exitCode).toBeNull()
   })
 })

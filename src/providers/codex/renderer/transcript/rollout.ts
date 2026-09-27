@@ -328,11 +328,11 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
       //
       // WHERE this event comes from (#1321): almost never a rollout. Current
       // codex-rs treats `ExecCommandEnd` as transient, and 0 of 2,541 local
-      // rollouts contain one. rust-v0.107.0 through v0.131.0 persisted it in
+      // rollouts contain one. rust-v0.107.0 through v0.136.0 persisted it in
       // extended-history mode (app-server `persist_extended_history`), next to
       // the always-durable wrapped `function_call_output` below, which is
       // stamped with this same metadata. createCodexTranscriptEntryMapper
-      // keeps the first of the two for a call_id (#1395 review a).
+      // prefers the wrapper, the fuller carrier (#1395 reviews a, b).
       return [
         codexToolResultEntry(
           uuid,
@@ -469,6 +469,14 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
       // bytes are real output; its outcome is not known yet, so it is marked
       // for the command adapter, which then shows "unknown" instead of success.
       return [codexToolResultEntry(uuid, timestamp, payload.call_id, output, false, { kind: 'exec_command_running' })]
+    }
+    if (structured.startsWith('Chunk ID:')) {
+      // A wrapper whose header we could not parse (no LF `Output:` marker, a
+      // CRLF header, an unknown status line). None of 95,251 local wrappers
+      // has such a shape, but if one appears its outcome is unknown, not a
+      // success (#1395 review b): the bytes are kept whole, since there is no
+      // proven header/body boundary to strip at.
+      return [codexToolResultEntry(uuid, timestamp, payload.call_id, structured, false, { kind: 'exec_command_unparsed' })]
     }
     if (!output.trim()) return []
     return [codexToolResultEntry(uuid, timestamp, payload.call_id, output)]
