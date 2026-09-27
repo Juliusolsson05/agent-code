@@ -36,17 +36,19 @@ import { attachTerminalWheelBoundary } from './terminalWheelBoundary'
 //    lacks, so that constructor throws and xterm's own try/catch falls back to
 //    the DOM strategy that this shim sizes. If the fake ever gains those
 //    fields, xterm switches strategies and this shim becomes dead.
-// 3. Explicit 0px left/top padding on `.xterm-screen`, which a browser
-//    computes from xterm.css. happy-dom's computed style returns '' for unset
-//    padding, and MouseCoordsService parseInt()s it into NaN.
+// 3. Explicit 0px left/top padding on `.xterm-screen`. A browser computes
+//    0px from the CSS initial value: xterm.css has no padding rule for
+//    `.xterm-screen`, and neither does our styles.css. happy-dom's computed
+//    style returns '' for unset padding, and MouseCoordsService parseInt()s it
+//    into NaN.
 // Separately, happy-dom's WheelEvent extends UIEvent rather than MouseEvent,
 // so it lacks the modifier and clientX/clientY fields every browser WheelEvent
 // carries; `wheel()` below sets them explicitly. Either gap yields
 // `ESC[<64;NaN;NaNM` instead of a real report, a happy-dom artifact rather
 // than an xterm bug. The first real run had both gaps, and a run with only the
-// padding shim still got NaN from the missing clientX. That unset padding alone
-// also yields NaN comes from reading happy-dom's computed style (it has no
-// default padding) and was not observed on its own.
+// padding shim still got NaN from the missing clientX. A run with clientX set
+// but without the padding shim (#1446 review c) produced exactly the same bytes,
+// so each gap alone is enough to break the report.
 // Everything asserted is computed by xterm itself from real WheelEvents:
 // - StandardWheelEvent delta normalization;
 // - the `fastScrollSensitivity` Alt multiplier;
