@@ -1,5 +1,5 @@
 import { tldrIdentityForSession } from '@renderer/features/tldr/identity'
-import { carryWorkflowRuns } from '@renderer/workspace/hook/actions/workflowCarry'
+import { carryWorkflowRuns, handOverGoalLoops, stopGoalLoops } from '@renderer/workspace/hook/actions/successorCarry'
 import { carriedRelationships } from '@renderer/workspace/idRemap'
 import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { sessionMcpOverrides } from '@renderer/workspace/mcpDomains'
@@ -208,6 +208,17 @@ export function useUndoCloseAction(
     [sessionActions],
   )
 
+  // Whether a restored session's process has Goal Loop tools. WHY read the
+  // successor's meta instead of resolving the closed pane's choices again:
+  // `spawn` resolves the domains against CURRENT Settings (see respawn) and
+  // writes the result into the meta it files, so that meta is the only
+  // record of what the new process can actually call.
+  const hasGoalLoopTools = useCallback(
+    (sessionId: string) =>
+      refs.stateRef.current.sessions[sessionId as SessionId]?.builtInMcpDomains?.includes('goal_loop') === true,
+    [refs.stateRef],
+  )
+
   const restoreSessionEntry = useCallback(
     async (entry: ClosedSession, publish: PublishLineage): Promise<RestoreResult> => {
       // The project is a session's only anchor: the index files each row under
@@ -305,9 +316,6 @@ export function useUndoCloseAction(
       // it — a linked child closed earlier names it as `linkedParentId` — so
       // publish old -> new; see UndoLineage.
       publish({ sessions: new Map([[entry.sessionId, newSessionId]]) })
-      // The same conversation is back (--resume), so its workflow runs come
-      // back with it (#1325 review A3); they are filed under the closed id.
-      carryWorkflowRuns(new Map([[entry.sessionId, newSessionId]]))
       return 'restored'
     },
     [refs.stateRef, respawn, sessionActions, setState, showToast],
@@ -418,19 +426,54 @@ export function useUndoCloseAction(
         sessions: idMap,
         tabs: new Map([[entry.tab.id, restoredTab.id]]),
       })
-      // Every restored agent resumed its conversation; its runs follow it.
-      carryWorkflowRuns(idMap)
       return 'restored'
     },
     [respawn, setState, showToast],
   )
 
+  // WHY what follows a restored pane is decided here, once, and not at each
+  // restore's commit (#1331 review, all three reviewers): main keys goal
+  // loops and workflow runs by session id, so every closed id in an entry
+  // needs exactly one outcome when the entry leaves the stack. The first
+  // version handed over only at the two success commits, and every other
+  // exit orphaned the loop for good: a project restore that brought back
+  // some agents consumed the entry with the failed members' loops still
+  // filed under their dead ids, and a restore judged stale (project closed
+  // mid-spawn, folder deleted) did the same. The per-site calls could not
+  // see that, because only this level knows the result, and the result is
+  // what decides whether the entry is gone.
+  //
+  // The rule:
+  //   - 'retryable-failure' keeps the entry (undoClose pushes it back, or a
+  //     group re-files it as leftover), so nothing moves: the retry decides.
+  //   - Otherwise the entry is consumed. Each closed id that published a
+  //     successor is handed over (runs carried; loop carried when the
+  //     successor has Goal Loop tools, else ended). Each one that did not
+  //     come back can never be restored, so its loop is ended, the #1287
+  //     rule for a loop no pane can reach. Its workflow runs are left alone:
+  //     they are finished history in the store, not live state to stop.
+  // `publish` is the source of truth for "came back": each restore calls it
+  // after its commit and only then, with exactly the old -> new pairs.
   const restoreSingleEntry = useCallback(
-    (entry: SingleClosedEntry, publish: PublishLineage): Promise<RestoreResult> =>
-      entry.type === 'session'
-        ? restoreSessionEntry(entry, publish)
-        : restoreTabEntry(entry, publish),
-    [restoreSessionEntry, restoreTabEntry],
+    async (entry: SingleClosedEntry, publish: PublishLineage): Promise<RestoreResult> => {
+      const successors = new Map<string, string>()
+      const recordingPublish: PublishLineage = lineage => {
+        for (const [oldId, newId] of lineage.sessions ?? []) successors.set(oldId, newId)
+        publish(lineage)
+      }
+      const result = entry.type === 'session'
+        ? await restoreSessionEntry(entry, recordingPublish)
+        : await restoreTabEntry(entry, recordingPublish)
+      if (result === 'retryable-failure') return result
+      carryWorkflowRuns(successors)
+      handOverGoalLoops(successors, hasGoalLoopTools)
+      const closedIds = entry.type === 'session'
+        ? [entry.sessionId]
+        : entry.sessions.map(member => member.sessionId)
+      stopGoalLoops(closedIds.filter(id => !successors.has(id)))
+      return result
+    },
+    [hasGoalLoopTools, restoreSessionEntry, restoreTabEntry],
   )
 
   // Replay one close OPERATION's units last-first (see ClosedGroup).
