@@ -670,6 +670,27 @@ export class SessionManager extends EventEmitter {
   // every history chunk, and the phone's TranscriptStore discards a chunk
   // whose file disagrees with the file its live frames carry.
   private readonly lastTranscriptFile = new Map<string, string>()
+  /**
+   * The Claude conversation each live Claude session is writing (#1381, #1442 review a), from the
+   * `sessionId` every committed JSONL entry carries. It is the key TransportGapLedger holds a gap
+   * under, and the renderer sends the SAME value back as `providerSessionId` when it rebuilds a
+   * feed (it captures it from the same entries).
+   *
+   * WHY a map here and not `getProviderSessionId()`: ClaudeSession does not implement that getter,
+   * and adding it would change what backend snapshots and spawn results report for every Claude
+   * pane, well outside this fix. The first version relied on the getter anyway; its test fake
+   * implemented it, so every real Claude gap silently took the live-only path and its row was gone
+   * after the first reload.
+   *
+   * WHY entries and not the spawn's `--session-id`/`--resume` id alone: a `/clear` moves the same
+   * process to a new conversation, and only its transcript says so. The resume id is only the
+   * fallback before the respawned tailer has emitted anything. Cleared at teardown with the other
+   * per-process caches, so a fresh conversation spawned into the same pane never inherits the
+   * previous one's key (pinned in sessionManager.proxyGap.test.ts).
+   */
+  private readonly claudeConversationIds = new Map<string, string>()
+  /** Distinct ids for live-only gap rows (see the proxy-transport-gap handler). */
+  private liveTransportGapSequence = 0
   private readonly codexCandidateObservationEdges = new Map<
     string,
     {
@@ -1102,6 +1123,7 @@ export class SessionManager extends EventEmitter {
     this.screenFrameGate.forget(sessionId)
     this.lastConditionsSnapshot.delete(sessionId)
     this.lastTranscriptFile.delete(sessionId)
+    this.claudeConversationIds.delete(sessionId)
     this.codexCandidateObservationEdges.delete(sessionId)
     this.codexAttachmentObservationState.delete(sessionId)
     this.lastInputReadiness.delete(sessionId)
@@ -3292,6 +3314,10 @@ export class SessionManager extends EventEmitter {
         if (!ownsEntry()) return
         this.markActivity(sessionId)
         this.lastTranscriptFile.set(sessionId, file)
+        if (kind === 'claude') {
+          const conversationId = (entry as { sessionId?: unknown } | null)?.sessionId
+          if (typeof conversationId === 'string' && conversationId) this.claudeConversationIds.set(sessionId, conversationId)
+        }
         if (kind === 'codex' && observation) {
           const rollout = entry && typeof entry === 'object'
             ? entry as unknown as Record<string, unknown>
@@ -3373,13 +3399,19 @@ export class SessionManager extends EventEmitter {
           context: { sessionId, lostGenerations: gap.lostGenerations, since: gap.since, until: gap.until },
         })
         const fields = { since: gap.since, until: gap.until, lostGenerations: gap.lostGenerations }
-        // Held per CONVERSATION (see TransportGapLedger). With no conversation id yet the row is
-        // live-only: there is no history to rebuild it from. In practice the id is always known —
-        // a gap needs >= 1 GiB of this session's proxy traffic, long after its transcript exists.
+        // Held per CONVERSATION (see TransportGapLedger and claudeConversationIds). With no
+        // conversation id yet the row is live-only: there is no history to rebuild it from. In
+        // practice the id is known, since a gap needs >= 1 GiB of this session's proxy traffic,
+        // long after its transcript exists.
         const conversationId = this.getNativeConversationId(sessionId)
+          ?? this.claudeConversationIds.get(sessionId)
+          ?? this.spawnInfo.get(sessionId)?.resumeSessionId
+          ?? null
+        // A live-only id is a sequence, never `until`: two lost spans of one poll share the
+        // poll's `until`, and the renderer merges rows by id (#1442 review a).
         const record = conversationId
           ? this.transportGaps.record(conversationId, fields)
-          : { id: `gap-live-${sessionId}-${gap.until}`, ...fields }
+          : { id: `gap-live-${++this.liveTransportGapSequence}`, ...fields }
         this.emit('proxy-transport-gap', { sessionId, gap: record })
       })
       session.on('transcript-diagnostic', (diagnostic: unknown) => {

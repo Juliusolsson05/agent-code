@@ -294,3 +294,17 @@ Residual surfaces outside this PR, filed:
 - The app calls only `sealFlowsForTransportGap()`, whose signature did not change, so no app code changes.
 - No lockfile resync: `package.json` and `package-lock.json` have no `claude-code-headless` entry (the app resolves it through a path alias), and the package's own manifests are unchanged.
 - `npx tsc -b` is clean. The Claude provider, main sessions and renderer workspace-hook suites pass 739/739.
+
+## Review round 1, reviewer a (FIX-BEFORE-MERGE), each fix fail-first
+- **Blocker: the durable row was never kept for a real Claude session.**
+  - Cause: `getNativeConversationId` asks `session.getProviderSessionId()`, which `ClaudeSession` does not implement. The manager test's fake implemented it, so every real gap took the live-only path and vanished on the first reload.
+  - Fix: `SessionManager.claudeConversationIds` records the `sessionId` of every committed Claude JSONL entry. That is the same value the renderer sends back as `providerSessionId`, and it follows `/clear`. The resume id is the fallback before the respawned tailer emits anything. The map is cleared at teardown.
+  - Ruling: do not add `getProviderSessionId` to `ClaudeSession`. It would change what backend snapshots and spawn results report for every Claude pane. Cost if wrong: a second place knows the Claude conversation id.
+  - The test fake now matches the real session: no getter, only transcript entries.
+- **Major: two gaps of one poll shared a live-only id.** `gap-live-<session>-<until>` collided, because one poll has one `until`, and the renderer's id merge hid a lost span. Live-only ids are now a sequence.
+- Mutations, each red:
+  - no entry capture (2);
+  - no resume fallback;
+  - an id built from `until`;
+  - no teardown clear.
+- The spawn-time clear I added first was redundant with teardown (its mutation survived), so it was removed.
