@@ -706,10 +706,17 @@ export async function loadOlderHistoryChunk(
   // + catch scaffolding in both).
   const filePath = await resolveHistoryTranscriptPath(params)
   if (!filePath) {
+    // WHY a rejection and not an empty page (#1413 verification a): an older
+    // page is only ever asked for after a page of this transcript loaded, so
+    // "no file now" means it vanished or cannot be located, not that there is
+    // nothing older. An empty `hasMore: false` made the renderer drop "older
+    // history exists" for good, with nothing said; a rejection is reported as
+    // a failed page and stays retryable.
+    const error = new Error('The transcript for this session could not be found')
     performanceService
       .span('historyLoader.loadOlderChunk', { kind: params.kind, limit: params.limit })
-      .end({ result: 'missing-file' })
-    return { entries: [], hasMore: false }
+      .fail(error, { result: 'missing-file' })
+    throw error
   }
   return loadOlderHistoryChunkFromFile(filePath, params)
 }

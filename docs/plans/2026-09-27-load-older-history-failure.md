@@ -49,3 +49,4 @@ Renderer tests drive the real hook and the real TileLeaf. The app is not launche
   - the toast goes to this pane.
   c's mutations M7 (no-older → failed) and T3 (5 s → 500 ms) now fail.
 - **Verification b (Major): the touch form of the gesture was still missing.** A downward finger drag at the top now makes the same request. Test with the real Feed: an upward drag makes none, a downward one makes one. It fails on the previous Feed.
+- **Verification a (Major): a Codex rollout the resolver could no longer find still made an older page an empty `hasMore: false`.** `loadOlderHistoryChunk` returned that before reaching the now-strict reader. An older page with an unresolvable transcript now rejects. The perf span fails, and the phone's `RemoteServer` already turns a throw into a structured `ok: false`. Test in `historyLoader.providerOwned.test.ts` (Codex, resolver returns null), red on the previous loader.
