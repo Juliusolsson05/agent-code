@@ -6,8 +6,12 @@
 ## Fix (narrowed to FUTURE runs; B6's oldest-first list)
 - A run dir is recognised by either evidence file: `proxy-events.jsonl` or `sslkeylog.log`. It matches the key log itself (review c).
 - A dir with `proxy-events.jsonl` is collected as before.
-- A key-log-only dir is collected only when its run started AFTER this machine's first retention pass with this code: `keyLogRetentionSince()` writes that moment once (exclusive create) to `STATE_DIR/debug-retention-keylog-since`, and later passes read it. Run dirs are named by their ISO start time, which sorts as text, and the marker uses the same shape. If the marker cannot be read or written, or has an unknown shape, NO key-log-only dir is collected (fail closed).
-- **WHY not a date constant (#1388 review a):** the first version used tomorrow's date, so a run this build made today was excluded forever, and any earlier date would sweep key logs from before the upgrade.
+- A key-log-only dir is collected only when it is NOT in the BASELINE: the set of key-log-only dirs that existed when a build containing this code first started (`keyLogBaseline()`, captured at run start in `holdDebugStoragePruneUntilRecovered`, written once with an exclusive create to `STATE_DIR/debug-retention-keylog-baseline.json`). Capture is strict: any directory it cannot list means no baseline, nothing is written, and a later start retries. With no baseline, NO key-log-only dir is collected.
+- **WHY a captured set (#1388 review a, two rounds):**
+  - a date constant excluded runs made on the merge day forever;
+  - a first-prune marker was written minutes after start (the boot gate delays the first prune), so runs made in between were excluded forever;
+  - any timestamp comparison admits a pre-upgrade run whose name sorts later after a clock step back.
+  Membership in "what already existed" needs no clock.
 - Every earlier key-log-only dir, including the owner's 23, is left untouched and never walked into. So is one whose name cannot be dated.
 - `session-meta.json` alone stays uncollected, and `_shared-conf` is still skipped.
 
@@ -30,4 +34,12 @@
 - **Tests:** a same-day run after the marker is collected; one before it is not; a null cutoff collects no key-log-only dir; the marker is written once and kept, and fails closed on an unknown shape or an unreadable path.
 - **Mutations killed:** no cutoff; null collecting everything; any marker shape accepted. Removing the up-front marker read ALONE survives, because the exclusive create then hits EEXIST and reads the stored marker. Removing both guards fails.
 - **Not changed (finding 1):** a run dir with an events file AND a key log is collected whole, key log included. That is main's existing behaviour for event-bearing runs, which this PR does not touch. The owner decision (q91) is about the key-log-only dirs, which stay untouched.
+
+## Review a round 2 + b (fixed at the next head)
+- The marker is replaced by the baseline set, captured at run start.
+- **Tests:** a baseline dir named after a new run (a clock step back) stays excluded; a run made after capture is collected; capture over an unreadable subtree yields no baseline and writes nothing; a baseline that cannot be written is not established (review b); the file is reused and a malformed one fails closed.
+- **Mutations killed:** membership ignored; null collecting everything; lenient capture; capture recording nothing; returning an unsaved baseline.
+- **Residuals:**
+  - The early-capture wiring in `holdDebugStoragePruneUntilRecovered` is not separately pinned; the boot-gate suite exercises it against a scratch state dir.
+  - `dirStats`' EIO/ELOOP branches (review b) are not reproducible on a real filesystem: symlink entries are skipped, and EIO cannot be produced on demand. EACCES is pinned.
 
