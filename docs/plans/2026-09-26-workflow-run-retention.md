@@ -70,14 +70,12 @@ Nothing deletes any of it:
    cutoff. Members are deleted oldest first (predecessor before successor). A crash mid-lineage then
    leaves a successor whose predecessor is gone, which is harmless. The reverse order would leave an
    interrupted predecessor without a successor, which auto-recovers.
-3. **TTL: 7 days after a run's last update for lineages whose runs all completed, and 30 days for a
-   lineage with any resumable run** (failed, cancelled, interrupted, completed_with_errors).
-   *UNCONFIRMED defaults.* Resumable runs stay in workflow history with a Resume action (review of
-   workflow-mcp#65; 38 of 134 runs on the owner's corpus), and Resume fails once the run is deleted.
-   The UI's handling of an expired run is follow-up issue #1348. `AGENT_CODE_WORKFLOW_RUN_TTL_DAYS`
-   scales both.
-   Seven days bounds the owner's current completed-run rate to about 1 GB. A lineage the user is
-   still resuming keeps a fresh `updatedAt`, so it is never prunable.
+3. **Owner decision (2026-09-27, "do not delete stuff often"):**
+   - **A finished lineage is kept 90 days** after its runs' last update, meaning its latest run completed. `AGENT_CODE_WORKFLOW_RUN_TTL_DAYS` overrides this.
+   - **A lineage the user can still Resume is never deleted.**
+   - **"Can still Resume" is judged on the lineage's LEAVES** (runs nothing resumed from). A leaf that failed, was cancelled or interrupted, or completed with errors keeps the whole lineage.
+     - WHY the leaves: a resumed chain always has resumable predecessors, so "any resumable member" would keep every lineage that was ever resumed, forever. Resume continues only a run nothing has continued yet.
+   - The earlier draft (7 days, 30 for resumable lineages) is superseded. Because a resumable run is never deleted, Resume can no longer fail with `run-not-found`, and #1348 no longer arises from retention.
 4. **Codex rollouts:** after pruning runs, delete a rollout in the **workflow** Codex home only when
    - its mtime is older than the same cutoff, **and**
    - its session id is not recorded in the journal of any run that is kept.

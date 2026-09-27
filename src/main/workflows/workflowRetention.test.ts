@@ -51,11 +51,20 @@ async function fixture() {
 async function terminalRun(
   store: FileWorkflowStore,
   runId: string,
-  ending: 'run.interrupted' | 'run.cancelled',
+  ending: 'run.interrupted' | 'run.cancelled' | 'run.completed',
   lineage?: { resumedFromRunId: string; lineageId: string },
 ): Promise<void> {
   await store.createRun({ runId, cwd: tmpdir(), workflow: workflow(), ...(lineage ?? {}) })
   await store.appendEvent(runId, event(runId, 1, 'run.started', { workflow: { name: 'retained', description: 'Retention fixture' } }))
+  if (ending === 'run.completed') {
+    // The production completion path: persist the result, then publish run.completed naming it.
+    const result = await store.persistResult(runId, {
+      serializedContent: '"ok"',
+      reference: { preview: '"ok"', content: '"ok"', mediaType: 'application/json', lineCount: 1, truncated: false },
+    })
+    await store.appendEvent(runId, event(runId, 2, ending, { result }))
+    return
+  }
   await store.appendEvent(runId, event(runId, 2, ending, { reason: 'fixture' }))
 }
 
@@ -82,10 +91,10 @@ describe('workflow run retention (#1275)', () => {
   it('prunes an old, fully terminal lineage and keeps fresh and live runs', async () => {
     const { store, codexHome } = await fixture()
     vi.useFakeTimers({ toFake: ['Date'] })
-    // This lineage is resumable (interrupted -> cancelled), so it expires after 30 days, not 7.
-    vi.setSystemTime(T0 - 22 * DAY)
+    // An old lineage whose latest run completed (interrupted -> completed): nothing is resumable.
+    vi.setSystemTime(T0)
     await terminalRun(store, 'run_old_first', 'run.interrupted')
-    await terminalRun(store, 'run_old_second', 'run.cancelled', { resumedFromRunId: 'run_old_first', lineageId: 'run_old_first' })
+    await terminalRun(store, 'run_old_second', 'run.completed', { resumedFromRunId: 'run_old_first', lineageId: 'run_old_first' })
     // Old but never finished: not terminal, so never a candidate, however stale.
     await store.createRun({ runId: 'run_old_unfinished', cwd: tmpdir(), workflow: workflow() })
     await store.appendEvent('run_old_unfinished', event('run_old_unfinished', 1, 'run.started', { workflow: { name: 'retained', description: 'Retention fixture' } }))
@@ -116,9 +125,9 @@ describe('workflow run retention (#1275)', () => {
     expect(await ids(store)).toEqual(['run_fresh_successor', 'run_old_interrupted'])
   })
 
-  // Review of workflow-mcp#65: failed/cancelled/interrupted runs stay in history with a Resume
-  // action, so a resumable lineage is kept for 30 days; a completed-only one for 7.
-  it('keeps a resumable lineage longer than a completed one', async () => {
+  // Owner decision 2026-09-27: a lineage with any resumable run (failed, cancelled, interrupted,
+  // completed with errors) is never deleted; only a completed-only lineage ages out.
+  it('never deletes a resumable lineage, however old, and prunes an old completed one', async () => {
     const { store, codexHome } = await fixture()
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(T0)
@@ -132,10 +141,28 @@ describe('workflow run retention (#1275)', () => {
     })
     await store.appendEvent('run_completed', event('run_completed', 2, 'run.completed', { result }))
 
-    const pruned = await pruneWorkflowHistory({ store, codexHome, now: T0 + 9 * DAY, ttlMs: 7 * DAY })
+    const pruned = await pruneWorkflowHistory({ store, codexHome, now: T0 + 3650 * DAY, ttlMs: 7 * DAY })
 
     expect(await ids(store)).toEqual(['run_resumable'])
     expect(pruned.runsDeleted).toBe(1)
+  })
+
+  // Owner decision 2026-09-27, and why it is judged on the lineage's LEAVES: a resumed chain always
+  // has resumable predecessors, so a lineage whose latest run completed is finished and ages out,
+  // while one whose latest run failed or was cancelled still offers Resume and is kept forever.
+  it('keeps a lineage whose latest run is resumable, and prunes one whose latest run completed', async () => {
+    const { store, codexHome } = await fixture()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(T0)
+    await terminalRun(store, 'run_done_first', 'run.interrupted')
+    await terminalRun(store, 'run_done_last', 'run.completed', { resumedFromRunId: 'run_done_first', lineageId: 'run_done_first' })
+    await terminalRun(store, 'run_open_first', 'run.completed')
+    await terminalRun(store, 'run_open_last', 'run.cancelled', { resumedFromRunId: 'run_open_first', lineageId: 'run_open_first' })
+
+    const pruned = await pruneWorkflowHistory({ store, codexHome, now: T0 + 3650 * DAY, ttlMs: 7 * DAY })
+
+    expect(pruned.runsDeleted).toBe(2)
+    expect(await ids(store)).toEqual(['run_open_first', 'run_open_last'])
   })
 
   // Review of workflow-mcp#65: createdAt is wall-clock; a clock step backwards must not make the
@@ -146,7 +173,7 @@ describe('workflow run retention (#1275)', () => {
     vi.setSystemTime(T0 - 40 * DAY)
     await terminalRun(store, 'run_parent', 'run.interrupted')
     vi.setSystemTime(T0 - 40 * DAY - 60_000)
-    await terminalRun(store, 'run_child', 'run.cancelled', { resumedFromRunId: 'run_parent', lineageId: 'run_parent' })
+    await terminalRun(store, 'run_child', 'run.completed', { resumedFromRunId: 'run_parent', lineageId: 'run_parent' })
     const order: string[] = []
     const deleteRun = store.deleteRun.bind(store)
     const spied = Object.assign(Object.create(store) as FileWorkflowStore, {
@@ -242,7 +269,7 @@ describe('workflow run retention (#1275)', () => {
     const { root, store, codexHome } = await fixture()
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(T0)
-    await terminalRun(store, 'run_old', 'run.cancelled')
+    await terminalRun(store, 'run_old', 'run.completed')
     const locked = join(root, 'workflows', 'runs', 'run_old', 'transcripts', 'locked')
     await mkdir(locked, { recursive: true })
     await writeFile(join(locked, 'agent.jsonl'), '{}\n')
@@ -259,9 +286,9 @@ describe('workflow run retention (#1275)', () => {
     }
   })
 
-  it('reads the TTL from the environment, defaulting to 7 days', () => {
-    expect(workflowRunTtlMs({})).toBe(7 * DAY)
+  it('reads the TTL from the environment, defaulting to 90 days (owner decision)', () => {
+    expect(workflowRunTtlMs({})).toBe(90 * DAY)
     expect(workflowRunTtlMs({ AGENT_CODE_WORKFLOW_RUN_TTL_DAYS: '14' })).toBe(14 * DAY)
-    expect(workflowRunTtlMs({ AGENT_CODE_WORKFLOW_RUN_TTL_DAYS: 'nonsense' })).toBe(7 * DAY)
+    expect(workflowRunTtlMs({ AGENT_CODE_WORKFLOW_RUN_TTL_DAYS: 'nonsense' })).toBe(90 * DAY)
   })
 })

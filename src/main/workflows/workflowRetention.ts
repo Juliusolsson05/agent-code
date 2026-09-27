@@ -19,21 +19,23 @@ import type { WorkflowRunSummary, WorkflowStore } from 'workflow-mcp'
  * Plan: docs/plans/2026-09-26-workflow-run-retention.md.
  */
 
-/** UNCONFIRMED default (owner may override): a week bounds the owner's rate to about 1 GB.
- *  `AGENT_CODE_WORKFLOW_RUN_TTL_DAYS` overrides it. Applies to lineages whose runs all completed. */
-export const DEFAULT_WORKFLOW_RUN_TTL_DAYS = 7
+/**
+ * How long a FINISHED lineage (every run completed) is kept. Owner decision, 2026-09-27: "do not
+ * delete stuff often" — 90 days (temp/manager/owner-decisions-2026-09-27.md, item 5). The first
+ * draft proposed 7 days to bound the owner's measured ~140 MB/day; the owner chose infrequent
+ * deletion over that bound. `AGENT_CODE_WORKFLOW_RUN_TTL_DAYS` overrides it.
+ */
+export const DEFAULT_WORKFLOW_RUN_TTL_DAYS = 90
 
 /**
- * UNCONFIRMED default: lineages the user can still RESUME are kept longer.
+ * Lineages the user can still RESUME are never deleted (owner decision, same item).
  *
- * WHY (review of workflow-mcp#65): a failed, cancelled, interrupted or completed-with-errors run
- * stays visible in workflow history with a Resume action; once its manifest, journal and source are
- * deleted, Resume fails with run-not-found and nothing warned the user. On the owner's corpus 38 of
- * 134 runs were resumable. Thirty days keeps a month to act on them while still bounding growth;
- * the UI's handling of an expired run is follow-up #1348.
+ * WHY: a failed, cancelled, interrupted or completed-with-errors run stays in workflow history with
+ * a Resume action. Deleting its manifest, journal and source made Resume fail with run-not-found and
+ * nothing warned the user (review of workflow-mcp#65, #1348). The earlier draft kept them 30 days;
+ * the owner's rule is simpler and removes that failure entirely: only a lineage whose every run
+ * completed is ever pruned.
  */
-export const RESUMABLE_TTL_MULTIPLIER = 30 / 7
-
 const RESUMABLE = new Set<WorkflowRunSummary['status']>(['completed_with_errors', 'failed', 'cancelled', 'interrupted'])
 
 const TERMINAL = new Set<WorkflowRunSummary['status']>([
@@ -99,8 +101,8 @@ export async function pruneWorkflowHistory(input: {
     // successor as un-continued and may AUTO-RECOVER it. Deleting a successor while its
     // interrupted predecessor stays could make an old workflow re-run on its own. So a lineage is
     // pruned only when every member is terminal and every member is past the cutoff.
-    const lineageCutoff = members.some(run => RESUMABLE.has(run.status)) ? now - ttlMs * RESUMABLE_TTL_MULTIPLIER : cutoff
-    const prunable = members.every(run => TERMINAL.has(run.status) && Date.parse(run.updatedAt) < lineageCutoff)
+    const prunable = !resumable(members)
+      && members.every(run => TERMINAL.has(run.status) && Date.parse(run.updatedAt) < cutoff)
     if (!prunable) {
       kept.push(...members)
       continue
@@ -132,6 +134,19 @@ export async function pruneWorkflowHistory(input: {
   }
   result.rolloutsDeleted = await pruneRollouts(join(codexHome, 'sessions'), cutoff, referenced)
   return result
+}
+
+/**
+ * Can the user still Resume this lineage?
+ *
+ * WHY the leaves and not every member: Resume continues a run nothing has continued yet. A resumed
+ * chain always has failed or interrupted predecessors, so "any resumable member" would keep every
+ * lineage that was ever resumed forever, even one whose latest run completed. Only a leaf — a run no
+ * other member resumed from — still offers Resume; if any leaf is resumable, the lineage is kept.
+ */
+function resumable(members: WorkflowRunSummary[]): boolean {
+  const continued = new Set(members.map(run => run.resumedFromRunId).filter(id => id !== undefined))
+  return members.some(run => !continued.has(run.runId) && RESUMABLE.has(run.status))
 }
 
 /**
