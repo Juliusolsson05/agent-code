@@ -66,4 +66,19 @@ describe('WorkflowSourceApprovalStore', () => {
     expect(written.approvals).toContainEqual(unreadable)
     expect(written.approvals).toHaveLength(3)
   })
+
+  // Review of #1411 (a), a surviving mutation: dropping the approvedAt check
+  // still passed. An entry for the exact source that lacks approvedAt is not a
+  // grant this build wrote, so it must prompt, never authorize.
+  it('does not treat an entry missing approvedAt as an approval', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'workflow-source-approval-'))
+    const filePath = join(root, 'approvals.json')
+    await writeFile(filePath, JSON.stringify({
+      version: 1,
+      approvals: [{ canonicalIdentity: request.canonicalIdentity, sourceHash: request.sourceHash }],
+    }))
+    const prompt = vi.fn(async () => false)
+    await expect(new WorkflowSourceApprovalStore(filePath).authorize(request, prompt)).resolves.toBe(false)
+    expect(prompt).toHaveBeenCalledOnce()
+  })
 })
