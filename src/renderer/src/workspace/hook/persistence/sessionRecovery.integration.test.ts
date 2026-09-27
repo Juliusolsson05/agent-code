@@ -132,6 +132,9 @@ const TEST_MCP_SERVER_CONFIG = {
 function makeMcpHost() {
   let registered = false
   return {
+    // #1328: spawn pins the reporting identity before registering, and hands
+    // the release to registerSession.
+    pinReportingIdentity: vi.fn(async () => () => {}),
     registerSession: vi.fn(() => {
       registered = true
       return [TEST_MCP_SERVER_CONFIG]
@@ -237,7 +240,7 @@ describe('cross-layer session restart reconciliation', () => {
       cwd: '/tmp/project',
       providerKind: 'codex',
       domains: ['workflows'],
-    })
+    }, expect.any(Function))
     expect(createSession.mock.calls[0]?.[0]).toMatchObject({
       cwd: '/tmp/project',
       resumeSessionId: 'provider-history',
