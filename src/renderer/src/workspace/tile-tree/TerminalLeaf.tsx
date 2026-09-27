@@ -223,6 +223,11 @@ export function TerminalLeaf({
     let resizeObserver: ResizeObserver | null = null
     let resizeFrame: number | null = null
     let disposed = false
+    // Whether main holds a view reference for this leaf (#1281 / #1283).
+    // Released in the cleanup below; an attach that resolves after the leaf
+    // is gone releases itself instead, or main would forward this shell's
+    // bytes to nobody until the page reloads.
+    let attached = false
     let attachedBackfillDone = false
     let lastCols = 0
     let lastRows = 0
@@ -470,7 +475,11 @@ export function TerminalLeaf({
           // The cleanup below may have disposed the term already
           // (transient remount, rapid tab switch). Check before
           // touching it.
-          if (disposed || termRef.current !== term) return
+          if (disposed || termRef.current !== term) {
+            void window.api.detachTerminal?.(sessionId).catch(() => undefined)
+            return
+          }
+          attached = true
           const liveTerm = term
           if (!liveTerm) return
           // Replay the buffer, then drain any live events that arrived
@@ -560,6 +569,10 @@ export function TerminalLeaf({
 
     return () => {
       disposed = true
+      // The view is gone, so main may stop forwarding to it. Main keeps the
+      // reference across a shell exit and a same-id respawn (#1281), so this
+      // is the release; a pane close, a remount or a tab switch all land here.
+      if (attached) void window.api.detachTerminal?.(sessionId).catch(() => undefined)
       offUserInput?.()
       if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
       resizeObserver?.disconnect()
