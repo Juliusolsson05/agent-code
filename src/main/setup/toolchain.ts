@@ -65,9 +65,23 @@ export async function initializeToolchain(): Promise<void> {
   })
 }
 
-export async function refreshToolchainFromState(): Promise<void> {
+/**
+ * `unsaved`: paths a prerequisite check just probed but could not persist
+ * (#1403 recheck a). They are applied over the persisted ones for THIS
+ * process, so the check's "found at X" and the path a launch then uses are
+ * the same X. Without them, a failed write-back left the toolchain on the
+ * last persisted path, possibly a dead one, while the setup panel said the
+ * tool was found somewhere else. `null` clears, as in `updateToolPaths`.
+ */
+export async function refreshToolchainFromState(
+  unsaved?: Partial<Record<SetupToolId, string | null>>,
+): Promise<void> {
   const state = await loadSetupState()
   cachedPaths = { ...state.toolPaths }
+  for (const [tool, path] of Object.entries(unsaved ?? {}) as Array<[SetupToolId, string | null]>) {
+    if (path) cachedPaths[tool] = path
+    else delete cachedPaths[tool]
+  }
   await refreshBundledOverrides(state)
   applyToolEnv()
 }
