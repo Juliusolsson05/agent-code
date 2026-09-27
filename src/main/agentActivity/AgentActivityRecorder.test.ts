@@ -112,6 +112,39 @@ describe('AgentActivityRecorder', () => {
     expect(project.repositories.map(repository => [repository.repoRoot, repository.worktrees.length])).toEqual([['/dev/agent-code', 2]])
   })
 
+  // #1302: names are off by default, so the key fell back to the session id,
+  // and every reload, provider switch or MCP toggle (a new session id for the
+  // same conversation) started a new analytics row. The renderer carries
+  // tldrIdentity across exactly those replacements; 98 of the owner's 98
+  // agents have one, 3 have a name.
+  it('counts a replaced agent that keeps its conversation as one agent', async () => {
+    const { manager, recorder, phase } = await mount()
+    const layout = (childId: string) => {
+      const [window] = windows() as unknown as Array<{ workspace: { sessions: Record<string, Record<string, unknown>>, detachedSessions: Record<string, Record<string, unknown>> } }>
+      const child = { ...window.workspace.sessions.child, tldrIdentity: 'tldr-reviewer' }
+      delete window.workspace.sessions.child
+      window.workspace.sessions[childId] = child
+      const detached = { ...window.workspace.detachedSessions.child, sessionId: childId }
+      delete window.workspace.detachedSessions.child
+      window.workspace.detachedSessions[childId] = detached
+      return [window] as unknown as PersistedWindow[]
+    }
+    recorder.updateWorkspace(layout('child'), { 'name-1': 'Ada' })
+    phase('child', 'responding')
+    vi.setSystemTime(T0 + HOUR)
+    // Reload Agents: the old process goes, a successor with a new id resumes it.
+    manager.emit('removed', { sessionId: 'child' })
+    recorder.updateWorkspace(layout('child-2'), { 'name-1': 'Ada' })
+    manager.emit('started', { sessionId: 'child-2', kind: 'codex' })
+    phase('child-2', 'responding')
+    vi.setSystemTime(T0 + 2 * HOUR)
+    phase('child-2', 'idle')
+
+    const summary = await recorder.summary('24h')
+    expect(summary.totals.agents).toEqual({ user: 0, orchestration: 1 })
+    expect(summary.projects[0].topAgents.map(agent => [agent.label, agent.agentMs])).toEqual([['Reviewer', 2 * HOUR]])
+  })
+
   it('closes an agent removed mid-turn at removal, and counts one still working up to now', async () => {
     const { manager, recorder, phase } = await mount()
     phase('lead', 'thinking')

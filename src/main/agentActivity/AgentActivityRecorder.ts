@@ -183,7 +183,17 @@ export class AgentActivityRecorder {
     const cwd = placement?.cwd ?? ''
     const agentName = placement?.agentNameId ? this.agentNames[placement.agentNameId] : undefined
     return {
-      agentKey: placement?.agentNameId ?? sessionId,
+      // WHY tldrIdentity before the session id (#1302): a reload, provider
+      // switch, resume or MCP toggle gives the pane a new session id, and with
+      // names off by default (98 of the owner's 98 agents had a tldrIdentity,
+      // 3 a name) the old `agentNameId ?? sessionId` started a new row for the
+      // same agent each time. The renderer carries tldrIdentity across exactly
+      // the replacements that continue the same conversation
+      // (tldrIdentityForReplacement) and mints a new one for a rewind, clone
+      // or unrelated resume, which is the line between "same agent" and "new
+      // agent". The name stays first so rows already keyed by it keep their
+      // key; the session id is the last resort for an agent with neither.
+      agentKey: placement?.agentNameId ?? placement?.tldrIdentity ?? sessionId,
       // What the user sees on the pane, then the agent's spoken name, then the folder.
       label: placement?.title ?? agentName ?? (cwd ? basename(cwd) : sessionId),
       role: placement?.orchestration ? 'orchestration' : 'user',
