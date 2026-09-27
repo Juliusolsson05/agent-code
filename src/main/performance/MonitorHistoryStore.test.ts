@@ -8,6 +8,20 @@ import { MonitorHistoryStore } from './MonitorHistoryStore.js'
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
 
+// Retention keeps any run with a file touched within the window (touchedSince,
+// #1455 review b), measured against the maintenance time, which is the
+// snapshot's sampledAt. A retention test that wants ONE named guard to be the
+// only thing keeping a run must therefore run on the real clock and age that
+// run's files AND folder past the window; with a 1970-scale snapshot every
+// fixture looks freshly touched and the named guard is shadowed (#1455
+// review c, B6 check 2110).
+const DAY = 24 * 60 * 60_000
+const aged = async (dir: string, now: number): Promise<void> => {
+  const old = new Date(now - 30 * DAY)
+  for (const name of await readdir(dir)) await utimes(join(dir, name), old, old)
+  await utimes(dir, old, old)
+}
+
 const snapshot = (at: number): MonitorWorkerSnapshot => ({
   schemaVersion: 1, sampledAt: at,
   main: { at, cpuPercent: 2, rss: 1024, heapUsed: 256, heapLimit: 2048, loopMeanMs: 20, loopP99Ms: 22, loopMaxMs: 25, sleepGap: false },
@@ -195,14 +209,17 @@ describe('bounded local performance history', () => {
     const refused = JSON.stringify({ version: 2, incidents: [incident] })
     await mkdir(runA, { recursive: true })
     await writeFile(join(runA, 'incidents.json'), refused)
+    const now = Date.now()
     const first = new MonitorHistoryStore(root, 'run-a')
     await first.settled()
-    first.record(snapshot(11_000), null, [{ ...incident, id: 2, at: 11_000 }], 0, 1)
+    first.record(snapshot(now), null, [{ ...incident, id: 2, at: now }], 0, 1)
     await first.settled()
+    // Aged, so only refusedAsideRuns can keep run-a (see `aged`).
+    await aged(runA, now)
 
     const later = new MonitorHistoryStore(root, 'run-b')
     await later.settled()
-    later.record(snapshot(11_000 + 8 * 24 * 60 * 60_000), null, [], 0, 0)
+    later.record(snapshot(now + 8 * DAY), null, [], 0, 0)
     await later.settled()
 
     const aside = (await readdir(runA)).filter(name => name.startsWith('incidents.refused-'))
@@ -285,14 +302,42 @@ describe('bounded local performance history', () => {
     await mkdir(refused, { recursive: true })
     await writeFile(join(foreignOnly, 'incidents.json'), JSON.stringify([{ ...incident, rule: 'rule-from-a-newer-build' }]))
     await writeFile(join(refused, 'incidents.json'), JSON.stringify({ version: 2 }))
+    // Aged, so only foreignIncidents / refusedIncidentRuns can keep each run.
+    const now = Date.now()
+    await aged(foreignOnly, now)
+    await aged(refused, now)
 
     const store = new MonitorHistoryStore(root, 'run-now')
     await store.settled()
-    store.record(snapshot(90_000), null, [], 0, 0)
+    store.record(snapshot(now), null, [], 0, 0)
     await store.settled()
 
     await expect(stat(foreignOnly)).resolves.toBeTruthy()
     await expect(stat(refused)).resolves.toBeTruthy()
+  })
+
+  // B6 check 2110: the carried-rows path across two stores. Another run's
+  // file mixes a readable row that has expired with a row from a newer build.
+  // Retention rewrites the file (it is unchanged since indexing, so
+  // foreignChanged lets it) and must carry the unrecognised row, and the run
+  // must survive, although it is aged past the window.
+  it('carries an unrecognised row through retention of an aged, unchanged foreign file, and keeps its run', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-code-monitor-'))
+    roots.push(root)
+    const runA = join(root, 'runs', 'run-a')
+    await mkdir(runA, { recursive: true })
+    const now = Date.now()
+    const carried = { ...incident, id: 7, at: now - 20 * DAY, rule: 'rule-from-a-newer-build' }
+    await writeFile(join(runA, 'incidents.json'), JSON.stringify([{ ...incident, id: 1, at: now - 20 * DAY }, carried]))
+    await aged(runA, now)
+
+    const store = new MonitorHistoryStore(root, 'run-b')
+    await store.settled()
+    store.record(snapshot(now), null, [], 0, 0)
+    await store.settled()
+
+    expect(JSON.parse(await readFile(join(runA, 'incidents.json'), 'utf8'))).toEqual([carried])
+    await expect(stat(runA)).resolves.toBeTruthy()
   })
 
   // Review of #1411 (a): with the run's file full of carried rows, a new
@@ -358,12 +403,6 @@ describe('bounded local performance history', () => {
 // files AND folder are aged past retention, so only the guard a test names
 // can keep the run.
 describe('a run this store never examined', () => {
-  const DAY = 24 * 60 * 60_000
-  const aged = async (dir: string, now: number): Promise<void> => {
-    const old = new Date(now - 30 * DAY)
-    for (const name of await readdir(dir)) await utimes(join(dir, name), old, old)
-    await utimes(dir, old, old)
-  }
   const setup = async () => {
     const root = await mkdtemp(join(tmpdir(), 'monitor-unexamined-'))
     roots.push(root)
