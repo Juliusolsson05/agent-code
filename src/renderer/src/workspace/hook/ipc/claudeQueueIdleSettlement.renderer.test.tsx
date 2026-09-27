@@ -230,3 +230,30 @@ it('does not settle at bootstrap-complete while the stream is still responding',
   act(() => { vi.advanceTimersByTime(1_000) })
   expect(visible(runtime())).toEqual([NOTIFICATION])
 })
+
+// #1396 review a, round 2: stale items stay inference candidates, so they
+// must count against the debt too. S is stale-marked by the semantic idle
+// site while still queued; Claude then really dequeues S (one debt unit) while
+// N stays queued. Counting only non-stale items saw debt 1 >= live 1 and
+// settled, which consumed S by cohort and stale-marked the live N.
+it('counts stale items when deciding whether the debt covers the queue', () => {
+  const { fake, sessionId, runtime } = mount()
+  act(() => {
+    fake.emitJsonlEntries({ sessionId, entries: [
+      op('s1', 'enqueue', 'A', 1),
+      op('s2', 'enqueue', 'S', 2),
+      op('s3', 'dequeue', undefined, 3),
+      { file: '/s/claude.jsonl', entry: { type: 'user', uuid: 's-user-a', message: { role: 'user', content: 'A' }, timestamp: '2026-09-27T00:00:04.000Z' } as never },
+    ] })
+  })
+  // The existing semantic idle site marks S stale.
+  act(() => { fake.emitSemantic({ sessionId, event: { type: 'turn_completed', ts: Date.now() } as never }) })
+  act(() => { vi.advanceTimersByTime(50) })
+  expect(runtime().queuedMessages.map(item => [item.content, Boolean((item as { stale?: boolean }).stale)])).toEqual([['S', true]])
+  act(() => { fake.emitProcessState({ sessionId, active: true, status: 'Working' }) })
+  act(() => {
+    fake.emitJsonlEntries({ sessionId, entries: [op('s4', 'enqueue', 'N', 5), op('s5', 'dequeue', undefined, 6)] })
+  })
+  act(() => { fake.emitProcessState({ sessionId, active: false }) })
+  expect(visible(runtime())).toContain('N')
+})

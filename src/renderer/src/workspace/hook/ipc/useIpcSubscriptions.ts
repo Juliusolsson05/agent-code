@@ -221,12 +221,20 @@ function settleClaudeQueueIfIdle(
 }
 
 /**
- * True when the open departure debt accounts for EVERY live pending item
+ * True when the open departure debt accounts for EVERY pending item
  * (#1396 review a). Each unit of debt is a departure Claude logged (a
  * `dequeue`, or a content-free `remove`) whose item was not identified. When
- * those departures number at least the live pending items, every one of them
- * has provably left, so settling retires them and leaves nothing to mark
- * stale.
+ * those departures number at least the pending items, every one of them has
+ * left, PROVIDED each logged departure is counted once.
+ *
+ * RESIDUAL (review a, round 2): queue-operation records carry no uuid, so a
+ * REDELIVERED `dequeue` (the burst channel can redeliver, see the enqueue
+ * guard in reconcile.ts) is counted twice and can make the debt cover a
+ * genuinely queued item. A key-based guard is not possible: the local Claude
+ * corpus has 99 genuine same-millisecond, same-content `dequeue` repeats
+ * within one file (2,391 dequeues across 606 transcripts), which a
+ * (operation, timestamp) guard would wrongly drop. Redelivery already
+ * over-counts debt for every reducer path; this site inherits it.
  *
  * WHY the process-idle flip and bootstrap-complete need this proof and the
  * semantic site does not get it added: an inactive spinner, or the quiet
@@ -238,9 +246,13 @@ function settleClaudeQueueIfIdle(
  * existing guard and behaviour; this PR does not widen it.
  */
 function debtCoversPending(state: ClaudeQueueState): boolean {
-  const live = state.pending.filter(item => !item.stale).length
+  // EVERY pending item, stale ones included (#1396 review a, round 2): the
+  // reconciler settles debt against all of `pending`, so a stale item is
+  // still a candidate the debt can be spent on. Counting only live items let
+  // one genuine departure of a stale S look like proof that the live N had
+  // left, and settling then stale-marked N.
   const debt = (state.debt?.count ?? 0) + (state.removeDebt?.count ?? 0)
-  return debt >= live
+  return debt >= state.pending.length
 }
 
 const codexCurrentTurnIdBySession = new Map<SessionId, string>()
