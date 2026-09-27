@@ -1,4 +1,4 @@
-import { rename } from 'node:fs/promises'
+import { chmod, readdir, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -88,6 +88,34 @@ describe('Codex conversation source', () => {
     }
     const everywhere = await source.discover({ scope: 'everywhere', family: await resolveFamily('/fixture/repo', 'everywhere', { listWorktrees }) })
     expect(everywhere.filter(r => r.origin === 'scan')).toHaveLength(counts.codex.unindexedSampled)
+  })
+
+  it('skips an unreadable rollout instead of failing the whole Codex list (#1251 row 8)', async () => {
+    // readline's async iterator rethrows a stream error (EACCES here, EIO on a
+    // failing disk), and nothing between readRolloutHead and discover() caught
+    // it, so one rollout the app cannot open emptied the Codex column.
+    const { corpus, source, listWorktrees } = await setup()
+    const counts = corpus.manifest.counts as { codex: { inFamily: number; unindexedSampled: number } }
+    const rollouts = (await readdir(join(corpus.codexHome, 'sessions'), { recursive: true }))
+      .filter(name => /rollout-.*\.jsonl$/.test(name)).map(name => join(corpus.codexHome, 'sessions', name))
+    expect(rollouts.length).toBeGreaterThan(1)
+    for (const file of rollouts) await chmod(file, 0o000)
+    // unshift: permissions come back before the corpus cleanup removes the tree.
+    cleanups.unshift(async () => { for (const file of rollouts) await chmod(file, 0o600) })
+    const family = await resolveFamily('/fixture/repo', 'everywhere', { listWorktrees })
+
+    // Index path: the indexed rows never open a rollout and must all survive;
+    // the unindexed union is what reads heads, and it now skips what it cannot.
+    const indexed = await source.discover({ scope: 'everywhere', family })
+    expect(indexed.filter(r => r.origin === 'index').length).toBeGreaterThanOrEqual(counts.codex.inFamily)
+    expect(indexed.filter(r => r.origin === 'scan')).toHaveLength(0)
+
+    // Fallback path: one readable rollout still lists beside unreadable ones.
+    await chmod(rollouts[0]!, 0o600)
+    await rename(join(corpus.codexHome, 'state_5.sqlite'), join(corpus.codexHome, 'state_5.sqlite.away'))
+    const fresh = new CodexConversationSource({ codexHome: corpus.codexHome })
+    const scanned = await fresh.discover({ scope: 'everywhere', family })
+    expect(scanned.map(r => r.file)).toEqual([rollouts[0]])
   })
 
   it('falls back to the rollout scan when the index is missing and reports why', async () => {

@@ -169,7 +169,23 @@ export class CodexConversationSource implements ConversationSource {
       }
     }
     const cached = this.heads.get(file)
-    const head = cached && cached.mtime === mtime ? cached.head : await readRolloutHead(file)
+    let head: RolloutHead
+    if (cached && cached.mtime === mtime) head = cached.head
+    else {
+      // WHY one unreadable rollout is skipped here (#1251 row 8): readline's
+      // async iterator rethrows a stream error (EACCES, EIO, a file removed
+      // between the walk and the read), and both callers await this in a plain
+      // loop, so a single rollout the app cannot open used to reject
+      // discover() and empty the whole Codex column. Skipping costs exactly
+      // the row that cannot be labelled anyway (without its head there is no
+      // cwd to scope it by). Nothing is cached, so the next discovery retries
+      // it once the file is readable again.
+      try {
+        head = await readRolloutHead(file)
+      } catch {
+        return null
+      }
+    }
     this.heads.set(file, { mtime, head })
     if (scope.scope !== 'everywhere' && !scope.family.matches(head.cwd)) return null
     return {
