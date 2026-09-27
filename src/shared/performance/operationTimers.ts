@@ -48,6 +48,9 @@ export const LEGACY_MONITOR_OPERATIONS: Readonly<Record<string, MonitorOperation
   'worktreeActivity.refresh': 'worktree.refresh',
   'historyLoader.loadInitialChunk': 'transcript.read',
   'historyLoader.loadOlderChunk': 'transcript.read',
+  'conversations.discover': 'conversations.discover',
+  'sessionIndex.extractPrompts': 'conversations.extract',
+  'conversations.search': 'conversations.search',
   'workspace.ipc.semantic.fold': 'transcript.fold',
   'workspace.ipc.jsonl.bulk': 'transcript.fold',
 }

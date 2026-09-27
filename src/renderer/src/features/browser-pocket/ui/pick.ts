@@ -1,6 +1,7 @@
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { CLIPBOARD_WRITE_FAILED } from '@renderer/lib/clipboardFailure'
 import { formatElementChip, insertAtCaret } from '@shared/browserPocket/elementChip'
+import type { PocketPickOutcome } from '@shared/browserPocket/types'
 import { isAgentProviderKind } from '@shared/types/providerKind'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId } from '@renderer/workspace/types'
@@ -8,6 +9,12 @@ import type { SessionId } from '@renderer/workspace/types'
 import type { usePocketLiveStore } from '../state/pocketLiveStore'
 
 type Patch = ReturnType<typeof usePocketLiveStore.getState>['patch']
+
+export const PICK_FAILED: Record<Extract<PocketPickOutcome, { kind: 'failed' }>['reason'], string> = {
+  'devtools-open': "Close the pocket's DevTools to pick an element.",
+  unavailable: "The browser pocket isn't available for picking right now.",
+  error: "Couldn't pick an element. Try again.",
+}
 
 /**
  * Pick an element in the pocket and hand it to THIS lane's agent (spec §4.7).
@@ -20,15 +27,22 @@ type Patch = ReturnType<typeof usePocketLiveStore.getState>['patch']
  */
 export async function pickIntoComposer(pocketId: string, sessionId: SessionId, workspace: Workspace, patchLive: Patch, showToast: (m: string) => void): Promise<void> {
   patchLive(pocketId, { picking: true })
-  let result
+  let outcome: PocketPickOutcome
   try {
-    result = await window.api.pickInPocket({ pocketId })
+    outcome = await window.api.pickInPocket({ pocketId })
   } catch {
-    result = null
+    outcome = { kind: 'failed', reason: 'error' }
   } finally {
     patchLive(pocketId, { picking: false })
   }
-  if (!result) return
+  // A cancel is the user's own choice: silent. A failure used to look the
+  // same (#1305), so Pick simply did nothing; it is said now, in fixed words.
+  if (outcome.kind === 'cancelled') return
+  if (outcome.kind === 'failed') {
+    showToast(PICK_FAILED[outcome.reason])
+    return
+  }
+  const result = outcome.result
   const chip = formatElementChip(result)
   const composer = document.querySelector<HTMLTextAreaElement>(`[data-composer-input="${CSS.escape(sessionId)}"]`)
   if (!composer) {

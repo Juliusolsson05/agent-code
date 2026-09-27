@@ -49,6 +49,13 @@ export const MONITOR_OPERATIONS = [
   'transcript.commit',
   'terminal.write',
   'worktree.refresh',
+  // The conversations catalog (#769, measure first): its prompt extraction
+  // parses windows of up to 16 MiB synchronously on main, and search can run
+  // it for 150 rows, yet it had no monitor boundary at all, so nothing could
+  // say whether it is what stalls main.
+  'conversations.discover',
+  'conversations.extract',
+  'conversations.search',
   'persistence.serialize',
   'persistence.write',
   'orchestration.queue',
@@ -61,5 +68,14 @@ export const MONITOR_OPERATIONS = [
 ] as const
 
 export type MonitorOperationName = typeof MONITOR_OPERATIONS[number]
-export type MonitorOutcome = 'success' | 'error' | 'cancelled' | 'timeout'
+export const MONITOR_OUTCOMES = ['success', 'error', 'cancelled', 'timeout'] as const
+export type MonitorOutcome = typeof MONITOR_OUTCOMES[number]
+/**
+ * How many (operation, outcome) histograms a snapshot can hold: every legal
+ * pair. WHY derived instead of a literal (#1352 review a): the aggregator, the
+ * snapshot parser and the history store each hard-coded 100, and adding three
+ * operations (26 x 4 = 104 pairs) made them silently drop the last pairs. A
+ * cap computed from the vocabulary grows with it and stays one number.
+ */
+export const MAX_MONITOR_OPERATION_PAIRS = MONITOR_OPERATIONS.length * MONITOR_OUTCOMES.length
 export type MonitorQuality = 'ok' | 'warming-up' | 'stale' | 'unsupported' | 'partial'
