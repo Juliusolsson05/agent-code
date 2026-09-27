@@ -70,9 +70,29 @@ export async function deliverClaudePrompt(
     })
   }
   if (typeof io.session.awaitReadyForPrompt === 'function') {
-    const ready = await io.session.awaitReadyForPrompt({
+    const awaitReady = () => io.session.awaitReadyForPrompt!({
       deadlineAt: Math.min(deliveryDeadlineAt, Date.now() + READY_BUDGET_MS),
     })
+    let ready = await awaitReady()
+    if (ready.kind === 'occupied' && io.strandedComposer) {
+      // The "human draft" is our own earlier write (#1350): an earlier
+      // delivery's bytes painted after its rollback stopped watching, and no
+      // other writer has reached the PTY since (SessionManager's proof, see
+      // PromptDeliveryIo.strandedComposer). This delivery holds the
+      // reservation, so nothing can add to the composer while we clear it:
+      // the same structural ownership proof rollbackWrittenPrompt relies on,
+      // carried across the gap between the two deliveries.
+      const reclaimed = await killComposerToEmpty(io)
+      if (reclaimed !== 'cleared') {
+        return failure({
+          stage: 'before-write', code: 'not-ready', retrySafe: true, disposition: 'retry-after-resolve',
+          promptWritten: false, enterWritten: false,
+          message: `Claude session ${io.sessionId} still has an earlier prompt from Agent Code in its composer that could not be cleared; clear it there before sending again`,
+        })
+      }
+      io.record?.('stranded-reclaimed')
+      ready = await awaitReady()
+    }
     if (ready.kind !== 'ready') {
       const disposition = ready.kind === 'timeout'
         ? 'retry-same-session' as const
@@ -487,6 +507,20 @@ async function rollbackWrittenPrompt(
     return 'unrecoverable'
   }
 
+  return killComposerToEmpty(io)
+}
+
+/**
+ * Clear a composer known to hold only our bytes, verified by reading it back
+ * after each press. Used by the rollback above (bytes this delivery just
+ * wrote) and by a delivery reclaiming an earlier delivery's stranded write
+ * (#1350); both hold the reservation, which is what makes "only ours" true.
+ */
+async function killComposerToEmpty(
+  io: PromptDeliveryIo,
+): Promise<'cleared' | 'restored' | 'unrecoverable'> {
+  const readComposer = (): 'empty' | 'drafted' | 'unpainted' =>
+    classifyRollbackComposer(io.session.readComposer?.() ?? null, io.session.snapshotScreen?.() ?? '')
   // STEP 2 — clear, one keypress at a time.
   //
   // WHY each press must arrive alone: Claude's input tokeniser accumulates a run

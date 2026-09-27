@@ -588,6 +588,24 @@ export class SessionManager extends EventEmitter {
   // paste B and turn a slow operation into duplicate queue entries.
   private readonly promptDeliveriesInFlight = new Set<string>()
   /**
+   * Sessions whose native composer can hold only this app's own stranded
+   * write (#1350). Set when a delivery wrote prompt bytes it could not submit
+   * (promptWritten && !enterWritten, not ok): the bytes are, or may soon be,
+   * in the composer. Claude in particular can paint them seconds after the
+   * delivery's rollback stopped watching, and its gate then reads them as a
+   * human draft forever, so no later delivery could reach the session.
+   *
+   * WHY this proves ownership: every PTY writer goes through recordInputWrite,
+   * and any write that is not a delivery's clears the mark (raw terminal
+   * typing, remote input, a condition answer). While the mark stands, nothing
+   * but deliveries has written since, and each later delivery refused before
+   * writing. So the composer holds our bytes and nothing else, and the next
+   * delivery may clear it under its reservation (PromptDeliveryIo
+   * .strandedComposer). A text comparison could not prove this: the screen is
+   * clipped and wrap-lossy, and pastes collapse to `[Pasted text #N]`.
+   */
+  private readonly strandedDeliveries = new Set<string>()
+  /**
    * Prompts waiting for a session that is not ready for one YET (#854).
    *
    * One per session, cancellable, cleared when the session goes. See
@@ -1090,6 +1108,8 @@ export class SessionManager extends EventEmitter {
     this.codexCandidateObservationEdges.delete(sessionId)
     this.codexAttachmentObservationState.delete(sessionId)
     this.lastInputReadiness.delete(sessionId)
+    // A new process has a new, empty composer (#1350).
+    this.strandedDeliveries.delete(sessionId)
     this.lastGateEvaluation.delete(sessionId)
     this.spawnInfo.delete(sessionId)
     // Keep lastActivityAt after removal. Process telemetry can be asked about a
@@ -3913,6 +3933,10 @@ export class SessionManager extends EventEmitter {
     data: string,
     origin: InputWriteOrigin,
   ): void {
+    // Before the journal check: the stranded-delivery proof must hold whether
+    // or not a lifecycle journal is attached. Any writer that is not a
+    // delivery may have put its own text in the composer (#1350).
+    if (origin !== 'delivery') this.strandedDeliveries.delete(sessionId)
     if (!this.lifecycle) return
     const now = Date.now()
     const pending = this.inputWriteCoalesce.get(sessionId)
@@ -4054,6 +4078,23 @@ export class SessionManager extends EventEmitter {
     this.recordInputWrite(sessionId, data, 'delivery')
     expectedEntry.session.write(data)
     return true
+  }
+
+  /** See strandedDeliveries (#1350). */
+  private noteStrandedDelivery(
+    sessionId: string,
+    delivery: { ok: boolean; promptWritten?: boolean; enterWritten?: boolean },
+  ): void {
+    if (delivery.ok) this.strandedDeliveries.delete(sessionId)
+    else if (delivery.promptWritten && !delivery.enterWritten) this.strandedDeliveries.add(sessionId)
+    // A failure that wrote nothing (refused before write) changes nothing:
+    // whatever the composer held before still holds, ours or not.
+  }
+
+  /** Whether the session's composer can only hold our own stranded write
+   *  (#1350); reported by sessions.inputInspect. */
+  hasStrandedDelivery(sessionId: string): boolean {
+    return this.strandedDeliveries.has(sessionId)
   }
 
   getSessionKind(sessionId: string): SessionKind | null {
@@ -4952,7 +4993,9 @@ export class SessionManager extends EventEmitter {
         imagePaths,
         record,
         ...(options?.requireEmptyNativeComposer ? { requireEmptyNativeComposer: true } : {}),
+        ...(this.strandedDeliveries.has(sessionId) ? { strandedComposer: true } : {}),
       })
+      this.noteStrandedDelivery(sessionId, delivery)
       finishDelivery(delivery.ok ? 'success' : 'error')
       // Instrumentation must never change a delivery outcome. `acceptance` is
       // read defensively because a provider result without it made
@@ -4967,6 +5010,7 @@ export class SessionManager extends EventEmitter {
       finishDelivery('error')
       this.monitorResponses.cancel(sessionId)
       record?.('uncertain', { reason: 'provider-threw' })
+      this.noteStrandedDelivery(sessionId, { ok: false, promptWritten, enterWritten })
       return {
         ok: false,
         stage: enterWritten ? 'after-enter' : promptWritten ? 'absorption' : 'before-write',
