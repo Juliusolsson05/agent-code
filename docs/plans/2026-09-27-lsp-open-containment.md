@@ -15,4 +15,12 @@
   - a pass opens normally.
 - **Mutations killed:** no re-check in the manager; no physical validation in the assertion.
 
-**Residual.** The window between the re-check and `didOpen` is one await, which is inherent to any path-based open. The IPC wiring of the callback is not covered by a test (the handlers need Electron).
+## After review a of #1412
+- **Shared joins:** the re-check runs at the top of the queued step for EVERY open, including one that joins an existing shared document (another alias of the same file). Before, only a new document's `didOpen` was guarded, so a join after a swap sent `didChange` for the escaped URI.
+- **Virtual documents:** they are named under `root/.agent-code-lsp`, so that directory must not be a symlink out of the root. They now get a re-check too.
+- **No exact relative-path comparison:** a case-only rename on a case-insensitive filesystem still resolves inside the root, and refusing it only lost LSP. Containment plus a regular file is the property.
+
+**Residuals.**
+- **One await:** the window between the re-check and the notification is one await, inherent to any path-based open.
+- **A swap after a document is already open** (a later `didChange`, or a document request, for a URI the server already holds) is not guarded. The server already has that URI, and no per-change path check stops it from reading the path later. This issue is the authorization-to-use window of an OPEN.
+- **The IPC wiring** of the callback is not covered by a test, because the handlers need Electron.

@@ -719,4 +719,24 @@ describe('LspManager document ownership', () => {
     expect(check).toHaveBeenCalledTimes(1)
     expect(notifications).toEqual(['textDocument/didOpen'])
   })
+
+  // Review a of #1412: an open that JOINS an existing shared document (another
+  // alias of the same file) must run the re-check too, or a swap between its
+  // authorization and use sends didChange for the escaped URI.
+  it('runs the physical re-check when joining an existing shared document', async () => {
+    const manager = new LspManager()
+    const internal = manager as unknown as LspManagerInternals
+    const server = { key: 'server', initialized: Promise.resolve({}), closed: false, abandonedRequests: 0 }
+    internal.servers.set('server', server)
+    internal.getOrCreateServer = async () => server
+    const notifications: string[] = []
+    internal.sendNotificationIfOpen = async (_server, method) => { notifications.push(method) }
+    const common = { content: 'text', language: 'typescript', workspaceRoot: '/repo', filePath: 'src/a.ts' }
+    await expect(manager.openDocument({ ...common, clientUri: 'cc-file://first/src/a.ts', assertPhysicalTarget: async () => {} })).resolves.toBe(true)
+    await expect(manager.openDocument({
+      ...common, clientUri: 'cc-file://second/src/a.ts',
+      assertPhysicalTarget: async () => { throw new Error('escaped') },
+    })).resolves.toBe(false)
+    expect(notifications).toEqual(['textDocument/didOpen'])
+  })
 })

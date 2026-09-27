@@ -209,11 +209,15 @@ function hashText(input: string): string {
   return Math.abs(hash).toString(16)
 }
 
+/** The root-relative directory virtual (pathless) documents are named under.
+ *  Exported because the IPC layer's physical re-check guards it (#1268). */
+export const LSP_VIRTUAL_DIR = '.agent-code-lsp'
+
 function makeVirtualServerUri(workspaceRoot: string, clientUri: string, language: string): string {
   const ext = languageFileExtension(language)
   const filePath = resolve(
     workspaceRoot,
-    '.agent-code-lsp',
+    LSP_VIRTUAL_DIR,
     `virtual-${hashText(clientUri)}.${ext}`,
   )
   return pathToFileURL(filePath).href
@@ -552,6 +556,20 @@ export class LspManager extends EventEmitter {
     // could not fan out for us — this URI had no record when it ran.
     this.notifyDocumentIntent(key)
     return await this.serializeServerDocument(key, async () => {
+      // The caller's physical re-check runs FIRST, for every open (#1268). A
+      // refusal fails open like every other LSP failure here: the editor keeps
+      // working, without LSP for this document. Review a of #1412: running it
+      // only before a NEW document's didOpen let an open that JOINED an
+      // existing shared document (another alias of the same file) pass after
+      // a swap and send didChange for the now-escaped URI.
+      if (params.assertPhysicalTarget) {
+        try {
+          await params.assertPhysicalTarget()
+        } catch {
+          return false
+        }
+        if (server.closed) return false
+      }
       const existing = this.docs.get(params.clientUri)
       if (existing) {
         if (existing.serverKey !== server.key || existing.serverUri !== serverUri) {
@@ -571,18 +589,6 @@ export class LspManager extends EventEmitter {
 
       const shared = this.serverDocuments.get(key)
       if (!shared) {
-        // Only a NEW server document names the path to the server; joining an
-        // existing shared one sends text changes for a URI already validated.
-        // A refused re-check fails open like every other LSP failure here: the
-        // editor keeps working, without LSP for this document (#1268).
-        if (params.assertPhysicalTarget) {
-          try {
-            await params.assertPhysicalTarget()
-          } catch {
-            return false
-          }
-          if (server.closed) return false
-        }
         await this.sendNotificationIfOpen(server, 'textDocument/didOpen', {
           textDocument: {
             uri: serverUri,

@@ -26,12 +26,12 @@ async function layout() {
 
 it('passes while the authorized file is still inside the root', async () => {
   const { root } = await layout()
-  await expect(lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: join('src', 'a.ts') })!()).resolves.toBeUndefined()
+  await expect(lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: join('src', 'a.ts') })()).resolves.toBeUndefined()
 })
 
 it('refuses once a directory on the path was swapped for a symlink outside the root', async () => {
   const { root, outside } = await layout()
-  const assertion = lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: join('src', 'a.ts') })!
+  const assertion = lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: join('src', 'a.ts') })
   await rename(join(root, 'src'), join(root, 'src-moved'))
   await symlink(outside, join(root, 'src'))
   await expect(assertion()).rejects.toThrow(/escapes project root/)
@@ -39,13 +39,35 @@ it('refuses once a directory on the path was swapped for a symlink outside the r
 
 it('refuses a leaf that became a symlink, even to a file inside the root', async () => {
   const { root } = await layout()
-  const assertion = lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: join('src', 'a.ts') })!
+  const assertion = lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: join('src', 'a.ts') })
   await writeFile(join(root, 'src', 'b.ts'), 'export const other = 1\n')
   await rm(join(root, 'src', 'a.ts'))
   await symlink(join(root, 'src', 'b.ts'), join(root, 'src', 'a.ts'))
   await expect(assertion()).rejects.toThrow(/symbolic links/)
 })
 
-it('has nothing to check for a pathless (virtual) document', () => {
-  expect(lspPhysicalTargetAssertion({ workspaceRoot: '/repo', filePath: null })).toBeUndefined()
+// Review a of #1412: a virtual document is named under root/.agent-code-lsp,
+// so that directory must not be a symlink out of the root.
+it('refuses a virtual document whose directory is a symlink out of the root', async () => {
+  const { root, outside } = await layout()
+  await symlink(outside, join(root, '.agent-code-lsp'))
+  await expect(lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: null })()).rejects.toThrow(/symbolic link/)
+})
+
+it('passes a virtual document with no directory yet, or a real one', async () => {
+  const { root } = await layout()
+  await expect(lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: null })()).resolves.toBeUndefined()
+  await mkdir(join(root, '.agent-code-lsp'))
+  await expect(lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: null })()).resolves.toBeUndefined()
+})
+
+// Review a: a case-only rename on a case-insensitive filesystem still resolves
+// to the same file inside the root, and must not be refused.
+it('accepts a case-only rename of the authorized file', async () => {
+  const { root } = await layout()
+  const assertion = lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: join('src', 'a.ts') })
+  await rename(join(root, 'src', 'a.ts'), join(root, 'src', 'A.ts'))
+  const caseInsensitive = await realpath(join(root, 'src', 'a.ts')).then(() => true, () => false)
+  if (caseInsensitive) await expect(assertion()).resolves.toBeUndefined()
+  else await expect(assertion()).rejects.toThrow()
 })

@@ -1,10 +1,11 @@
 import { ipcMain, type WebContents } from 'electron'
 import { lstat } from 'fs/promises'
-import { relative } from 'path'
+import { join, relative } from 'path'
 
 import type { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
 import { resolveInsideRoot, validateExistingTarget } from '@main/ipc/editorFs.js'
 import type { EditorFsRootRegistry } from '@main/ipc/editorFsRootRegistry.js'
+import { LSP_VIRTUAL_DIR } from '@main/lspManager.js'
 import type { LspManager } from '@main/lspManager.js'
 import type {
   LspCompletionContext,
@@ -14,19 +15,38 @@ import type {
 
 /**
  * The manager re-runs the physical check that authorizeContext ran, at the
- * moment of use, after server startup (#1268). Same rule, same root: the
- * relative path must still resolve, without symlinks, to a regular file
- * inside the root, at the same relative location. Undefined for a virtual
- * (pathless) document, which names no file to the server.
+ * moment of use, after server startup (#1268): the path must still resolve,
+ * without symlinks, to a regular file inside the root.
+ *
+ * WHY no "same relative path" check (review a of #1412): on a case-
+ * insensitive filesystem a case-only rename still resolves, and realpath
+ * returns the new spelling, so an exact comparison refused a legitimate open.
+ * Containment is the property that matters.
+ *
+ * A pathless (virtual) document still names a file to the server:
+ * `root/.agent-code-lsp/virtual-<hash>.<ext>` (makeVirtualServerUri). That
+ * directory must not be a symlink out of the root.
  */
-export function lspPhysicalTargetAssertion(context: { workspaceRoot: string; filePath: string | null }): (() => Promise<void>) | undefined {
+export function lspPhysicalTargetAssertion(context: { workspaceRoot: string; filePath: string | null }): () => Promise<void> {
   const { workspaceRoot, filePath } = context
-  if (filePath === null) return undefined
+  if (filePath === null) {
+    return async () => {
+      const directory = join(workspaceRoot, LSP_VIRTUAL_DIR)
+      let entry
+      try {
+        entry = await lstat(directory)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+        throw error
+      }
+      if (entry.isSymbolicLink()) throw new Error('LSP virtual document directory is a symbolic link')
+      await validateExistingTarget(workspaceRoot, directory)
+    }
+  }
   return async () => {
     const requested = resolveInsideRoot(workspaceRoot, filePath)
     const physical = await validateExistingTarget(workspaceRoot, requested)
     if (!(await lstat(physical)).isFile()) throw new Error('LSP document is not a file')
-    if (relative(workspaceRoot, physical) !== filePath) throw new Error('LSP document moved after authorization')
   }
 }
 
