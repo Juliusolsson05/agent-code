@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import {
+  assertHomesBelongTo,
   assertNoForeignHome,
   createAgentActivityRedactor,
   requireHomeUser,
@@ -80,7 +81,7 @@ describe('agent-activity redaction policy', () => {
       path: '/Users/recorder/Desktop/Development/agent-code',
       projectDir: '/Users/recorder/.claude/projects/-Users-recorder-Desktop-Development-agent-code',
     }))
-    expect(() => assertNoForeignHome(wrongUser, 'someoneelse')).toThrow(/still names 1 home directory/)
+    expect(() => assertNoForeignHome(wrongUser, 'someoneelse')).toThrow(/still names a home directory/)
     // The error names a count, never the user: it is printed to a terminal and may be pasted.
     expect(() => assertNoForeignHome(wrongUser, 'someoneelse')).not.toThrow(/recorder/)
     const right = JSON.stringify(createAgentActivityRedactor('recorder')({
@@ -112,6 +113,34 @@ describe('agent-activity redaction policy', () => {
     // Two one-character tails cannot get distinct tags, so both x-fill to the same key.
     const redact = createAgentActivityRedactor('someone')
     expect(() => redact({ '/Development/private/a': 1, '/Development/private/b': 2 })).toThrow(/two object keys equal/)
+  })
+
+  // Review of #1353, round 3 a: after redaction a foreign user spelled like the placeholder
+  // (`fixture-` for an 8-character recorder) cannot be told apart from it. The source can.
+  it('refuses a source whose homes are not all the named recorder', () => {
+    expect(() => assertHomesBelongTo('{"p":"/Users/fixture-/Desktop/Development/agent-code"}', 'recorder')).toThrow(/other than --home-user/)
+    expect(() => assertHomesBelongTo('{"p":"-Users-fixture--secret-Desktop-Development-agent-code"}', 'recorder')).toThrow(/other than --home-user/)
+    expect(() => assertHomesBelongTo('{"p":"/home/other/x"}', 'recorder')).toThrow(/other than --home-user/)
+    expect(() => assertHomesBelongTo('{"p":"/Users/recorder/Desktop/x","q":"-Users-recorder-Desktop-x"}', 'recorder')).not.toThrow()
+    // Steering q78: the dash encoding has no delimiter after the user, so a hyphenated foreign user
+    // that STARTS with the recorder's name must refuse as ambiguous...
+    expect(() => assertHomesBelongTo('{"p":"/Users/recorder/Desktop/x","q":"-Users-recorder-secret-Desktop-Development-agent-code"}', 'recorder')).toThrow(/other than --home-user/)
+    // ...and so must a standard folder the source never names canonically.
+    expect(() => assertHomesBelongTo('{"q":"-Users-recorder-Desktop-x"}', 'recorder')).toThrow(/other than --home-user/)
+  })
+
+  // Review of #1353, round 3 a: the pass rewrites only the canonical spellings, so any other
+  // spelling of a home must refuse the file rather than pass through untouched.
+  it.each([
+    ['lowercase', '/users/other/Desktop'],
+    ['/home', '/home/other/project'],
+    ['backslashes', 'C:\\Users\\other\\Desktop'],
+    ['JSON-escaped slashes', '\\/Users\\/other\\/Desktop'],
+    ['percent-encoded', '%2FUsers%2Fother%2FDesktop'],
+    ['a tilde home', '~other/project'],
+  ])('refuses a home spelled %s', (_label, path) => {
+    const output = JSON.stringify({ p: path })
+    expect(() => assertNoForeignHome(output, 'recorder')).toThrow(/still names/)
   })
 
   it('refuses a name too short for a unique placeholder rather than change its length', () => {

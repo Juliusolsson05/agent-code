@@ -30,6 +30,9 @@ const TEXT_FIELDS = new Set(['branch', 'content', 'draftInput', 'prompt', 'text'
 
 const PUBLIC_PROJECT = 'agent-code'
 
+/** The macOS home folders a dash-encoded project dir may continue with (see assertHomesBelongTo). */
+const HOME_FOLDERS = new Set(['Desktop', 'Documents', 'Downloads', 'Developer', 'Projects', 'Library'])
+
 /** The same-length stand-in for the recorder's home user (`fixture-home` for a 12-character name). */
 export function homePlaceholder(homeUser: string): string {
   return padded('fixture-home'.slice(0, homeUser.length), homeUser.length)
@@ -128,31 +131,77 @@ export function requireHomeUser(argv: readonly string[]): string {
 }
 
 /**
- * Refuse output that still holds a home directory other than the placeholder.
+ * Refuse INPUT whose home directories are not all the named recorder's.
  *
- * WHY a check on the RESULT and not only on the flag: a wrong `--home-user` (or a live extraction on
- * a machine whose bundles were copied from another user) would pass any flag check and still leave
- * `/Users/<someone>` in the file. This runs on the redacted text right before it is written.
+ * WHY on the input (review of #1353, round 3 a): the output guard below can only compare against
+ * the placeholder, and a foreign user whose name happens to be spelled like the placeholder
+ * (`/Users/fixture-` for an 8-character recorder) is indistinguishable from it after redaction.
+ * Before redaction there is no such ambiguity: every home in the source must BE the recorder, so a
+ * wrong `--home-user` is caught whatever the other user is called.
+ */
+export function assertHomesBelongTo(sourceJson: string, homeUser: string): void {
+  const foreign = new Set<string>()
+  for (const match of sourceJson.matchAll(/\/(?:Users|home)\/([^/"\s\\]+)/g)) {
+    if (match[1] !== homeUser) foreign.add(match[1]!)
+  }
+  // Claude's dash-encoded dir (`-Users-<name>-Desktop-…`) has no delimiter after the name, so
+  // `-Users-recorder-secret-Desktop-…` STARTS with `recorder-` although its user is
+  // `recorder-secret` (steering q78). The encoding cannot be decoded, so it is accepted only when it
+  // is unambiguous: the component right after the recorder must be a standard home folder, AND the
+  // source must name that same folder canonically (`/Users/<recorder>/<folder>`, which has real
+  // delimiters). The corpus's 38 dash homes are all `-Users-<recorder>-Desktop`, beside canonical
+  // `/Users/<recorder>/Desktop` paths. Anything else refuses as ambiguous.
+  let at = sourceJson.indexOf('-Users-')
+  while (at !== -1) {
+    const rest = sourceJson.slice(at + '-Users-'.length)
+    const folder = rest.startsWith(`${homeUser}-`) ? rest.slice(homeUser.length + 1).split(/[-"\s/\\]/, 1)[0]! : ''
+    const unambiguous = HOME_FOLDERS.has(folder) && sourceJson.includes(`/Users/${homeUser}/${folder}`)
+    if (!unambiguous) foreign.add(`#${at}`)
+    at = sourceJson.indexOf('-Users-', at + 1)
+  }
+  if (foreign.size > 0) throw new Error(`the source names a home directory other than --home-user (${foreign.size} occurrence${foreign.size === 1 ? '' : 's'}); not writing it`)
+}
+
+/**
+ * Refuse output that still holds a home directory other than the placeholder, in ANY spelling.
+ *
+ * WHY a check on the RESULT as well: a wrong `--home-user` (or a live extraction on a machine whose
+ * bundles came from another user) would pass any flag check; this runs on the redacted text right
+ * before it is written.
+ *
+ * WHY every other spelling refuses outright (review of #1353, round 3 a): the pass rewrites only
+ * the canonical `/Users/<name>` and Claude's dash-encoded `-Users-<name>-`. A home written any
+ * other way — lowercase `/users/`, backslashes (`C:\Users\…`), JSON-escaped `\/`, percent-encoded
+ * `%2F`, or `~name` — would pass through untouched, so its presence means the input has a shape this
+ * policy does not handle, and the file must not be written. The committed corpus has none of these
+ * (text fields, where `~` does occur, are x-filled before this runs).
+ *
+ * NOT covered, stated plainly: an identifier with no path around it in a field the policy does not
+ * treat as text (`{ "user": "someone" }`). No pattern can recognise that. The corpus has no such
+ * field; a regeneration from a DIFFERENT corpus needs its own full per-key audit, as this one had.
  */
 export function assertNoForeignHome(redactedJson: string, homeUser: string): void {
   const allowed = homeUser === '' ? undefined : homePlaceholder(homeUser)
   const foreign = new Set<string>()
-  // `/Users/<name>` and `/home/<name>`: the segment must BE the placeholder, exactly.
-  // WHY exact (steering q76): the first version also accepted any name the placeholder merely
-  // starts with, so with a 8-character recorder (placeholder `fixture-`) an unredacted
-  // `/Users/fixture/…` passed.
-  for (const match of redactedJson.matchAll(/\/(?:Users|home)\/([^/"\s]+)/g)) {
-    if (match[1] !== allowed) foreign.add(match[1]!)
+  // Any home-like segment after any separator spelling, case-insensitive. Only the exact canonical
+  // `/Users/<placeholder>` (or `/home/<placeholder>`) passes; the slash path must BE the placeholder
+  // (steering q76: a prefix of it is someone else).
+  const home = /(\/|\\\\|\\\/|%2f)(users|home)(?:\/|\\\\|\\\/|%2f)+([^/\\%"\s]+)/gi
+  for (const match of redactedJson.matchAll(home)) {
+    const canonical = match[1] === '/' && (match[2] === 'Users' || match[2] === 'home') && match[0] === `/${match[2]}/${match[3]}`
+    if (!canonical || match[3] !== allowed) foreign.add(`${match.index}`)
   }
   // Claude's dash-encoded projects dir, `-Users-<name>-Desktop-…`. A user name can itself contain
   // dashes (the placeholder does), so it cannot be parsed back out; instead every `-Users-` must be
   // followed by the whole placeholder and a dash. Anything else is foreign or ambiguous, and both
-  // refuse.
+  // refuse. (The input check above is what catches a foreign name spelled like the placeholder.)
   let at = redactedJson.indexOf('-Users-')
   while (at !== -1) {
-    const after = redactedJson.slice(at + '-Users-'.length)
-    if (allowed === undefined || !after.startsWith(`${allowed}-`)) foreign.add(after.split(/[-"\s/]/, 1)[0]!)
+    if (allowed === undefined || !redactedJson.startsWith(`${allowed}-`, at + '-Users-'.length)) foreign.add(`-${at}`)
     at = redactedJson.indexOf('-Users-', at + 1)
   }
-  if (foreign.size > 0) throw new Error(`redacted output still names ${foreign.size} home director${foreign.size === 1 ? 'y' : 'ies'}; not writing it`)
+  for (const match of redactedJson.matchAll(/~[A-Za-z_][\w.-]*/g)) foreign.add(`~${match.index}`)
+  // The count is of occurrences, and the message never repeats the name: it is printed to a
+  // terminal and may be pasted into a PR.
+  if (foreign.size > 0) throw new Error(`redacted output still names a home directory other than the placeholder (${foreign.size} occurrence${foreign.size === 1 ? '' : 's'}); not writing it`)
 }

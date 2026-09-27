@@ -44,7 +44,9 @@ async function stage(): Promise<{ input: string; output: string }> {
 
 async function extract(args: string[]): Promise<{ code: number; stderr: string }> {
   try {
-    await run(TSX, ['--tsconfig', join(REPO, 'tsconfig.node.json'), SCRIPT, ...args], { cwd })
+    // HOME is the temp cwd: if a mistake ever reached the live extraction, it would find no
+    // bundles instead of reading (and fixture-ising) this machine's real ones.
+    await run(TSX, ['--tsconfig', join(REPO, 'tsconfig.node.json'), SCRIPT, ...args], { cwd, env: { ...process.env, HOME: cwd } })
     return { code: 0, stderr: '' }
   } catch (error) {
     const failed = error as { code?: number; stderr?: string }
@@ -75,6 +77,47 @@ describe.skipIf(process.platform === 'win32')('extract-agent-activity-runtimes -
     const { output } = await stage()
     const input = join(cwd!, 'foreign.json')
     await writeFile(input, JSON.stringify({ provenance: 'old', records: [{ worktreePath: '/Users/fixture/Desktop/Development/agent-code' }] }))
+    const result = await extract(['--redact-from', input, '--home-user', 'recorder'])
+    expect(result.code).not.toBe(0)
+    expect(await readFile(output, 'utf8')).toBe(SENTINEL)
+  }, 60_000)
+
+  // Review of #1353, round 3 a: a bare --redact-from fell through to the LIVE extraction and
+  // overwrote the output with whatever this machine's bundles held.
+  it.each([
+    ['a bare --redact-from', ['--redact-from']],
+    ['--redact-from with a flag for its operand', ['--redact-from', '--home-user', 'recorder']],
+    ['an unknown flag', ['--redact-form', 'x.json']],
+  ])('refuses %s without touching the output', async (_label, args) => {
+    const { output } = await stage()
+    const result = await extract([...args])
+    expect(result.code).not.toBe(0)
+    expect(await readFile(output, 'utf8')).toBe(SENTINEL)
+  }, 60_000)
+
+  // Review of #1353, round 3 a: a foreign user spelled like the placeholder passed the OUTPUT
+  // guard; the source check refuses it.
+  it('refuses a foreign home spelled like the placeholder', async () => {
+    const { output } = await stage()
+    const input = join(cwd!, 'lookalike.json')
+    await writeFile(input, JSON.stringify({ provenance: 'old', records: [{ worktreePath: '/Users/fixture-/Desktop/Development/agent-code' }] }))
+    const result = await extract(['--redact-from', input, '--home-user', 'recorder'])
+    expect(result.code).not.toBe(0)
+    expect(await readFile(output, 'utf8')).toBe(SENTINEL)
+  }, 60_000)
+
+  // Steering q78: `-Users-recorder-secret-…` began with `recorder-`, so a wrong --home-user wrote
+  // the foreign user's `-secret` suffix into the fixture.
+  it('refuses a hyphenated foreign home that starts with the recorder name', async () => {
+    const { output } = await stage()
+    const input = join(cwd!, 'hyphenated.json')
+    await writeFile(input, JSON.stringify({
+      provenance: 'old',
+      records: [{
+        worktreePath: '/Users/recorder/Desktop/Development/agent-code',
+        projectDir: '/Users/recorder/.claude/projects/-Users-recorder-secret-Desktop-Development-agent-code',
+      }],
+    }))
     const result = await extract(['--redact-from', input, '--home-user', 'recorder'])
     expect(result.code).not.toBe(0)
     expect(await readFile(output, 'utf8')).toBe(SENTINEL)

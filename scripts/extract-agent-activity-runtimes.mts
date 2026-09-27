@@ -48,6 +48,7 @@ import { join } from 'node:path'
 import process from 'node:process'
 
 import {
+  assertHomesBelongTo,
   assertNoForeignHome,
   createAgentActivityRedactor,
   requireHomeUser,
@@ -224,6 +225,7 @@ async function main(): Promise<void> {
   }
 
   const homeUser = homedir().split('/').pop() ?? ''
+  assertHomesBelongTo(JSON.stringify(fixture), homeUser)
   const redacted = `${JSON.stringify(createAgentActivityRedactor(homeUser)(fixture), null, 2)}\n`
   assertNoForeignHome(redacted, homeUser)
   await writeFile(OUT, redacted, 'utf8')
@@ -247,7 +249,9 @@ async function main(): Promise<void> {
  * home directory other than the placeholder.
  */
 async function redactFrom(source: string, homeUser: string): Promise<void> {
-  const fixture = JSON.parse(await readFile(source, 'utf8')) as Record<string, unknown>
+  const text = await readFile(source, 'utf8')
+  assertHomesBelongTo(text, homeUser)
+  const fixture = JSON.parse(text) as Record<string, unknown>
   fixture.provenance = RUNTIME_STATES_PROVENANCE
   const redacted = `${JSON.stringify(createAgentActivityRedactor(homeUser)(fixture), null, 2)}\n`
   assertNoForeignHome(redacted, homeUser)
@@ -256,8 +260,16 @@ async function redactFrom(source: string, homeUser: string): Promise<void> {
 }
 
 const argv = process.argv.slice(2)
-const redactSource = argv.includes('--redact-from') ? argv[argv.indexOf('--redact-from') + 1] : undefined
-if (redactSource !== undefined) {
+if (argv.includes('--redact-from')) {
+  // WHY the operand is checked here (review of #1353, round 3 a): a bare `--redact-from` used to
+  // leave the source undefined and fall through to the LIVE extraction, which reads this machine's
+  // bundles and overwrites the tracked fixture. Every part of the invocation is validated before
+  // anything is read or written.
+  const redactSource = argv[argv.indexOf('--redact-from') + 1]
+  if (redactSource === undefined || redactSource.startsWith('--')) {
+    console.error('--redact-from needs a source file; refusing to fall back to a live extraction')
+    process.exit(2)
+  }
   // Validated before anything is read or written (steering q74); see requireHomeUser.
   let homeUser: string
   try {
@@ -267,6 +279,10 @@ if (redactSource !== undefined) {
     process.exit(2)
   }
   await redactFrom(redactSource, homeUser)
+} else if (argv.length > 0) {
+  // An unknown flag is a typo of the mode above, never a request for a live extraction.
+  console.error(`unknown arguments: ${argv.length}; only --redact-from <file> --home-user <recorder> is accepted`)
+  process.exit(2)
 } else {
   await main()
 }

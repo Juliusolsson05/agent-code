@@ -77,6 +77,20 @@ that leak developer data. Each item below is taken from the issue, with its curr
      - Tests: `testing/unit/agentActivityRedactionPolicy.test.ts`, plus the process-level
        `testing/system/fixtures-privacy/agentActivityRedactFrom.system.test.ts`. Both fail on
        `2f930233`.
+   - **Round-3 privacy review and steering q76/q78:**
+     - The output guard accepts only the EXACT canonical `/Users/<placeholder>`. Every other home
+       spelling refuses the file: lowercase, backslash, JSON-escaped, `%2F`, `~name`, a prefix of the
+       placeholder.
+     - A new SOURCE check, before redaction, requires every home to be the named recorder, so a
+       foreign user spelled like the placeholder is caught.
+     - The dash-encoded form (`-Users-<name>-…`) has no delimiter after the name. It is accepted only
+       when a standard home folder follows the recorder and the source names that folder
+       canonically; anything else refuses as ambiguous.
+     - A bare `--redact-from` or an unknown flag exits before any read or write, instead of falling
+       through to the live extraction.
+     - **Stated limit:** an identifier with no path around it, in a field the policy doesn't treat as
+       text, can't be recognised by any pattern. This corpus has none, and a regeneration from a
+       different corpus needs its own per-key audit.
    - The fleet fixtures:
      - `startup` in live-fleet and `bringdown` in both are same-length placeholders.
      - Their `provenance` now says so.
