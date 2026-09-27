@@ -122,7 +122,7 @@ export function registerUserMcpTools(
 
   server.registerTool('mcp_servers_update', {
     title: 'Update an MCP server',
-    description: 'Change one server: its name, its config entry (the full entry object, same shape as mcp_servers_add accepts; keep ${input:…} references for secrets), which providers new agents get it on, or turn it OFF. Changing the entry\'s URL, command, arguments or environment forgets its stored secrets and switches it off until the user reviews it. You cannot turn a server on.',
+    description: 'Change one server: its name, its config entry (the full entry object, same shape as mcp_servers_add accepts; keep ${input:…} references for secrets), which providers new agents get it on, or turn it OFF. Changing the entry\'s URL, command, arguments or environment switches it off until the user reviews it; its stored secrets are kept but not used with the changed config until the user enters them again. You cannot turn a server on.',
     inputSchema: {
       id: z.string().min(1).max(64),
       name: z.string().min(1).max(64).optional(),
@@ -161,13 +161,13 @@ export function registerUserMcpTools(
 
   server.registerTool('mcp_servers_remove', {
     title: 'Remove an MCP server',
-    description: 'Delete one of the user\'s MCP servers and its stored secrets. Only when the user\'s current request asks to remove that server.',
+    description: 'Delete one of the user\'s MCP servers and its stored secrets. Only when the user\'s current request asks to remove that server. A server with a secret waiting for the user\'s confirmation can only be removed by the user.',
     inputSchema: { id: z.string().min(1).max(64) },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   }, async ({ id }) => {
     try {
       const name = await nameOf(id)
-      const result = await service().delete(id)
+      const result = await service().delete(id, 'agent')
       if (result.ok) changed(`An agent removed MCP server ${name}`)
       return mutation(result)
     } catch (error) {
@@ -177,7 +177,7 @@ export function registerUserMcpTools(
 
   server.registerTool('mcp_servers_set_secret', {
     title: 'Set an MCP server secret',
-    description: 'Store one secret (a ${input:id} the server config references) encrypted. Only use a value the user gave you in this conversation; never invent one. The value is never returned by any tool.',
+    description: 'Store one secret (a ${input:id} the server config references) encrypted. Only use a value the user gave you in this conversation; never invent one. The value is never returned by any tool. Any value you set switches the server off until the user reviews it, and its other secrets wait for the user to confirm them.',
     inputSchema: {
       id: z.string().min(1).max(64),
       inputId: z.string().min(1).max(64),
@@ -187,8 +187,12 @@ export function registerUserMcpTools(
   }, async ({ id, inputId, value }) => {
     try {
       const name = await nameOf(id)
-      const result = await service().setSecret(id, inputId, value)
-      if (result.ok) changed(`An agent set a secret for MCP server ${name}`)
+      const result = await service().setSecret(id, inputId, value, 'agent')
+      if (result.ok) {
+        changed(result.pendingReview
+          ? `An agent set a secret for MCP server ${name} (off until you review it)`
+          : `An agent set a secret for MCP server ${name}`)
+      }
       return mutation(result)
     } catch (error) {
       return failure(error)

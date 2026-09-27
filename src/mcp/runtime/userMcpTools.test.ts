@@ -126,6 +126,75 @@ describe('mcp_servers built-in domain', () => {
     await close()
   })
 
+  // #1420 q127: the agent tool is the AGENT path, never the user path. A
+  // value it sets turns the server off for review and withholds the sibling
+  // secret; if the tool ever passed the user actor, the sibling would be
+  // rebound and keep launching.
+  it('set_secret from an agent turns a reviewed server off and withholds its other secret', async () => {
+    const saved = await service.save({
+      name: 'svc',
+      enabled: true,
+      providers: { claude: true, codex: true },
+      entry: { command: 'node', args: ['client.js'], env: { API_BASE_URL: '${input:base}', API_KEY: '${input:key}' } },
+      inputs: [{ id: 'base', description: 'base' }, { id: 'key', description: 'key' }],
+      secrets: { base: 'https://trusted.example', key: TOKEN },
+    })
+    expect(saved.ok).toBe(true)
+    const id = (await service.snapshot()).servers[0]!.id
+    const { call, close } = await connect(['mcp_servers'])
+    await call('mcp_servers_set_secret', { id, inputId: 'key', value: 'agent-chosen-value-9999' })
+    const [server] = (await service.snapshot()).servers
+    expect(server!.pendingReview).toBe(true)
+    expect(server!.enabled).toBe(false)
+    expect(server!.secrets.base).toMatchObject({ set: false, unconfirmed: 'inputs-changed' })
+    await close()
+  })
+
+  // r3 round-2 reviews a+b: the remove tool is the AGENT path, so a server
+  // holding a withheld secret cannot be removed through it.
+  it('remove refuses a server whose secret is withheld for the user', async () => {
+    await service.save({
+      name: 'svc',
+      enabled: true,
+      providers: { claude: true, codex: true },
+      entry: { command: 'node', args: ['client.js'], env: { API_BASE_URL: '${input:base}', API_KEY: '${input:key}' } },
+      inputs: [{ id: 'base', description: 'base' }, { id: 'key', description: 'key' }],
+      secrets: { base: 'https://trusted.example', key: TOKEN },
+    })
+    const id = (await service.snapshot()).servers[0]!.id
+    await service.setSecret(id, 'base', 'https://evil.example', 'agent')
+    const { call, close } = await connect(['mcp_servers'])
+    const removed = await call('mcp_servers_remove', { id })
+    expect(removed.isError).toBe(true)
+    expect((await service.snapshot()).servers.map(server => server.id)).toEqual([id])
+    await close()
+  })
+
+  // q131 through the exposed tools: mcp_servers_update drops every reference
+  // (the server keeps no inputs), then mcp_servers_remove. The orphaned
+  // secrets are the user's, so the removal is refused and the bytes stay.
+  it('update dropping every reference, then remove, cannot delete the orphaned secrets', async () => {
+    await service.save({
+      name: 'svc',
+      enabled: true,
+      providers: { claude: true, codex: true },
+      entry: { command: 'node', args: ['client.js'], env: { API_BASE_URL: '${input:base}', API_KEY: '${input:key}' } },
+      inputs: [{ id: 'base', description: 'base' }, { id: 'key', description: 'key' }],
+      secrets: { base: 'https://trusted.example', key: TOKEN },
+    })
+    const id = (await service.snapshot()).servers[0]!.id
+    const keyFile = join(dir, 'mcp-secrets', id, 'key.bin')
+    const keyBytes = await readFile(keyFile)
+    const { call, close } = await connect(['mcp_servers'])
+    const updated = await call('mcp_servers_update', { id, entry: { command: 'node', args: ['client.js'] } })
+    expect(updated.isError).toBe(false)
+    expect((await service.snapshot()).servers[0]!.inputs).toEqual([])
+    const removed = await call('mcp_servers_remove', { id })
+    expect(removed.isError).toBe(true)
+    expect(await readFile(keyFile)).toEqual(keyBytes)
+    await close()
+  })
+
   it('cannot turn a server on (review round 2)', async () => {
     const { call, close } = await connect(['mcp_servers'])
     await call('mcp_servers_add', { config: '{"url":"https://x.dev/mcp"}', name: 'x' })

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 
 import type { SecretCodec } from '@main/keyVault/vaultStore.js'
@@ -43,8 +43,10 @@ import {
   codexShellPolicyStyle,
   readNativeMcpServers,
 } from './nativeServers.js'
-import { UserMcpSecretStore } from './secrets.js'
+import { UserMcpSecretStore, type SecretBinding } from './secrets.js'
 import { loadUserMcpDocument, saveUserMcpDocument } from './store.js'
+
+type PendingSecretRestore = { run: () => Promise<void>; safeWithNewDocument: boolean }
 
 export type UserMcpLaunchResolution = {
   servers: ResolvedUserMcpServer[]
@@ -76,6 +78,22 @@ export type UserMcpServiceDeps = {
  * deleted or switched off. The renderer contributes only the pane's explicit
  * per-agent choices; everything else is read here at launch.
  */
+/**
+ * Whether `inputId` names one of `ids`, ignoring letter case (B6 check at
+ * fb61adfa). Secrets live in `<inputId>.bin`, and on a case-insensitive disk
+ * (macOS by default, Windows) `TOK.bin` IS `tok.bin`: an agent writing `TOK`
+ * overwrote the withheld `tok`. Case-folding refuses it on every filesystem,
+ * which is the fail-closed side (a user can still rename or re-enter).
+ */
+function sameInputId(ids: readonly string[], inputId: string): boolean {
+  const folded = inputId.toLowerCase()
+  return ids.some(id => id.toLowerCase() === folded)
+}
+
+/** Why an agent's write or removal was refused (see withheldInputIds). */
+const WITHHELD_REFUSAL = (inputId: string): string =>
+  `Secret "${inputId}" is withheld until the user confirms or re-enters it in Settings → MCP, so an agent cannot replace or remove it.`
+
 export class UserMcpService {
   private document: UserMcpDocument = { version: 1, servers: [] }
   private storeProblem: string | undefined
@@ -155,6 +173,11 @@ export class UserMcpService {
         const problem = value === '' ? null : secretValueProblem(value)
         if (problem) return { ok: false, error: problem }
       }
+      if (actor === 'agent' && existing) {
+        const withheld = await this.withheldInputIds(existing)
+        const overwrite = Object.keys(input.secrets ?? {}).find(inputId => sameInputId(withheld, inputId))
+        if (overwrite) return { ok: false, error: WITHHELD_REFUSAL(overwrite) }
+      }
       const entry = normalizeEntry(input.entry)
       const destinationChanged = existing !== undefined && userMcpDestination(existing.entry) !== userMcpDestination(entry)
       // An agent proposes, the user approves (review round 2): a server an
@@ -163,7 +186,12 @@ export class UserMcpService {
       // prompt-injected agent could install a command that every future agent
       // runs. A user save of an existing server clears the flag only by
       // turning it on (setEnabled); saving it off keeps the flag visible.
-      const agentNeedsReview = actor === 'agent' && (existing === undefined || destinationChanged || existing.pendingReview === true)
+      // An agent (or an agent's import) supplying ANY input value can move
+      // where the other secrets go without touching the entry, so it needs
+      // review exactly like an entry change (B6 R3, q127: no classifier, the
+      // key name proves nothing about how a program uses the value).
+      const agentSetsValue = Object.keys(input.secrets ?? {}).length > 0
+      const agentNeedsReview = actor === 'agent' && (existing === undefined || destinationChanged || agentSetsValue || existing.pendingReview === true)
       const enabled = actor === 'agent'
         ? (agentNeedsReview ? false : existing!.enabled && input.enabled)
         : input.enabled
@@ -183,43 +211,90 @@ export class UserMcpService {
       // and launch already refuses to attach the server until it is set.
       const problems = validateServer(server, others)
       if (problems.length > 0) return { ok: false, error: problems[0]!.message, problems }
-      // Changing WHERE a server connects forgets its stored secrets (review
-      // round 1). Otherwise an edit — or an agent's mcp_servers_update after a
-      // prompt injection — could keep `${input:token}` and point the entry at
+      // Changing WHERE a server connects must not carry its tokens along
+      // (review round 1): otherwise an agent's mcp_servers_update after a
+      // prompt injection could keep `${input:token}`, point the entry at
       // another host or command, and the next launch would hand the token to
-      // it: exfiltration without ever reading a secret. Secrets supplied in
+      // it. Since q113 that is enforced at READ time by the destination
+      // binding. A user's move also forgets the old secrets (their intent is a
+      // new server); an agent's move keeps the blobs, withheld, so it cannot
+      // delete credentials either (fresh r3 reviews a+b). Secrets supplied in
       // this same save are set afterwards, so an intentional move that
       // re-enters the token still works in one step.
+      // SECURITY INVARIANT (q110, #1420 review a): a destination is never
+      // observable, by a launch or by a restart at any point, paired with a
+      // token that was not saved for it. The order below is what holds it:
+      //   1. snapshot the server's current secrets (strictly: an unreadable
+      //      directory aborts here, before anything changes);
+      //   2. on a USER destination change, CLEAR the old secrets while the old
+      //      destination is still the published one, on disk and in memory
+      //      (an agent's change clears nothing; see forgetsSecrets below. The
+      //      q113 read-time binding is what holds the invariant either way);
+      //   3. only then publish the new document (memory, then disk);
+      //   4. write the new secrets and (user only) prune.
+      // A crash anywhere leaves at worst a server with NO secret: fail closed.
+      // The earlier order (document first, then clear) had a window, and a
+      // failed rollback made it durable, in which the NEW destination sat on
+      // disk with the OLD token, and resolveForLaunch could read it.
+      //
+      // On failure, mutate() rolls the document back first and restores this
+      // snapshot only if the old document is back on disk, or if the
+      // destination did not change (then the old secrets still match the
+      // document that is on disk). Otherwise the secrets stay cleared.
+      const previousSecrets = existing
+        ? await this.secrets.snapshotServer(server.id)
+        : new Map<string, Buffer>()
+      // Only the USER's edits forget secrets (fresh r3 reviews a+b). An agent's
+      // edit used to clear too, which deleted a secret already WITHHELD for
+      // the user's confirmation: a prompt-injected agent could erase a
+      // credential without review. Since q113 the read-time binding keeps an
+      // old token away from a new destination, so the agent's edit leaves the
+      // blobs on disk (unusable for the new entry until the user re-enters
+      // them, usable again if the edit is reverted) and deletes nothing.
+      const forgetsSecrets = destinationChanged && actor === 'user'
+      this.pendingSecretRestore = {
+        run: () => this.secrets.restoreServer(server.id, previousSecrets),
+        safeWithNewDocument: !forgetsSecrets,
+      }
+      if (forgetsSecrets) await this.secrets.clearServer(server.id)
       this.document = {
         version: 1,
         servers: existing
           ? this.document.servers.map(candidate => candidate.id === server.id ? server : candidate)
           : [...this.document.servers, server],
       }
-      // Document first, secret blobs after (review round 2): a failed persist
-      // rolls the document back in mutate(), and blobs cleared before it could
-      // not be rolled back, so a failed destination edit used to lose the
-      // server's token for good.
       await this.persist()
-      if (destinationChanged) await this.secrets.clearServer(server.id)
-      for (const [inputId, value] of Object.entries(input.secrets ?? {})) {
-        if (server.inputs.some(candidate => candidate.id === inputId)) {
-          await this.secrets.set(server.id, inputId, value)
-        }
-      }
-      await this.secrets.prune(server.id, server.inputs.map(candidate => candidate.id))
+      const supplied = Object.fromEntries(Object.entries(input.secrets ?? {})
+        .filter(([inputId]) => server.inputs.some(candidate => candidate.id === inputId)))
+      await this.writeValues(server, supplied, actor)
+      // Pruning orphans is the user's housekeeping for the same reason: an
+      // agent dropping a reference must not delete that secret.
+      if (actor === 'user') await this.secrets.prune(server.id, server.inputs.map(candidate => candidate.id))
       return {
         ok: true,
         id: server.id,
-        ...(destinationChanged ? { secretsCleared: true } : {}),
+        ...(forgetsSecrets ? { secretsCleared: true } : {}),
         ...(pendingReview ? { pendingReview: true } : {}),
       }
     })
   }
 
-  delete(id: string): Promise<UserMcpMutationResult> {
+  /** An agent may not remove a server holding a withheld secret (see withheldInputIds). */
+  delete(id: string, actor: UserMcpActor = 'user'): Promise<UserMcpMutationResult> {
     return this.mutate(async () => {
-      if (!this.document.servers.some(server => server.id === id)) return { ok: false, error: 'That server no longer exists.' }
+      const existing = this.document.servers.find(server => server.id === id)
+      if (!existing) return { ok: false, error: 'That server no longer exists.' }
+      if (actor === 'agent') {
+        const [withheld] = await this.withheldInputIds(existing)
+        if (withheld) return { ok: false, error: `${WITHHELD_REFUSAL(withheld)} Only the user can remove this server now (Settings → MCP).` }
+      }
+      // Snapshot strictly first (q110), so a failed clear can restore exactly
+      // what was there once the document is back (see save()).
+      const previousSecrets = await this.secrets.snapshotServer(id)
+      this.pendingSecretRestore = {
+        run: () => this.secrets.restoreServer(id, previousSecrets),
+        safeWithNewDocument: false,
+      }
       this.document = { version: 1, servers: this.document.servers.filter(server => server.id !== id) }
       await this.persist()
       await this.secrets.clearServer(id)
@@ -243,16 +318,153 @@ export class UserMcpService {
     return this.update(id, server => ({ ...server, providers: { ...server.providers, [provider]: enabled } }))
   }
 
-  setSecret(id: string, inputId: string, value: string): Promise<UserMcpMutationResult> {
+  /**
+   * The USER confirms that a secret saved by an earlier version is for this
+   * server's current destination (q114), which binds it. Deliberately NOT on
+   * the agent tool surface (userMcpTools): an agent confirming an old token
+   * for a destination it just set would be the exfiltration binding prevents.
+   */
+  confirmSecret(id: string, inputId: string): Promise<UserMcpMutationResult> {
+    return this.mutate(async () => {
+      const server = this.document.servers.find(candidate => candidate.id === id)
+      if (!server) return { ok: false, error: 'That server no longer exists.' }
+      if (!server.inputs.some(input => input.id === inputId)) return { ok: false, error: `No secret named "${inputId}".` }
+      const confirmed = await this.secrets.confirm(id, inputId, (await this.bindingsFor(server))[inputId]!)
+      if (!confirmed) return { ok: false, error: `Secret "${inputId}" has nothing to confirm.` }
+      return { ok: true }
+    })
+  }
+
+  /**
+   * Store one secret. An AGENT setting ANY input turns the server off and
+   * flags it for review first (B6 R3, q127): the value may move where the
+   * other secrets go, and those are withheld by their bindings until the user
+   * confirms. The user path (Settings IPC) is itself the confirmation; see
+   * writeValues.
+   */
+  setSecret(id: string, inputId: string, value: string, actor: UserMcpActor = 'user'): Promise<UserMcpMutationResult> {
     return this.mutate(async () => {
       const problem = value === '' ? null : secretValueProblem(value)
       if (problem) return { ok: false, error: problem }
       const server = this.document.servers.find(candidate => candidate.id === id)
       if (!server) return { ok: false, error: 'That server no longer exists.' }
       if (!server.inputs.some(input => input.id === inputId)) return { ok: false, error: `No secret named "${inputId}".` }
-      await this.secrets.set(id, inputId, value)
-      return { ok: true }
+      if (actor === 'agent' && sameInputId(await this.withheldInputIds(server), inputId)) {
+        return { ok: false, error: WITHHELD_REFUSAL(inputId) }
+      }
+      // q127: ANY input an agent changes, clearing included.
+      const needsReview = actor === 'agent'
+      if (needsReview) {
+        // Published BEFORE the value is written: a crash between the two
+        // leaves a reviewed-off server with the old value, never an enabled
+        // one with the new.
+        const flagged: UserMcpServer = { ...server, enabled: false, pendingReview: true }
+        this.document = { version: 1, servers: this.document.servers.map(candidate => candidate.id === id ? flagged : candidate) }
+        await this.persist()
+      }
+      await this.writeValues(server, { [inputId]: value }, actor)
+      return { ok: true, ...(needsReview ? { pendingReview: true } : {}) }
     })
+  }
+
+  /**
+   * What each of the server's secrets is bound to (#1420, B6 R3, q127): its
+   * destination identity plus a digest of the values of EVERY other input the
+   * entry references. `pending` overlays values about to be written, so a
+   * record is bound to the values it will be launched with.
+   *
+   * WHY every other input and no credential/steering classifier (q127): a
+   * key's NAME and a value's shape do not prove its role; a stdio program can
+   * read API_KEY as an endpoint. A record's own value is left out, so the
+   * record for a rotated token is still bound to what it was saved for.
+   * Values are read raw (storedValue): the digest must see what a launch would
+   * substitute, bound or not.
+   */
+  private async bindingsFor(server: UserMcpServer, pending: Readonly<Record<string, string>> = {}): Promise<Record<string, SecretBinding>> {
+    const destination = userMcpDestination(server.entry)
+    const referenced = referencedInputIds(server.entry).sort()
+    const values = new Map<string, string | null>()
+    for (const inputId of referenced) {
+      values.set(inputId, inputId in pending ? (pending[inputId] || null) : await this.secrets.storedValue(server.id, inputId))
+    }
+    const bindings: Record<string, SecretBinding> = {}
+    for (const input of server.inputs) {
+      const others = referenced.filter(inputId => inputId !== input.id).map(inputId => [inputId, values.get(inputId) ?? null])
+      bindings[input.id] = { destination, inputs: createHash('sha256').update(JSON.stringify(others)).digest('hex') }
+    }
+    return bindings
+  }
+
+  /**
+   * Inputs whose stored secret is WITHHELD: a blob exists but does not prove
+   * its current binding (legacy, bound before an agent changed another input,
+   * or not decryptable at all, q130). The user can still confirm, re-enter or
+   * recover them.
+   *
+   * WHY an agent may not overwrite or delete one (r3 round-2 reviews a+b): a
+   * withheld secret is kept precisely so the USER decides what happens to it.
+   * An agent overwriting it (mcp_servers_set_secret, save with values) or
+   * removing its server (mcp_servers_remove) destroyed the ciphertext before
+   * that decision, so a prompt-injected agent could erase a credential it can
+   * never read. A valid secret may still be replaced by an agent (a user
+   * asking in chat to rotate a token), which already needs review.
+   */
+  private async withheldInputIds(server: UserMcpServer): Promise<string[]> {
+    const bindings = await this.bindingsFor(server)
+    const withheld: string[] = []
+    // Defined inputs AND every blob on disk (r3 round 3, review a): an agent
+    // edit that drops an input keeps its blob, and a guard walking only the
+    // defined inputs let mcp_servers_remove delete it. A blob with no input
+    // can prove no binding, so it is withheld.
+    const ids = [...new Set([...server.inputs.map(input => input.id), ...await this.secrets.storedInputIds(server.id)])]
+    for (const id of ids) {
+      // Raw presence, not a decrypted value (q130): a blob that exists but
+      // cannot be decrypted is a secret the user may still recover, so it
+      // counts as withheld. Only ENOENT means there is nothing to protect.
+      if (!(await this.secrets.present(server.id, id))) continue
+      const binding = bindings[id]
+      if (!binding || await this.secrets.get(server.id, id, binding) === null) withheld.push(id)
+    }
+    return withheld
+  }
+
+  /**
+   * Write input values, bound to the values they will launch with.
+   *
+   * USER (Settings IPC; q127): the user's own edit is the confirmation, so
+   * every sibling that was VALID just before the edit is rebound to the new
+   * digest. Rotating one token therefore never locks out the others. A sibling
+   * that was already withheld (an earlier agent change) stays withheld: an
+   * unrelated Settings edit must not bless that change; only an explicit
+   * confirm or a re-entry does.
+   *
+   * AGENT (MCP tools, imports): no sibling is rebound, so every sibling whose
+   * digest included the changed value is withheld until the user confirms it.
+   * The agent tools can only reach this with actor 'agent'
+   * (userMcpTools.ts); the user actor is only ever passed by the Settings IPC.
+   *
+   * Written value first, siblings after: a crash between them leaves a
+   * sibling withheld (fail closed), never a sibling bound to values it was not
+   * confirmed for.
+   */
+  private async writeValues(server: UserMcpServer, supplied: Readonly<Record<string, string>>, actor: UserMcpActor): Promise<void> {
+    if (Object.keys(supplied).length === 0) return
+    const valid: Array<[string, string]> = []
+    if (actor === 'user') {
+      const before = await this.bindingsFor(server)
+      for (const input of server.inputs) {
+        if (input.id in supplied) continue
+        const value = await this.secrets.get(server.id, input.id, before[input.id]!)
+        if (value !== null) valid.push([input.id, value])
+      }
+    }
+    const after = await this.bindingsFor(server, supplied)
+    for (const [inputId, value] of Object.entries(supplied)) {
+      await this.secrets.set(server.id, inputId, value, after[inputId]!)
+    }
+    for (const [inputId, value] of valid) {
+      await this.secrets.set(server.id, inputId, value, after[inputId]!)
+    }
   }
 
   /**
@@ -299,7 +511,23 @@ export class UserMcpService {
    *     "it's attached" while the agent has no such tools.
    * A dropped server never fails the launch.
    */
-  async resolveForLaunch(params: {
+  /**
+   * Launch reads are serialized with mutations (q110). Reading
+   * `this.document` and the secret store while a save was between its steps
+   * could see a half-applied change; now a launch runs strictly before or
+   * after each mutation, never inside one.
+   */
+  resolveForLaunch(params: {
+    provider: string
+    overrides: Readonly<Record<string, boolean>>
+    cwd: string
+  }): Promise<UserMcpLaunchResolution> {
+    const run = this.tail.then(() => this.resolveForLaunchNow(params))
+    this.tail = run.then(() => {}, () => {})
+    return run
+  }
+
+  private async resolveForLaunchNow(params: {
     provider: string
     overrides: Readonly<Record<string, boolean>>
     cwd: string
@@ -344,8 +572,11 @@ export class UserMcpService {
       }
       const secrets: Record<string, string> = {}
       let missing: string | null = null
+      const bindings = await this.bindingsFor(server)
       for (const inputId of referencedInputIds(server.entry)) {
-        const value = await this.secrets.get(server.id, inputId)
+        // Bound read (q113, B6 R3): only a secret saved for this destination
+        // AND for the current values of the server's other inputs.
+        const value = bindings[inputId] ? await this.secrets.get(server.id, inputId, bindings[inputId]!) : null
         if (value === null) {
           missing = inputId
           break
@@ -413,33 +644,92 @@ export class UserMcpService {
         this.storeProblem = loaded.problem
         this.readFailed = false
       }
+      this.persistedInMutation = false
+      this.pendingSecretRestore = null
+      let outcome: Awaited<ReturnType<typeof operation>>
       try {
-        const outcome = await operation()
-        if (!outcome.ok) return outcome
-        const snapshot = await this.snapshot()
-        for (const listener of this.listeners) listener(snapshot)
-        return {
-          ok: true,
-          snapshot,
-          ...(outcome.id ? { id: outcome.id } : {}),
-          ...(outcome.secretsCleared ? { secretsCleared: true } : {}),
-          ...(outcome.pendingReview ? { pendingReview: true } : {}),
-        }
+        outcome = await operation()
       } catch (error) {
         // Review round 1: a failed persist must not leave memory ahead of
         // disk, or the snapshot shows a server that a restart will lose and a
         // retry is refused as a duplicate. (Secrets written before the failure
         // are orphaned blobs at worst; the next save of that server prunes them.)
-        this.document = before
+        //
+        // #1304: operations persist the document BEFORE their secret step
+        // (round 2 of that review, so a failed persist cannot lose a token).
+        // A secret step that throws after that point used to roll back only
+        // memory, leaving disk ahead of it: a saved server came back after a
+        // restart without its secret, and a deleted one was written back by
+        // the next mutation. Roll the FILE back too. If that write fails as
+        // well, disk still holds the new document, so memory keeps it: the
+        // two must agree either way.
+        let oldDocumentOnDisk: boolean
+        if (this.persistedInMutation) {
+          try {
+            await saveUserMcpDocument(this.file, before)
+            this.document = before
+            oldDocumentOnDisk = true
+          } catch {
+            // Disk holds the persisted document; memory already matches it.
+            oldDocumentOnDisk = false
+          }
+        } else {
+          this.document = before
+          oldDocumentOnDisk = true
+        }
+        // q110: put the previous secrets back only where they pair with the
+        // document that is actually on disk. A restore that itself fails is
+        // not retried: the server is left without (some of) its secrets,
+        // which launch refuses to attach. That is the fail-closed direction.
+        // Read through a method: TypeScript narrows the field to null from the
+        // assignment above and cannot see that the operation set it.
+        const restore = this.takePendingSecretRestore()
+        if (restore && (oldDocumentOnDisk || restore.safeWithNewDocument)) {
+          await restore.run().catch(() => {})
+        }
         return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      }
+      if (!outcome.ok) return outcome
+      // Committed. Nothing after this line may report failure for a change
+      // that is on disk (q110, review a finding 4): a listener that threw used
+      // to land in the rollback path, which reverted the document but not
+      // the secrets it had just written. Each listener is isolated.
+      const snapshot = await this.snapshot()
+      for (const listener of this.listeners) {
+        try {
+          listener(snapshot)
+        } catch (error) {
+          console.warn('[user-mcp] change listener failed:', error)
+        }
+      }
+      return {
+        ok: true,
+        snapshot,
+        ...(outcome.id ? { id: outcome.id } : {}),
+        ...(outcome.secretsCleared ? { secretsCleared: true } : {}),
+        ...(outcome.pendingReview ? { pendingReview: true } : {}),
       }
     })
     this.tail = run.catch(() => {})
     return run
   }
 
+  /** The secret restore the current operation registered before touching
+   *  secrets (q110); mutate() decides whether it may run. */
+  private pendingSecretRestore: PendingSecretRestore | null = null
+
+  private takePendingSecretRestore(): PendingSecretRestore | null {
+    const restore = this.pendingSecretRestore
+    this.pendingSecretRestore = null
+    return restore
+  }
+
+  /** Set by persist() during the current mutate() operation (#1304). */
+  private persistedInMutation = false
+
   private async persist(): Promise<void> {
     await saveUserMcpDocument(this.file, this.document)
+    this.persistedInMutation = true
     // A successful write supersedes whatever made the old file unreadable.
     this.storeProblem = undefined
   }
@@ -452,11 +742,18 @@ export class UserMcpService {
   ): Promise<UserMcpServerView> {
     const transport = transportOf(server.entry)
     const others = this.document.servers.filter(other => other.id !== server.id)
-    const secrets = await this.secrets.state(server.id, server.inputs.map(input => input.id))
+    const secrets = await this.secrets.state(server.id, await this.bindingsFor(server))
     const problems = validateServer(server, others)
     for (const inputId of referencedInputIds(server.entry)) {
       if (secrets[inputId] && !secrets[inputId]!.set) {
-        problems.push({ kind: 'secret-missing', message: `Secret "${inputId}" is not set` })
+        problems.push({
+          kind: 'secret-missing',
+          message: secrets[inputId]!.unconfirmed === 'legacy'
+            ? `Secret "${inputId}" was saved by an earlier version. Confirm it is for ${summarizeEntry(server.entry)}, or re-enter it`
+            : secrets[inputId]!.unconfirmed === 'inputs-changed'
+              ? `Secret "${inputId}" is withheld because an agent changed another value this server uses. Confirm it may be sent to ${summarizeEntry(server.entry)} with the new values, or re-enter it`
+              : `Secret "${inputId}" is not set`,
+        })
       }
     }
     if (server.pendingReview) {

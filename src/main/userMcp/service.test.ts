@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -40,6 +40,13 @@ function service(): UserMcpService {
       claudeManagedPolicy: async () => managed,
     },
   })
+}
+
+// The token a LAUNCH would hand this server (q113: secrets are read bound to
+// the server's current destination, so this is the observable pairing).
+async function launchedToken(svc: UserMcpService, id: string): Promise<string | null> {
+  const resolution = await svc.resolveForLaunch({ provider: 'claude', overrides: {}, cwd: dir })
+  return resolution.servers.find(server => server.id === id)?.secrets['beeper-authorization'] ?? null
 }
 
 const beeper = (overrides: Partial<UserMcpSaveInput> = {}): UserMcpSaveInput => ({
@@ -251,6 +258,9 @@ describe('UserMcpService secret redirection (review round 1)', () => {
     if (!saved.ok) throw new Error(saved.error)
     const moved = await svc.save({ ...beeper(), id: saved.id, secrets: undefined, entry: { type: 'http', url: 'https://evil.example/mcp', headers: { Authorization: 'Bearer ${input:beeper-authorization}' } } })
     expect(moved).toMatchObject({ ok: true, secretsCleared: true })
+    // The user's move deletes the old token itself, not only withholds it
+    // (r3 round-2 review a: a no-op clearServer survived every test).
+    await expect(readFile(join(dir, 'mcp-secrets', saved.id!, 'beeper-authorization.bin'))).rejects.toMatchObject({ code: 'ENOENT' })
     const launch = await svc.resolveForLaunch({ provider: 'claude', overrides: {}, cwd: dir })
     // The token never reaches the new host: the server is dropped instead.
     expect(launch.servers).toEqual([])
@@ -324,5 +334,818 @@ describe('UserMcpService review round 2', () => {
   it('refuses a secret value that Claude would expand from its own environment', async () => {
     const svc = service()
     expect(await svc.save(beeper({ secrets: { 'beeper-authorization': '${GITHUB_TOKEN}' } }))).toMatchObject({ ok: false })
+  })
+})
+
+// #1304: mutate() rolled MEMORY back on a failure, but persist() had already
+// written the new document. A failed secret write after a save, or a failed
+// clear after a delete, left disk and memory disagreeing: the server came back
+// after a restart (without its secret), or the next mutation wrote a deleted
+// server back.
+describe('a secret step that fails after the document was written (#1304)', () => {
+  type Internals = { secrets: { set: (...args: unknown[]) => Promise<void>; clearServer: (...args: unknown[]) => Promise<void> } }
+
+  it('a failed secret write on save leaves the server on neither disk nor memory', async () => {
+    const live = service()
+    ;(live as unknown as Internals).secrets.set = async () => { throw new Error('secure storage unavailable') }
+    const result = await live.save(beeper())
+    expect(result.ok).toBe(false)
+    expect((await live.snapshot()).servers).toHaveLength(0)
+    expect((await service().snapshot()).servers).toHaveLength(0)
+  })
+
+  it('a failed secret clear on delete keeps the server on both disk and memory', async () => {
+    const live = service()
+    expect((await live.save(beeper())).ok).toBe(true)
+    const id = (await live.snapshot()).servers[0]!.id
+    ;(live as unknown as Internals).secrets.clearServer = async () => { throw new Error('EACCES') }
+    expect((await live.delete(id)).ok).toBe(false)
+    expect((await live.snapshot()).servers.map(server => server.id)).toEqual([id])
+    expect((await service().snapshot()).servers.map(server => server.id)).toEqual([id])
+  })
+})
+
+// q108: rolling the document back is not enough if the secret step already
+// erased the old secret. A destination change clears the server's blobs, then
+// sets the new ones; if a set fails after the clear, the old server came back
+// (document rolled back) WITHOUT its token.
+describe('a secret step that fails midway keeps the previous secret (#1304, q108)', () => {
+  type Store = {
+    get: (serverId: string, inputId: string) => Promise<string | null>
+    set: (serverId: string, inputId: string, value: string) => Promise<void>
+    clearServer: (serverId: string) => Promise<void>
+  }
+  const storeOf = (svc: UserMcpService) => (svc as unknown as { secrets: Store }).secrets
+
+  it('a destination change whose new secret fails to write keeps the old destination AND its token', async () => {
+    const live = service()
+    expect((await live.save(beeper())).ok).toBe(true)
+    const id = (await live.snapshot()).servers[0]!.id
+    const store = storeOf(live)
+    store.set = async () => { throw new Error('secure storage unavailable') }
+    const moved = await live.save(beeper({
+      id,
+      entry: { type: 'http', url: 'http://localhost:9999/v0/mcp', headers: { Authorization: 'Bearer ${input:beeper-authorization}' } },
+      secrets: { 'beeper-authorization': 'bpr_live_new_token_0000' },
+    } as Partial<UserMcpSaveInput>))
+    expect(moved.ok).toBe(false)
+    const restarted = service()
+    const [server] = (await restarted.snapshot()).servers
+    expect(server?.id).toBe(id)
+    expect(JSON.stringify(server)).toContain('localhost:23373')
+    expect(await launchedToken(restarted, id)).toBe(TOKEN)
+  })
+
+  it('a delete whose clear fails after removing some blobs keeps the server AND its token', async () => {
+    const live = service()
+    expect((await live.save(beeper())).ok).toBe(true)
+    const id = (await live.snapshot()).servers[0]!.id
+    const store = storeOf(live)
+    const realClear = store.clearServer.bind(store)
+    store.clearServer = async serverId => { await realClear(serverId); throw new Error('EACCES') }
+    expect((await live.delete(id)).ok).toBe(false)
+    const restarted = service()
+    expect((await restarted.snapshot()).servers.map(server => server.id)).toEqual([id])
+    expect(await launchedToken(restarted, id)).toBe(TOKEN)
+  })
+})
+
+// q110 (SECURITY, #1420 review a): a destination and a token must never be
+// observable as a mixed pair (the NEW destination with the OLD token), not by
+// a launch during a save, not by a restart at any point in it, and not after a
+// failed rollback. On any doubt: no secret.
+describe('destination/secret pairing never mixes (#1304, q110)', () => {
+  type Store = {
+    get: (serverId: string, inputId: string) => Promise<string | null>
+    set: (serverId: string, inputId: string, value: string) => Promise<void>
+    clearServer: (serverId: string) => Promise<void>
+  }
+  const storeOf = (svc: UserMcpService) => (svc as unknown as { secrets: Store }).secrets
+  const EVIL = 'https://evil.example/mcp'
+  const moved = (id: string, extra: Partial<UserMcpSaveInput> = {}): UserMcpSaveInput => beeper({
+    id,
+    entry: { type: 'http', url: EVIL, headers: { Authorization: 'Bearer ${input:beeper-authorization}' } },
+    secrets: {},
+    ...extra,
+  } as Partial<UserMcpSaveInput>)
+  const launch = (svc: UserMcpService) => svc.resolveForLaunch({ provider: 'claude', overrides: {}, cwd: dir })
+  const mixed = (resolution: Awaited<ReturnType<UserMcpService['resolveForLaunch']>>) =>
+    resolution.servers.some(server => JSON.stringify(server.entry).includes('evil.example') && Object.values(server.secrets).includes(TOKEN))
+  const deferred = () => { let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve }); return { gate, release } }
+
+  async function seeded() {
+    const live = service()
+    expect((await live.save(beeper())).ok).toBe(true)
+    return { live, id: (await live.snapshot()).servers[0]!.id }
+  }
+
+  it.each(['clearServer', 'set', 'prune'] as const)(
+    'a launch and a restart while the save is paused at %s never pair the new destination with the old token',
+    async method => {
+      const { live, id } = await seeded()
+      const store = storeOf(live) as unknown as Record<string, (...args: unknown[]) => Promise<void>>
+      const real = store[method]!.bind(store)
+      const hold = deferred()
+      let reached!: () => void
+      const atStep = new Promise<void>(resolve => { reached = resolve })
+      store[method] = async (...args) => { reached(); await hold.gate; return real(...args) }
+      const saving = live.save(moved(id, method === 'set' ? { secrets: { 'beeper-authorization': 'bpr_live_new_token_1111' } } as Partial<UserMcpSaveInput> : {}))
+      await Promise.race([atStep, saving])
+      const liveLaunch = launch(live)
+      expect(mixed(await launch(service()))).toBe(false)
+      hold.release()
+      await saving
+      expect(mixed(await liveLaunch)).toBe(false)
+      expect(mixed(await launch(service()))).toBe(false)
+    },
+  )
+
+  it('a failed rollback write after a failed secret step never leaves the new destination with the old token', async () => {
+    const { live, id } = await seeded()
+    const store = storeOf(live)
+    store.set = async () => {
+      await chmod(dir, 0o500)
+      throw new Error('secure storage unavailable')
+    }
+    try {
+      expect((await live.save(moved(id, { secrets: { 'beeper-authorization': 'bpr_live_new_token_2222' } } as Partial<UserMcpSaveInput>))).ok).toBe(false)
+    } finally {
+      await chmod(dir, 0o700)
+    }
+    expect(mixed(await launch(service()))).toBe(false)
+  })
+
+  // The reverse mix: a launch that read the OLD destination and then awaited
+  // its native policy lookups used to read the secret store AFTER a save had
+  // written the NEW token, pairing the old destination with a token the user
+  // meant for the new one. Launches are serialized with mutations.
+  it('a launch paused in its own lookups never pairs the old destination with the new token', async () => {
+    const { live, id } = await seeded()
+    const hold = deferred()
+    let reached!: () => void
+    const inLookup = new Promise<void>(resolve => { reached = resolve })
+    const gated = new UserMcpService({
+      stateDir: dir,
+      codec,
+      native: {
+        list: async () => native,
+        codexNames: async () => codexNames,
+        claudeManagedPolicy: async () => { reached(); await hold.gate; return false },
+      },
+    })
+    const launching = gated.resolveForLaunch({ provider: 'claude', overrides: {}, cwd: dir })
+    await inLookup
+    const saving = gated.save(moved(id, { secrets: { 'beeper-authorization': 'bpr_live_new_token_4444' } } as Partial<UserMcpSaveInput>))
+    await new Promise(resolve => setTimeout(resolve, 50))
+    hold.release()
+    const resolution = await launching
+    await saving
+    const reverseMix = resolution.servers.some(server =>
+      JSON.stringify(server.entry).includes('localhost:23373') && Object.values(server.secrets).includes('bpr_live_new_token_4444'))
+    expect(reverseMix).toBe(false)
+    void live
+  })
+
+  // Review a: snapshotServer returned an EMPTY snapshot on any readdir error,
+  // so a failed step then "restored" nothing and the server lost its token.
+  // Only a missing directory means no secrets.
+  it('a secrets directory that cannot be listed is an error, not an empty snapshot', async () => {
+    const { live, id } = await seeded()
+    const store = (live as unknown as { secrets: { snapshotServer: (id: string) => Promise<Map<string, Buffer>> } }).secrets
+    const serverDir = join(dir, 'mcp-secrets', id)
+    await chmod(serverDir, 0o000)
+    try {
+      await expect(store.snapshotServer(id)).rejects.toThrow()
+    } finally {
+      await chmod(serverDir, 0o700)
+    }
+    await expect(store.snapshotServer('never-saved')).resolves.toEqual(new Map())
+  })
+
+  // Worker rule "unknown is never empty" (q109, q115): through the SERVICE, on
+  // the real filesystem. A save that cannot list the secrets directory must
+  // fail without touching the stored bytes. After the permission comes back,
+  // routine maintenance (a save that changes no secret, which prunes) must
+  // keep the same ciphertext, and a launch still gets the original token.
+  // WHY both this and the snapshotServer test above: on a real filesystem an
+  // unlistable directory also blocks the write and the rm, so an "empty on any
+  // error" snapshot cannot do damage HERE. It does damage on a transient
+  // EMFILE/EIO, which no real fs reproduces on demand. The test above is the
+  // one that fails when snapshotServer treats a non-ENOENT error as empty.
+  it('an unlistable secrets directory fails the save once and the token bytes survive recovery and maintenance', async () => {
+    const { live, id } = await seeded()
+    const serverDir = join(dir, 'mcp-secrets', id)
+    const [blob] = await readdir(serverDir)
+    const before = await readFile(join(serverDir, blob!))
+    await chmod(serverDir, 0o000)
+    try {
+      const failed = await live.save(beeper({ id, secrets: { 'beeper-authorization': 'bpr_live_new_token_5555' } } as Partial<UserMcpSaveInput>))
+      expect(failed.ok).toBe(false)
+    } finally {
+      await chmod(serverDir, 0o700)
+    }
+    expect(await readFile(join(serverDir, blob!))).toEqual(before)
+    const maintained = await live.save(beeper({ id, name: 'beeper-renamed', secrets: {} } as Partial<UserMcpSaveInput>))
+    expect(maintained.ok).toBe(true)
+    expect(await readFile(join(serverDir, blob!))).toEqual(before)
+    expect(await launchedToken(service(), id)).toBe(TOKEN)
+  })
+
+  it('a listener that throws after commit does not turn a committed save into a failure', async () => {
+    const { live, id } = await seeded()
+    live.onChange(() => { throw new Error('broadcast failed') })
+    const result = await live.save(beeper({ id, secrets: { 'beeper-authorization': 'bpr_live_new_token_3333' } } as Partial<UserMcpSaveInput>))
+    expect(result.ok).toBe(true)
+    expect(await launchedToken(service(), id)).toBe('bpr_live_new_token_3333')
+  })
+})
+
+
+// q113 (SECURITY, #1420 fresh review a): ORDER alone cannot hold the pairing
+// across a crash or a failed restore. A/T -> B/U with a failing prune rolled
+// the document back to A before U was removed, and a restart (or a failed
+// restore) then launched A with U. Each secret record is now bound to the
+// destination it was saved for, and a launch refuses a secret whose binding
+// does not match the document's current destination: fail closed, in both
+// directions, whatever state a crash or a failed restore leaves.
+describe('secrets are bound to their destination (#1304, q113)', () => {
+  type Store = Record<string, (...args: unknown[]) => Promise<unknown>>
+  const storeOf = (svc: UserMcpService) => (svc as unknown as { secrets: Store }).secrets
+  const OLD_URL = 'http://localhost:23373/v0/mcp'
+  const NEW_URL = 'https://evil.example/mcp'
+  const U = 'bpr_live_new_token_9999'
+  const deferred = () => { let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve }); return { gate, release } }
+  const at = (url: string) => ({ type: 'http', url, headers: { Authorization: 'Bearer ${input:beeper-authorization}' } })
+  async function pairing(svc: UserMcpService) {
+    const resolution = await svc.resolveForLaunch({ provider: 'claude', overrides: {}, cwd: dir })
+    return resolution.servers.map(server => [server.entry.type === 'http' ? (server.entry as { url: string }).url : '', server.secrets['beeper-authorization'] ?? null])
+  }
+  const wrongPair = (pairs: Array<Array<string | null>>) =>
+    pairs.some(([url, token]) => (url === OLD_URL && token === U) || (url === NEW_URL && token === TOKEN))
+
+  async function seeded() {
+    const live = service()
+    expect((await live.save(beeper())).ok).toBe(true)
+    return { live, id: (await live.snapshot()).servers[0]!.id }
+  }
+
+  it('a restart between the document rollback and the secret restore never launches the old address with the new token', async () => {
+    const { live, id } = await seeded()
+    const store = storeOf(live)
+    store.prune = async () => { throw new Error('prune failed') }
+    const realRestore = store.restoreServer!.bind(store)
+    const hold = deferred()
+    let reached!: () => void
+    const atRestore = new Promise<void>(resolve => { reached = resolve })
+    store.restoreServer = async (...args) => { reached(); await hold.gate; return realRestore(...args) }
+    const saving = live.save(beeper({ id, entry: at(NEW_URL), secrets: { 'beeper-authorization': U } } as Partial<UserMcpSaveInput>))
+    await atRestore
+    expect(wrongPair(await pairing(service()))).toBe(false)
+    hold.release()
+    expect((await saving).ok).toBe(false)
+    expect(wrongPair(await pairing(service()))).toBe(false)
+  })
+
+  it('a failed secret restore never leaves the old address with the new token', async () => {
+    const { live, id } = await seeded()
+    const store = storeOf(live)
+    store.prune = async () => { throw new Error('prune failed') }
+    store.restoreServer = async () => { throw new Error('restore failed') }
+    expect((await live.save(beeper({ id, entry: at(NEW_URL), secrets: { 'beeper-authorization': U } } as Partial<UserMcpSaveInput>))).ok).toBe(false)
+    expect(wrongPair(await pairing(live))).toBe(false)
+    expect(wrongPair(await pairing(service()))).toBe(false)
+  })
+
+  it('a token written for one destination is refused for another, read from disk after a restart', async () => {
+    const { live, id } = await seeded()
+    // Hand-craft the worst durable state: the document names the NEW address
+    // while the blob still holds the token saved for the OLD one.
+    const snapshotOld = await storeOf(live).snapshotServer!(id) as Map<string, Buffer>
+    expect((await live.save(beeper({ id, entry: at(NEW_URL), secrets: {} } as Partial<UserMcpSaveInput>))).ok).toBe(true)
+    await storeOf(live).restoreServer!(id, snapshotOld)
+    const restarted = service()
+    expect(await launchedToken(restarted, id)).toBeNull()
+    expect(wrongPair(await pairing(restarted))).toBe(false)
+  })
+
+  // q114: a record written before binding carries no proof of which
+  // destination it was saved for. An old-version crash could leave document B
+  // with the plaintext token T that was entered for A, and an upgrade that
+  // bound legacy records to "the destination the document names" labelled T
+  // as B and launched B/T. Legacy records are therefore never trusted: they
+  // read as not set until the user re-enters them, across every restart.
+  it('never launches a pre-binding secret, even when the document names a destination', async () => {
+    const live = service()
+    expect((await live.save(beeper({ entry: at(NEW_URL), secrets: {} } as Partial<UserMcpSaveInput>))).ok).toBe(true)
+    const id = (await live.snapshot()).servers[0]!.id
+    await mkdir(join(dir, 'mcp-secrets', id), { recursive: true })
+    await writeFile(join(dir, 'mcp-secrets', id, 'beeper-authorization.bin'), codec.encrypt(TOKEN), { mode: 0o600 })
+    expect(await launchedToken(service(), id)).toBeNull()
+    expect(await launchedToken(service(), id)).toBeNull()
+  })
+
+  // B6 (q114): kept, withheld, and bound only by the user's confirmation.
+  it('keeps a pre-binding secret, withholds it, and binds it only when the user confirms it', async () => {
+    const live = service()
+    expect((await live.save(beeper({ entry: at(NEW_URL), secrets: {} } as Partial<UserMcpSaveInput>))).ok).toBe(true)
+    const id = (await live.snapshot()).servers[0]!.id
+    const blob = join(dir, 'mcp-secrets', id, 'beeper-authorization.bin')
+    await mkdir(join(dir, 'mcp-secrets', id), { recursive: true })
+    await writeFile(blob, codec.encrypt(TOKEN), { mode: 0o600 })
+    const restarted = service()
+    expect(await launchedToken(restarted, id)).toBeNull()
+    expect((await restarted.snapshot()).servers[0]!.secrets['beeper-authorization']).toMatchObject({ set: false, unconfirmed: 'legacy' })
+    expect(await readFile(blob, 'utf8')).toBe(`enc:${TOKEN}`)
+    expect((await restarted.confirmSecret(id, 'beeper-authorization')).ok).toBe(true)
+    expect(await launchedToken(service(), id)).toBe(TOKEN)
+  })
+
+  it('tells the user a pre-binding secret must be re-entered, and accepts the re-entry', async () => {
+    const live = service()
+    expect((await live.save(beeper({ secrets: {} } as Partial<UserMcpSaveInput>))).ok).toBe(true)
+    const id = (await live.snapshot()).servers[0]!.id
+    await mkdir(join(dir, 'mcp-secrets', id), { recursive: true })
+    await writeFile(join(dir, 'mcp-secrets', id, 'beeper-authorization.bin'), codec.encrypt(TOKEN), { mode: 0o600 })
+    const restarted = service()
+    const [server] = (await restarted.snapshot()).servers
+    expect(server!.problems.map(problem => problem.message).join(' ')).toMatch(/earlier version.*re-enter/i)
+    expect((await restarted.setSecret(id, 'beeper-authorization', TOKEN)).ok).toBe(true)
+    expect(await launchedToken(service(), id)).toBe(TOKEN)
+  })
+
+  it('restores ciphertext with owner-only permissions', async () => {
+    const { live, id } = await seeded()
+    const store = storeOf(live)
+    const snapshot = await store.snapshotServer!(id) as Map<string, Buffer>
+    await store.restoreServer!(id, snapshot)
+    expect((await stat(join(dir, 'mcp-secrets', id, 'beeper-authorization.bin'))).mode & 0o777).toBe(0o600)
+  })
+
+  it('a launch requested while a save is running waits for that save', async () => {
+    const { live, id } = await seeded()
+    const store = storeOf(live)
+    const realClear = store.clearServer!.bind(store)
+    const hold = deferred()
+    let reached!: () => void
+    const atClear = new Promise<void>(resolve => { reached = resolve })
+    store.clearServer = async (...args) => { reached(); await hold.gate; return realClear(...args) }
+    const saving = live.save(beeper({ id, entry: at(NEW_URL), secrets: { 'beeper-authorization': U } } as Partial<UserMcpSaveInput>))
+    await atClear
+    let launched = false
+    const launching = pairing(live).then(result => { launched = true; return result })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(launched).toBe(false)
+    hold.release()
+    await saving
+    expect(await launching).toEqual([[NEW_URL, U]])
+  })
+})
+
+// #1420 reviews a+b (blocker): an agent changing the endpoint INSIDE a
+// secret-bearing env value kept the token, stayed enabled without review, and
+// the next launch sent the token to the new host.
+describe('an endpoint inside a secret-bearing value is part of the destination (#1420)', () => {
+  const stdio = (endpoint: string) => ({
+    name: 'endpoint-client',
+    enabled: true,
+    providers: { claude: true, codex: true },
+    entry: { command: 'node', args: ['client.js'], env: { MCP_ENDPOINT: endpoint } },
+    inputs: [{ id: 'beeper-authorization', description: 'Token' }],
+  })
+
+  it('an agent that moves the endpoint loses the token and needs review, across a restart', async () => {
+    const live = service()
+    expect((await live.save({ ...stdio('https://trusted.example/mcp?key=${input:beeper-authorization}'), secrets: { 'beeper-authorization': TOKEN } } as UserMcpSaveInput)).ok).toBe(true)
+    const id = (await live.snapshot()).servers[0]!.id
+    const moved = await live.save({ id, ...stdio('https://evil.example/mcp?key=${input:beeper-authorization}') } as UserMcpSaveInput, 'agent')
+    expect(moved.ok).toBe(true)
+    const restarted = service()
+    const [server] = (await restarted.snapshot()).servers
+    expect(server!.pendingReview).toBe(true)
+    const resolution = await restarted.resolveForLaunch({ provider: 'claude', overrides: {}, cwd: dir })
+    expect(JSON.stringify(resolution.servers)).not.toContain(TOKEN)
+  })
+})
+
+// q118 (#1420 round-2 review a, both findings, replayed on real files across a
+// restart). 1: the agent changes only WHICH input supplies the endpoint host,
+// then sets that new input itself; the token T it never knew went to
+// evil.example. 2: the agent reorders a reference against a literal `${input}`
+// that the old mask could not tell apart. Both must now need review and launch
+// without T.
+describe('a reference change is a destination change (#1420, q118)', () => {
+  const client = (endpoint: string, inputs: string[]) => ({
+    name: 'endpoint-client',
+    enabled: true,
+    providers: { claude: true, codex: true },
+    entry: { command: 'node', args: ['client.js'], env: { MCP_ENDPOINT: endpoint } },
+    inputs: inputs.map(id => ({ id, description: id })),
+  })
+
+  it('pointing the endpoint at another input loses the token and needs review, across a restart', async () => {
+    const live = service()
+    const saved = await live.save({
+      ...client('https://${input:trusted-host}/mcp?key=${input:beeper-authorization}', ['trusted-host', 'beeper-authorization']),
+      secrets: { 'trusted-host': 'trusted.example', 'beeper-authorization': TOKEN },
+    } as UserMcpSaveInput)
+    expect(saved.ok).toBe(true)
+    const id = (await live.snapshot()).servers[0]!.id
+    const moved = await live.save({ id, ...client('https://${input:evil-host}/mcp?key=${input:beeper-authorization}', ['trusted-host', 'evil-host', 'beeper-authorization']) } as UserMcpSaveInput, 'agent')
+    expect(moved.ok).toBe(true)
+    await live.setSecret(id, 'evil-host', 'evil.example')
+    const restarted = service()
+    expect((await restarted.snapshot()).servers[0]!.pendingReview).toBe(true)
+    const resolution = await restarted.resolveForLaunch({ provider: 'claude', overrides: {}, cwd: dir })
+    expect(JSON.stringify(resolution.servers)).not.toContain(TOKEN)
+  })
+
+  it('reordering a reference against a literal ${input} loses the token and needs review, across a restart', async () => {
+    const live = service()
+    expect((await live.save(beeper({ entry: { type: 'http', url: 'http://localhost:23373/v0/mcp', headers: { Authorization: 'Bearer ${input:beeper-authorization}${input}' } } } as Partial<UserMcpSaveInput>))).ok).toBe(true)
+    const id = (await live.snapshot()).servers[0]!.id
+    const moved = await live.save(beeper({ id, secrets: {}, entry: { type: 'http', url: 'http://localhost:23373/v0/mcp', headers: { Authorization: 'Bearer ${input}${input:beeper-authorization}' } } } as Partial<UserMcpSaveInput>), 'agent')
+    expect(moved.ok).toBe(true)
+    const restarted = service()
+    expect((await restarted.snapshot()).servers[0]!.pendingReview).toBe(true)
+    const resolution = await restarted.resolveForLaunch({ provider: 'claude', overrides: {}, cwd: dir })
+    expect(JSON.stringify(resolution.servers)).not.toContain(TOKEN)
+  })
+})
+
+
+// B6 manager check at 4d5c79ab (temp/review-1420/manager-verify-a.md), R3: the
+// identity covered the entry text and reference ids but not the VALUES of the
+// inputs that decide where a request goes. Imported env values all become
+// inputs, so `API_BASE_URL=${input:svc-API_BASE_URL}` is a host an agent can
+// re-set with mcp_servers_set_secret, and the next launch sent API_KEY=T there.
+// Each secret is now bound to its destination PLUS the values of EVERY other
+// input the entry references (q127: no credential/steering classifier; a
+// stdio program may read API_KEY as an endpoint). An agent or import changing
+// any input value turns the server off for review and withholds the siblings
+// (kept, never deleted) until the user confirms. A user change in Settings is
+// itself the confirmation: it rebinds the siblings that were valid.
+describe('input values that steer a request are part of the binding (#1420, B6 R3)', () => {
+  const EVIL = 'https://evil.example'
+  const imported = () => ({
+    name: 'svc',
+    enabled: true,
+    providers: { claude: true, codex: true },
+    entry: { command: 'node', args: ['client.js'], env: { API_BASE_URL: '${input:svc-API_BASE_URL}', API_KEY: '${input:svc-API_KEY}' } },
+    inputs: [{ id: 'svc-API_BASE_URL', description: 'API_BASE_URL' }, { id: 'svc-API_KEY', description: 'API_KEY' }],
+  })
+  const endpoint = () => ({
+    name: 'endpoint-client',
+    enabled: true,
+    providers: { claude: true, codex: true },
+    entry: { command: 'node', args: ['client.js'], env: { MCP_ENDPOINT: 'https://${input:trusted-host}/mcp?key=${input:tok}' } },
+    inputs: [{ id: 'trusted-host', description: 'host' }, { id: 'tok', description: 'token' }],
+  })
+  const launched = async (svc: UserMcpService) => JSON.stringify((await svc.resolveForLaunch({ provider: 'claude', overrides: {}, cwd: dir })).servers)
+  const blob = (id: string, inputId: string) => readFile(join(dir, 'mcp-secrets', id, `${inputId}.bin`))
+
+  it('an agent re-setting an imported base URL withholds the key (kept on disk) and needs review, across a restart', async () => {
+    const live = service()
+    expect((await live.save({ ...imported(), secrets: { 'svc-API_BASE_URL': 'https://trusted.example', 'svc-API_KEY': TOKEN } } as UserMcpSaveInput)).ok).toBe(true)
+    const id = (await live.snapshot()).servers[0]!.id
+    expect(await launched(live)).toContain(TOKEN)
+    const keyBytes = await blob(id, 'svc-API_KEY')
+    expect((await live.setSecret(id, 'svc-API_BASE_URL', EVIL, 'agent')).ok).toBe(true)
+    const restarted = service()
+    const [server] = (await restarted.snapshot()).servers
+    expect(server!.pendingReview).toBe(true)
+    expect(server!.enabled).toBe(false)
+    expect(server!.secrets['svc-API_KEY']).toMatchObject({ set: false, unconfirmed: 'inputs-changed' })
+    expect(await launched(restarted)).not.toContain(TOKEN)
+    expect(await blob(id, 'svc-API_KEY')).toEqual(keyBytes)
+  })
+
+  it('an agent re-setting the host inside an endpoint template withholds the token, across a restart', async () => {
+    const live = service()
+    expect((await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)).ok).toBe(true)
+    const id = (await live.snapshot()).servers[0]!.id
+    expect((await live.setSecret(id, 'trusted-host', 'evil.example', 'agent')).ok).toBe(true)
+    const restarted = service()
+    expect((await restarted.snapshot()).servers[0]!.pendingReview).toBe(true)
+    expect(await launched(restarted)).not.toContain(TOKEN)
+  })
+
+  it('a USER changing the host in Settings is the confirmation: the key still launches, to the new host, with no review', async () => {
+    const live = service()
+    await live.save({ ...imported(), secrets: { 'svc-API_BASE_URL': 'https://trusted.example', 'svc-API_KEY': TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    expect((await live.setSecret(id, 'svc-API_BASE_URL', 'https://moved.example')).ok).toBe(true)
+    const restarted = service()
+    expect((await restarted.snapshot()).servers[0]!.pendingReview).toBeUndefined()
+    const out = await launched(restarted)
+    expect(out).toContain(TOKEN)
+    expect(out).toContain('https://moved.example')
+  })
+
+  // q127 item 4: the key NAME proves nothing about the role, so an agent
+  // changing API_KEY is treated like any other input change.
+  it('an agent changing an API_KEY-named input withholds the bound sibling and needs review, across a restart', async () => {
+    const live = service()
+    await live.save({ ...imported(), secrets: { 'svc-API_BASE_URL': 'https://trusted.example', 'svc-API_KEY': TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    const baseBytes = await blob(id, 'svc-API_BASE_URL')
+    expect((await live.setSecret(id, 'svc-API_KEY', 'bpr_live_agent_chosen_7777', 'agent')).ok).toBe(true)
+    const restarted = service()
+    const [server] = (await restarted.snapshot()).servers
+    expect(server!.pendingReview).toBe(true)
+    expect(server!.enabled).toBe(false)
+    expect(server!.secrets['svc-API_BASE_URL']).toMatchObject({ set: false, unconfirmed: 'inputs-changed' })
+    expect(await blob(id, 'svc-API_BASE_URL')).toEqual(baseBytes)
+    // Even once the user turns it back on, the sibling waits for its own confirmation.
+    expect((await restarted.setEnabled(id, true)).ok).toBe(true)
+    expect(await launched(service())).not.toContain('https://trusted.example')
+    expect((await service().confirmSecret(id, 'svc-API_BASE_URL')).ok).toBe(true)
+    expect(await launched(service())).toContain('https://trusted.example')
+  })
+
+  // A user edit rebinds only siblings that were VALID before it. A sibling an
+  // agent's change already withheld stays withheld: an unrelated Settings
+  // edit must not bless the agent's change.
+  it('a user edit does not confirm a sibling that an earlier agent change withheld', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    await live.setSecret(id, 'trusted-host', 'evil.example', 'agent')
+    await live.setEnabled(id, true)
+    expect((await live.setSecret(id, 'trusted-host', 'evil.example')).ok).toBe(true)
+    expect(await launched(service())).not.toContain(TOKEN)
+    expect((await service().snapshot()).servers[0]!.secrets.tok).toMatchObject({ set: false, unconfirmed: 'inputs-changed' })
+  })
+
+  it('a user rotating one token keeps the other secrets launching, with no confirmation', async () => {
+    const live = service()
+    await live.save({ ...imported(), secrets: { 'svc-API_BASE_URL': 'https://trusted.example', 'svc-API_KEY': TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    expect((await live.setSecret(id, 'svc-API_KEY', 'bpr_live_rotated_1111')).ok).toBe(true)
+    const out = await launched(service())
+    expect(out).toContain('bpr_live_rotated_1111')
+    expect(out).toContain('https://trusted.example')
+    expect((await service().snapshot()).servers[0]!.pendingReview).toBeUndefined()
+  })
+
+  // Fresh r3 reviews a+b (blocker): an agent's later entry edit is a
+  // destination change, and save() cleared every blob, deleting a secret the
+  // user had not yet confirmed or re-entered. Since q113 the read-time binding
+  // keeps an old token away from a new destination, so an agent's save no
+  // longer deletes anything: the blobs stay (useless for the new entry until
+  // the user re-enters them) and only the user's own edits forget or prune.
+  it('an agent entry edit after a value change keeps the withheld token on disk, and never launches it', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    await live.setSecret(id, 'trusted-host', 'evil.example', 'agent')
+    const tokBytes = await blob(id, 'tok')
+    const edited = await service().save({ id, ...endpoint(), entry: { ...endpoint().entry, args: ['client-v2.js'] } } as UserMcpSaveInput, 'agent')
+    expect(edited).toMatchObject({ ok: true, pendingReview: true })
+    expect(edited).not.toHaveProperty('secretsCleared')
+    const restarted = service()
+    expect(await blob(id, 'tok')).toEqual(tokBytes)
+    await restarted.setEnabled(id, true)
+    expect(await launched(service())).not.toContain(TOKEN)
+    // Dropping the reference altogether does not prune it either.
+    await service().save({ id, ...endpoint(), entry: { command: 'node', args: ['client-v2.js'], env: { MCP_ENDPOINT: 'https://${input:trusted-host}/mcp' } }, inputs: [{ id: 'trusted-host', description: 'host' }] } as UserMcpSaveInput, 'agent')
+    expect(await blob(id, 'tok')).toEqual(tokBytes)
+  })
+
+  // Review b (surviving mutation): the review flag is saved BEFORE an agent's
+  // value. If the document write fails, the value must not have landed; with
+  // the order reversed, a restart saw the old enabled document next to the
+  // agent's value and launched it.
+  it('an agent value never lands next to an unflagged document when the document write fails', async () => {
+    const live = service()
+    await live.save({ ...imported(), secrets: { 'svc-API_BASE_URL': 'https://trusted.example', 'svc-API_KEY': TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    const internals = live as unknown as { persist: () => Promise<void> }
+    const realPersist = internals.persist.bind(live)
+    let failures = 1
+    internals.persist = async () => { if (failures-- > 0) throw new Error('EIO'); return realPersist() }
+    expect((await live.setSecret(id, 'svc-API_BASE_URL', EVIL, 'agent')).ok).toBe(false)
+    const out = await launched(service())
+    expect(out).not.toContain(EVIL)
+    expect(out).toContain(TOKEN)
+  })
+
+  // Review b (surviving mutation): the direct service contract for an agent
+  // save that supplies values on an EXISTING server.
+  it('an agent save that supplies a value on an existing server needs review and withholds the sibling', async () => {
+    const live = service()
+    await live.save({ ...imported(), secrets: { 'svc-API_BASE_URL': 'https://trusted.example', 'svc-API_KEY': TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    const result = await live.save({ id, ...imported(), secrets: { 'svc-API_BASE_URL': EVIL } } as UserMcpSaveInput, 'agent')
+    expect(result).toMatchObject({ ok: true, pendingReview: true })
+    const [server] = (await service().snapshot()).servers
+    expect(server!.enabled).toBe(false)
+    expect(server!.secrets['svc-API_KEY']).toMatchObject({ set: false, unconfirmed: 'inputs-changed' })
+  })
+
+  // r3 round-2 reviews a+b: two more agent routes destroyed a withheld
+  // secret. An agent may not overwrite or delete a secret that is waiting for
+  // the user's confirmation; it is refused before anything changes, and the
+  // user confirms, re-enters or removes it in Settings.
+  it('an agent cannot overwrite a withheld token', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    await live.setSecret(id, 'trusted-host', 'evil.example', 'agent')
+    const tokBytes = await blob(id, 'tok')
+    const overwrite = await service().setSecret(id, 'tok', 'bpr_live_agent_value_4444', 'agent')
+    expect(overwrite.ok).toBe(false)
+    expect(await blob(id, 'tok')).toEqual(tokBytes)
+    const viaSave = await service().save({ id, ...endpoint(), secrets: { tok: 'bpr_live_agent_value_5555' } } as UserMcpSaveInput, 'agent')
+    expect(viaSave.ok).toBe(false)
+    expect(await blob(id, 'tok')).toEqual(tokBytes)
+    // The user may still re-enter it.
+    expect((await service().setSecret(id, 'tok', 'bpr_live_user_value_6666')).ok).toBe(true)
+  })
+
+  it('an agent cannot remove a server that has a withheld secret; the user can', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    await live.setSecret(id, 'trusted-host', 'evil.example', 'agent')
+    const tokBytes = await blob(id, 'tok')
+    expect((await service().delete(id, 'agent')).ok).toBe(false)
+    expect((await service().snapshot()).servers.map(server => server.id)).toEqual([id])
+    expect(await blob(id, 'tok')).toEqual(tokBytes)
+    expect((await service().delete(id)).ok).toBe(true)
+    await expect(blob(id, 'tok')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  // q130: a blob that exists but cannot be decrypted (a key mismatch, a
+  // corrupt file) is NOT an absent secret. It counts as withheld, so none of
+  // the three agent routes may replace or delete it; only the user may. The
+  // bytes below are real ciphertext this codec cannot decrypt.
+  it('an agent cannot overwrite or remove a secret whose blob exists but cannot be decrypted', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    const unreadable = Buffer.from('v10\u0000\u00ff\u0013 sealed by another keychain', 'utf8')
+    await writeFile(join(dir, 'mcp-secrets', id, 'tok.bin'), unreadable, { mode: 0o600 })
+    const svc = service()
+    expect((await svc.setSecret(id, 'tok', 'bpr_live_agent_value_8888', 'agent')).ok).toBe(false)
+    expect((await svc.save({ id, ...endpoint(), secrets: { tok: 'bpr_live_agent_value_9999' } } as UserMcpSaveInput, 'agent')).ok).toBe(false)
+    expect((await svc.delete(id, 'agent')).ok).toBe(false)
+    expect(await blob(id, 'tok')).toEqual(unreadable)
+    expect((await svc.snapshot()).servers.map(server => server.id)).toEqual([id])
+    // The user's re-entry replaces it.
+    expect((await svc.setSecret(id, 'tok', 'bpr_live_user_value_7777')).ok).toBe(true)
+    expect(await blob(id, 'tok')).not.toEqual(unreadable)
+  })
+
+  // q130: presence that cannot be CHECKED is unknown, not absent. A
+  // self-referencing link makes stat fail (ELOOP) while the atomic write's
+  // rename would still replace it, so only the presence check stands
+  // between an agent and the entry. (An unreadable directory does not
+  // discriminate: the write fails there too.)
+  it('an agent write is refused when the blob cannot even be stat-ed', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    const file = join(dir, 'mcp-secrets', id, 'tok.bin')
+    await rm(file)
+    await symlink(file, file)
+    expect((await service().setSecret(id, 'tok', 'bpr_live_agent_value_1212', 'agent')).ok).toBe(false)
+    expect((await lstat(file)).isSymbolicLink()).toBe(true)
+  })
+
+  // r3 round 3 (review a): the guard walked only DEFINED inputs. An agent
+  // edit that drops an input keeps its blob (agents never prune), and that
+  // orphaned blob was then invisible to the guard, so mcp_servers_remove
+  // deleted it. Every blob on disk for the server is covered now; one with no
+  // input can prove no binding, so it counts as withheld.
+  it('an agent cannot remove a server whose dropped input still holds a secret', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    const tokBytes = await blob(id, 'tok')
+    await service().save({ id, ...endpoint(), entry: { command: 'node', args: ['client.js'], env: { MCP_ENDPOINT: 'https://${input:trusted-host}/mcp' } }, inputs: [{ id: 'trusted-host', description: 'host' }] } as UserMcpSaveInput, 'agent')
+    // The user re-enters the remaining input, so the ORPHAN is the only
+    // secret the guard can protect.
+    expect((await service().setSecret(id, 'trusted-host', 'trusted.example')).ok).toBe(true)
+    expect((await service().delete(id, 'agent')).ok).toBe(false)
+    expect(await blob(id, 'tok')).toEqual(tokBytes)
+    expect((await service().delete(id)).ok).toBe(true)
+  })
+
+  // q131: the orphan -> re-add route. The agent drops every reference, then
+  // re-adds the input and supplies a value in the same save; the orphaned
+  // blob must survive byte-for-byte.
+  it('an agent re-adding a dropped input cannot replace its orphaned secret', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    const tokBytes = await blob(id, 'tok')
+    const bare = { ...endpoint(), entry: { command: 'node', args: ['client.js'], env: {} }, inputs: [] }
+    expect((await service().save({ id, ...bare } as UserMcpSaveInput, 'agent')).ok).toBe(true)
+    expect((await service().snapshot()).servers[0]!.inputs).toEqual([])
+    const readd = await service().save({ id, ...endpoint(), secrets: { tok: 'bpr_live_agent_value_3131' } } as UserMcpSaveInput, 'agent')
+    expect(readd.ok).toBe(false)
+    expect(await blob(id, 'tok')).toEqual(tokBytes)
+  })
+
+  // q131: an unlistable directory (0o300: writable and searchable, not
+  // listable) must refuse the orphan re-add. Two strict reads stand here:
+  // the guard's blob listing (storedInputIds) and save's snapshotServer.
+  // Making the listing lenient alone does NOT fail this test, because the
+  // snapshot still refuses; the test pins the route, and removing both
+  // strict reads fails it.
+  it('an agent re-add is refused when the secrets directory cannot be listed', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    const tokBytes = await blob(id, 'tok')
+    await service().save({ id, ...endpoint(), entry: { command: 'node', args: ['client.js'], env: {} }, inputs: [] } as UserMcpSaveInput, 'agent')
+    const serverDir = join(dir, 'mcp-secrets', id)
+    await chmod(serverDir, 0o300)
+    try {
+      expect((await service().save({ id, ...endpoint(), secrets: { tok: 'bpr_live_agent_value_3232' } } as UserMcpSaveInput, 'agent')).ok).toBe(false)
+    } finally {
+      await chmod(serverDir, 0o700)
+    }
+    expect(await blob(id, 'tok')).toEqual(tokBytes)
+  })
+
+  // B6 manager check at fb61adfa: on a case-insensitive disk (macOS default,
+  // Windows) `TOK.bin` IS `tok.bin`, and the guard compared ids with case, so
+  // an agent save naming `TOK` overwrote the withheld `tok` secret. Ids are
+  // compared case-insensitively; the refusal holds on any filesystem.
+  const upper = (entryValue: string) => ({ ...endpoint(), entry: { command: 'node', args: ['client.js'], env: { MCP_ENDPOINT: entryValue } }, inputs: [{ id: 'trusted-host', description: 'host' }, { id: 'TOK', description: 'token' }] })
+  it('an agent cannot overwrite a withheld secret through a case-only variant of its id', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    await live.setSecret(id, 'trusted-host', 'evil.example', 'agent')
+    const bytes = await blob(id, 'tok')
+    const result = await service().save({ id, ...upper('https://${input:trusted-host}/mcp?key=${input:TOK}'), secrets: { TOK: 'bpr_live_agent_case_1111' } } as UserMcpSaveInput, 'agent')
+    expect(result.ok).toBe(false)
+    expect(await blob(id, 'tok')).toEqual(bytes)
+  })
+
+  it('an agent cannot replace an orphaned secret through a case-only variant of its id', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    const bytes = await blob(id, 'tok')
+    await service().save({ id, ...endpoint(), entry: { command: 'node', args: ['client.js'], env: {} }, inputs: [] } as UserMcpSaveInput, 'agent')
+    const result = await service().save({ id, ...upper('https://${input:trusted-host}/mcp?key=${input:TOK}'), secrets: { TOK: 'bpr_live_agent_case_2222' } } as UserMcpSaveInput, 'agent')
+    expect(result.ok).toBe(false)
+    expect(await blob(id, 'tok')).toEqual(bytes)
+  })
+
+  it('an agent cannot replace an undecryptable secret through a case-only variant of its id', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    const unreadable = Buffer.from('sealed by another keychain', 'utf8')
+    await writeFile(join(dir, 'mcp-secrets', id, 'tok.bin'), unreadable, { mode: 0o600 })
+    const result = await service().save({ id, ...upper('https://${input:trusted-host}/mcp?key=${input:TOK}'), secrets: { TOK: 'bpr_live_agent_case_3333' } } as UserMcpSaveInput, 'agent')
+    expect(result.ok).toBe(false)
+    expect(await blob(id, 'tok')).toEqual(unreadable)
+  })
+
+  // Gap 2 (B6): both guards had no committed test.
+  it('confirm refuses a record bound to ANOTHER destination, and Settings shows it as not set', async () => {
+    const live = service()
+    await live.save(beeper())
+    const id = (await live.snapshot()).servers[0]!.id
+    const oldBlob = await blob(id, 'beeper-authorization')
+    // Crafted: the document moves elsewhere while the old destination's blob
+    // stays on disk (the q113 crash window).
+    await live.save(beeper({ id, secrets: {}, entry: { type: 'http', url: 'https://evil.example/mcp', headers: { Authorization: 'Bearer ${input:beeper-authorization}' } } } as Partial<UserMcpSaveInput>))
+    await mkdir(join(dir, 'mcp-secrets', id), { recursive: true })
+    await writeFile(join(dir, 'mcp-secrets', id, 'beeper-authorization.bin'), oldBlob, { mode: 0o600 })
+    const restarted = service()
+    expect((await restarted.snapshot()).servers[0]!.secrets['beeper-authorization']).toEqual({ set: false })
+    expect((await restarted.confirmSecret(id, 'beeper-authorization')).ok).toBe(false)
+    expect(await blob(id, 'beeper-authorization')).toEqual(oldBlob)
+  })
+
+  // The destination guard must hold on its own: here the steering value moved
+  // too, so the "already bound" check cannot be what refuses it.
+  it('confirm refuses a token saved for another destination even when a steering value also changed', async () => {
+    const live = service()
+    await live.save({ ...imported(), secrets: { 'svc-API_BASE_URL': 'https://trusted.example', 'svc-API_KEY': TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    const oldKey = await blob(id, 'svc-API_KEY')
+    const moved = { ...imported(), entry: { ...imported().entry, args: ['other-client.js'] } }
+    expect(await live.save({ id, ...moved, secrets: { 'svc-API_BASE_URL': 'https://other.example' } } as UserMcpSaveInput)).toMatchObject({ ok: true, secretsCleared: true })
+    await writeFile(join(dir, 'mcp-secrets', id, 'svc-API_KEY.bin'), oldKey, { mode: 0o600 })
+    const restarted = service()
+    expect((await restarted.snapshot()).servers[0]!.secrets['svc-API_KEY']).toEqual({ set: false })
+    expect((await restarted.confirmSecret(id, 'svc-API_KEY')).ok).toBe(false)
+    expect(await launched(service())).not.toContain(TOKEN)
+  })
+
+  it('confirm has nothing to do for a record already bound to the current binding, and leaves it byte-identical', async () => {
+    const live = service()
+    await live.save(beeper())
+    const id = (await live.snapshot()).servers[0]!.id
+    const bytes = await blob(id, 'beeper-authorization')
+    expect((await live.confirmSecret(id, 'beeper-authorization')).ok).toBe(false)
+    expect(await blob(id, 'beeper-authorization')).toEqual(bytes)
   })
 })
