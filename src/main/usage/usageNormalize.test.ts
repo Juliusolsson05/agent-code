@@ -176,3 +176,25 @@ describe('usage normalization', () => {
     expect(rows.find(row => row.id === 'gpt-5-3-codex-spark-primary-window')?.scope).toBe('model-family')
   })
 })
+
+// #1451 review a: any message containing `auth.json` passed through verbatim,
+// so a read failure carried the absolute credential path (to the Usage screen
+// and, with the usage MCP domain, to agents), and a provider message could
+// smuggle arbitrary text by mentioning auth.json. Only our own fixed messages
+// keep their words; everything else is one curated sentence (q22).
+describe('sanitizeUsageError and auth-file messages (#1451)', () => {
+  it('never passes an absolute auth path or a provider message through', async () => {
+    const { sanitizeUsageError } = await import('@main/usage/normalize.js')
+    const enoent = new Error("ENOENT: no such file or directory, open '/Users/someone/.codex/auth.json'")
+    expect(sanitizeUsageError(enoent, 'fallback')).toBe("Its auth file (auth.json) could not be read.")
+    const smuggled = new Error('see auth.json — also: token=abc at https://example.test')
+    expect(sanitizeUsageError(smuggled, 'fallback')).toBe("Its auth file (auth.json) could not be read.")
+  })
+
+  it('keeps the fixed messages Agent Code itself writes about auth.json', async () => {
+    const { sanitizeUsageError } = await import('@main/usage/normalize.js')
+    for (const own of ['Codex auth.json does not include an access token.', 'Grok auth.json does not include a login key.', 'opencode auth.json has no zai-coding-plan key.', 'OpenCode auth.json is unexpectedly large; refusing to read it.']) {
+      expect(sanitizeUsageError(new Error(own), 'fallback')).toBe(own)
+    }
+  })
+})

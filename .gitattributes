@@ -2,3 +2,8 @@
 # outputs. Collapse them by default so generated SVG paths do not obscure the
 # architecture changes in GitHub's diff. Images remain available for review.
 docs/architecture/diagrams/*.svg linguist-generated=true
+
+# The pristine node-pty 1.1.0 source is identified by sha256 in
+# scripts/patch-node-pty.mjs (#1437). Never let line-ending normalization touch
+# its bytes, or the fixture stops matching the file npm installs.
+testing/fixtures/node-pty-1.1.0/pty.cc -text
