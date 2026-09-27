@@ -189,6 +189,24 @@ export const WORKSPACE_READ_ONLY_PREFIX = 'Workspace file is read-only this sess
  *  show it, because it names the fix (File › Setup…) (#1286 review C2). */
 export const PROVIDER_CLI_NOT_FOUND_SUFFIX = ' CLI not found. Open Setup (File › Setup…) to install it or enter its path.'
 
+/** The actionable message for a Claude proxy (mitmproxy) that would not
+ *  start, and how to recognise one. Shared since #1267: main now launders
+ *  session:spawn rejections, so the raw mitmproxy text no longer reaches the
+ *  renderer, and main must hand over the guidance itself.
+ *
+ *  WHY the message lists both restart AND the settings toggle: Proxy
+ *  Streaming is an exposed setting ("Proxy-Streamed Semantic Rendering"), so
+ *  the user has a working escape hatch. Restart first, because the packaged
+ *  case is usually a transient mitmproxy startup race; disabling is the
+ *  durable fallback where the proxy cannot run at all. */
+export const CLAUDE_PROXY_STARTUP_FAILED_MESSAGE = 'Claude proxy startup failed. Restart Agent Code after rebuilding, or disable Proxy-Streamed Semantic Rendering in settings if the proxy will not start in this environment.'
+
+export function isClaudeProxyStartupFailure(raw: string): boolean {
+  return raw.includes('Timed out waiting for mitmproxy')
+    || raw.includes('Unable to locate mitm')
+    || raw.includes('mitmdump')
+}
+
 export type SessionRecoverFailureCode =
   | 'ownership-conflict'
   | 'cancelled'

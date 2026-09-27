@@ -30,7 +30,7 @@ vi.mock('@main/window/windowRegistry.js', () => ({
 // The sub-agent watcher polls real directories; nothing here is about fleets.
 vi.mock('@main/subagents/index.js', () => ({ SubAgentWatcherManager: class { observeParentEntry() {} stop() {} stopAll() {} } }))
 
-const { registerSessionIpc } = await import('./session.js')
+const { registerSessionIpc, classifySpawnFailure } = await import('./session.js')
 const { sessionApi } = await import('@preload/api/session.js')
 const { SessionFeedTap } = await import('@main/sessions/sessionFeedTap.js')
 const { EventEmitter } = await import('node:events')
@@ -332,3 +332,167 @@ describe('raw PTY attach ownership (#1311)', () => {
   })
 })
 
+// #1281 / #1283 item 3 (terminal half): a plain terminal's view reference now
+// outlives the shell too, so it gets the same page ownership as the agent PTY
+// above. Before, the manager flag had no release at all, and a reloaded or
+// crashed renderer could never give one back.
+describe('terminal attach ownership (#1281)', () => {
+  function register(id: number) {
+    const detached: string[] = []
+    const manager = Object.assign(new EventEmitter(), {
+      attachTerminal: (sessionId: string) => (sessionId === 'agent-pane' ? null : 'replay'),
+      detachTerminal: (sessionId: string) => { detached.push(sessionId) },
+      detachAgentPty: vi.fn(),
+    })
+    registerSessionIpc(manager as never, {} as never, new SessionFeedTap(manager as never))
+    const sender = Object.assign(new EventEmitter(), { id })
+    return {
+      detached,
+      sender,
+      attach: (sessionId: string, document: string) => harness.handlers.get('session:terminal-attach')!({ sender }, sessionId, document),
+      detach: (sessionId: string, document: string) => harness.handlers.get('session:terminal-detach')!({ sender }, sessionId, document),
+      announce: (document: string) => harness.handlers.get('session:screen-document')!({ sender }, document),
+    }
+  }
+
+  it('releases a page\'s terminal views when it reloads or dies, and ignores its late detach', () => {
+    const page = register(6161)
+    page.announce('doc-1')
+    expect(page.attach('shell', 'doc-1')).toBe('replay')
+    // Not a terminal: main took no reference, so the reload releases none.
+    expect(page.attach('agent-pane', 'doc-1')).toBe('')
+    page.announce('doc-2')
+    expect(page.detached).toEqual(['shell'])
+    // The dead page's queued detach must not take the new page's reference.
+    page.attach('shell', 'doc-2')
+    page.detach('shell', 'doc-1')
+    expect(page.detached).toEqual(['shell'])
+    page.sender.emit('destroyed')
+    expect(page.detached).toEqual(['shell', 'shell'])
+  })
+
+  it('passes a leaf\'s detach through once per attach, and a stale page gets the replay without a reference', () => {
+    const page = register(6262)
+    page.announce('doc')
+    page.attach('shell', 'doc')
+    page.detach('shell', 'doc')
+    page.detach('shell', 'doc')
+    expect(page.detached).toEqual(['shell'])
+    // A page that already reloaded away takes nothing that could leak.
+    expect(page.attach('shell', 'old-doc')).toBe('')
+    page.sender.emit('destroyed')
+    expect(page.detached).toEqual(['shell'])
+  })
+})
+
+// #1267 (steering q22 at the source): session:spawn relayed the raw provider
+// exception over IPC, where every renderer surface had to remember not to
+// show it. Main launders it like recover() does; only curated, secret-free
+// failures cross as themselves.
+describe('session:spawn rejections', () => {
+  const { readFileSync } = require('node:fs') as typeof import('node:fs')
+  const { join } = require('node:path') as typeof import('node:path')
+  const recorded = (JSON.parse(readFileSync(join(import.meta.dirname,
+    '../../../testing/fixtures/spawn-failure/posix-spawnp-2026-09-23.json'), 'utf8')) as { reason: string }).reason
+
+  async function rejectionOf(error: unknown, options: Record<string, unknown> = { kind: 'claude' }, journal?: { record: ReturnType<typeof vi.fn> }): Promise<string> {
+    registerSessionIpc({ spawn: vi.fn(async () => { throw error }) } as never, {} as never, { flushCommitted: () => {} }, journal as never)
+    const handler = harness.handlers.get('session:spawn')!
+    return await Promise.resolve(handler({ sender: {} }, { cwd: '/repo', ...options })).then(() => 'resolved', (e: Error) => e.message)
+  }
+
+  // #1324 review A/B: a non-Error whose toString throws used to escape as
+  // the rejection, carrying whatever it threw.
+  it('never reads a non-Error throw', async () => {
+    const hostile = { toString: () => { throw new Error('token=secret') } }
+    expect(await rejectionOf(hostile)).toBe('Session failed to start. Check provider setup and retry.')
+  })
+
+  // #1324 review A/B: proxy guidance only for a Claude spawn that runs the
+  // proxy; both recognised signatures reach it.
+  it('gives the Claude proxy guidance only to a Claude proxy spawn', async () => {
+    expect(await rejectionOf(new Error('spawn /repo/mitmdump: ENOENT'), { kind: 'codex', useProxy: false })).toBe('Session failed to start. Check provider setup and retry.')
+    expect(await rejectionOf(new Error('Unable to locate mitmAddon.py'), { kind: 'claude', useProxy: true })).toContain('Claude proxy startup failed')
+    expect(await rejectionOf(new Error('Unable to find mitmdump on PATH'), { kind: 'claude', useProxy: true })).toContain('Claude proxy startup failed')
+    expect(await rejectionOf(new Error('Unable to find mitmdump on PATH'), { kind: 'claude', useProxy: false })).toBe('Session failed to start. Check provider setup and retry.')
+  })
+
+  // #1324 review round 2 A/B: an Error's message can be a getter. One that
+  // throws escaped as the rejection; one that answered the window sentence
+  // first and a token next was returned as-is and read again by IPC.
+  it('never lets an Error\'s own message getter reach the rejection', async () => {
+    const throwing = new Error('x')
+    Object.defineProperty(throwing, 'message', { get() { throw new Error('token=secret') } })
+    expect(await rejectionOf(throwing)).toBe('Session failed to start. Check provider setup and retry.')
+    let reads = 0
+    const shifting = new Error('x')
+    Object.defineProperty(shifting, 'message', { get: () => (reads++ === 0 ? 'The requesting window can no longer own this session' : 'token=secret') })
+    registerSessionIpc({ spawn: vi.fn(async () => { throw shifting }) } as never, {} as never, { flushCommitted: () => {} })
+    const rejected = await Promise.resolve(harness.handlers.get('session:spawn')!({ sender: {} }, { cwd: '/repo', kind: 'claude' })).then(() => null, (e: Error) => e)
+    expect(rejected).not.toBe(shifting)
+    expect(rejected!.message).toBe('The requesting window can no longer own this session')
+    expect(rejected!.message).toBe('The requesting window can no longer own this session')
+  })
+
+  // #1324 review round 2 A/B: the guidance needs BOTH a Claude spawn and
+  // useProxy exactly true (sessionManager starts mitmproxy only then).
+  it('gives no proxy guidance to a Codex proxy spawn or a Claude spawn without useProxy', async () => {
+    expect(await rejectionOf(new Error('Unable to find mitmdump on PATH'), { kind: 'codex', useProxy: true })).toBe('Session failed to start. Check provider setup and retry.')
+    expect(await rejectionOf(new Error('Unable to find mitmdump on PATH'), { kind: 'claude' })).toBe('Session failed to start. Check provider setup and retry.')
+  })
+
+  // #1324 review round 2 B/C: every signature a debugger reads from the
+  // journal, one representative each, so a collapsed classifier fails here.
+  it('signs each known failure with its own code', async () => {
+    const { MissingWorkspaceDirectoryError } = await import('@main/workspaceDirectory.js')
+    const { ProviderCliNotFoundError } = await import('@main/sessionManager.js')
+    const signatureOf = (error: unknown, proxyApplies = false) => classifySpawnFailure(error, proxyApplies).signature
+    expect(signatureOf(new Error(recorded))).toBe('posix-spawnp')
+    expect(signatureOf(new MissingWorkspaceDirectoryError('/repo/gone'))).toBe('missing-workspace')
+    expect(signatureOf(new ProviderCliNotFoundError('codex'))).toBe('cli-not-found')
+    expect(signatureOf(new Error('The requesting window can no longer own this session'))).toBe('window-refused')
+    expect(signatureOf({ toString: () => 'x' })).toBe('non-error-throw')
+    expect(signatureOf(new Error('Unable to locate mitmAddon.py'), true)).toBe('claude-proxy')
+    // A Codex error naming mitmdump is what it is, not a Claude proxy failure.
+    expect(signatureOf(new Error('spawn /repo/mitmdump: ENOENT'))).toBe('enoent')
+    expect(signatureOf(new Error('spawn /usr/bin/codex EACCES'))).toBe('eacces')
+    expect(signatureOf(new Error('Session recovery was cancelled'))).toBe('unclassified')
+  })
+
+  // #1324 review C: the laundered rejection is all the incident journal and
+  // a debug bundle see, so the failure's identity is journaled as a fixed
+  // signature, never its text.
+  it('journals which known failure it was, without its text', async () => {
+    const journal = { record: vi.fn() }
+    await rejectionOf(new Error(`${recorded} env=ANTHROPIC_API_KEY=sk-ant-secret`), { kind: 'codex' }, journal)
+    expect(journal.record).toHaveBeenCalledWith(expect.objectContaining({ name: 'session.spawn.failed', data: { kind: 'codex', signature: 'posix-spawnp' } }))
+    expect(JSON.stringify(journal.record.mock.calls)).not.toContain('sk-ant')
+  })
+
+  it('never relays a raw provider exception', async () => {
+    const message = await rejectionOf(new Error(`${recorded} env=ANTHROPIC_API_KEY=sk-ant-secret https://user:pass@proxy.example`))
+    expect(message).toBe('Session failed to start. Check provider setup and retry.')
+  })
+
+  it('keeps the curated failures that name their fix', async () => {
+    const { MissingWorkspaceDirectoryError } = await import('@main/workspaceDirectory.js')
+    const { ProviderCliNotFoundError } = await import('@main/sessionManager.js')
+    expect(await rejectionOf(new MissingWorkspaceDirectoryError('/repo/.worktrees/gone'))).toBe('Workspace folder is missing: /repo/.worktrees/gone')
+    expect(await rejectionOf(new ProviderCliNotFoundError('codex'))).toBe('codex CLI not found. Open Setup (File › Setup…) to install it or enter its path.')
+  })
+
+  it('keeps the window-ownership refusal, which our own code writes', async () => {
+    const { claimSessionForWindow } = await import('@main/window/windowRegistry.js')
+    vi.mocked(claimSessionForWindow).mockReturnValueOnce(null as never)
+    registerSessionIpc({ spawn: vi.fn(async (_options: unknown, claim: (id: string) => void) => { claim('s1'); return 's1' }) } as never, {} as never, { flushCommitted: () => {} })
+    const handler = harness.handlers.get('session:spawn')!
+    const message = await Promise.resolve(handler({ sender: {} }, { cwd: '/repo', kind: 'claude' })).then(() => 'resolved', (e: Error) => e.message)
+    expect(message).toBe('The requesting window can no longer own this session')
+  })
+
+  it('turns a Claude proxy startup failure into the proxy guidance, not its raw text', async () => {
+    const message = await rejectionOf(new Error('Timed out waiting for mitmproxy on 127.0.0.1:51234 with token=abc'), { kind: 'claude', useProxy: true })
+    expect(message).toContain('Claude proxy startup failed')
+    expect(message).not.toContain('token=abc')
+  })
+})
