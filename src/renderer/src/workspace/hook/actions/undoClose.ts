@@ -550,6 +550,14 @@ export function useUndoCloseAction(
       // review: a deleted-folder member was retried, and re-toasted, on
       // every later ⌘⇧T).
       let consumedAny = false
+      // WHY the group remembers consumed ids (#1387 review a, round 2): undo
+      // replays newest-first, so a parent can be consumed as stale BEFORE its
+      // child in the same group comes back, carrying its old pointers to that
+      // parent. The per-entry drop in restoreSingleEntry ran while the child
+      // was not live yet, so it missed it. Dropping once the whole group has
+      // replayed catches every member restored after the consumed one.
+      const consumedIds = new Set<SessionId>()
+      const dropConsumed = (): void => dropGhostPointers(consumedIds)
       while (remaining.length > 0) {
         const member = remaining[remaining.length - 1]
         remaining = remaining.slice(0, -1)
@@ -561,6 +569,8 @@ export function useUndoCloseAction(
           restoredAny = true
         } else if (result === 'stale') {
           consumedAny = true
+          if (member.type === 'session') consumedIds.add(member.sessionId)
+          else for (const closed of member.sessions) consumedIds.add(closed.sessionId)
         } else if (result === 'retryable-failure') {
           if (!restoredAny && !consumedAny) return 'retryable-failure'
           const rest = [...remaining, member]
@@ -568,12 +578,14 @@ export function useUndoCloseAction(
           refs.undoStackRef.current.push(leftover)
           // Part of the group came back; say what did not (#1242).
           showToast(restoreFailureMessage(leftover), RESTORE_FAILURE_TOAST_MS)
+          dropConsumed()
           return 'restored'
         }
       }
+      dropConsumed()
       return restoredAny ? 'restored' : 'stale'
     },
-    [refs.undoStackRef, restoreSingleEntry, showToast],
+    [dropGhostPointers, refs.undoStackRef, restoreSingleEntry, showToast],
   )
 
   const undoClose = useCallback(async () => {
