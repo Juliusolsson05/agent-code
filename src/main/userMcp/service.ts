@@ -46,6 +46,8 @@ import {
 import { UserMcpSecretStore } from './secrets.js'
 import { loadUserMcpDocument, saveUserMcpDocument } from './store.js'
 
+type PendingSecretRestore = { run: () => Promise<void>; safeWithNewDocument: boolean }
+
 export type UserMcpLaunchResolution = {
   servers: ResolvedUserMcpServer[]
   attachedIds: string[]
@@ -494,7 +496,9 @@ export class UserMcpService {
         // document that is actually on disk. A restore that itself fails is
         // not retried: the server is left without (some of) its secrets,
         // which launch refuses to attach. That is the fail-closed direction.
-        const restore = this.pendingSecretRestore
+        // Typed explicitly: TypeScript narrows the field to null from the
+        // assignment above and does not see the operation set it.
+        const restore: PendingSecretRestore | null = this.pendingSecretRestore
         if (restore && (oldDocumentOnDisk || restore.safeWithNewDocument)) {
           await restore.run().catch(() => {})
         }
@@ -527,7 +531,7 @@ export class UserMcpService {
 
   /** The secret restore the current operation registered before touching
    *  secrets (q110); mutate() decides whether it may run. */
-  private pendingSecretRestore: { run: () => Promise<void>; safeWithNewDocument: boolean } | null = null
+  private pendingSecretRestore: PendingSecretRestore | null = null
 
   /** Set by persist() during the current mutate() operation (#1304). */
   private persistedInMutation = false
