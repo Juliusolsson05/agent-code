@@ -1,6 +1,6 @@
 import { fireEvent, render } from '@testing-library/react'
 import type { ReactElement } from 'react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -213,6 +213,81 @@ describe('focus-mode keyboard ownership', () => {
     view.unmount()
     if (originalApi) Object.defineProperty(window, 'api', originalApi)
     else Reflect.deleteProperty(window, 'api')
+  })
+
+  // #1307: Radix focuses the modal's DialogContent while the extension iframe
+  // is still loading, or before its document takes focus. The palette chord
+  // then targets the HOST shell, not the iframe, and main forwards nothing
+  // (the focused frame is the host). The ownership gate dropped the chord, so
+  // no palette opened until the user clicked into the extension. The DOM here
+  // is AppHostSurface's: an owner-marked DialogContent holding the modal
+  // iframe (viewBridge's `data-extension-shell="modal"`).
+  // Removed after every test, pass or fail: a leftover owner marker gates every
+  // later test in this file behind the app-ownership branch.
+  const mountedDialogs: HTMLElement[] = []
+  afterEach(() => { mountedDialogs.splice(0).forEach(element => element.remove()) })
+
+  function mountOwnedDialog(withExtensionFrame: boolean): { content: HTMLElement; frame: HTMLIFrameElement | null; remove: () => void } {
+    const content = document.createElement('div')
+    content.setAttribute('data-agent-code-interaction-owner', 'app')
+    content.tabIndex = -1
+    let frame: HTMLIFrameElement | null = null
+    if (withExtensionFrame) {
+      frame = document.createElement('iframe')
+      frame.dataset.extensionShell = 'modal'
+      const wrapper = document.createElement('div')
+      wrapper.appendChild(frame)
+      content.appendChild(wrapper)
+    }
+    document.body.appendChild(content)
+    mountedDialogs.push(content)
+    return { content, frame, remove: () => content.remove() }
+  }
+
+  it('opens the palette from an extension modal whose iframe has not taken focus', () => {
+    const { workspace } = makeWorkspace('reader' as const)
+    const plain = { ...workspace, readerMode: null, spotlight: null } as typeof workspace
+    const view = render(<KeyboardHarness workspace={plain} />)
+    const dialog = mountOwnedDialog(true)
+
+    fireEvent.keyDown(dialog.content, { metaKey: true, shiftKey: true, code: 'KeyP', key: 'P' })
+
+    expect(harness.appState.requestCommandInvocation).toHaveBeenCalledWith('open-command-palette', 'keybinding')
+    dialog.remove()
+    view.unmount()
+  })
+
+  it('closes the extension modal, not the pane beneath it, on ⌘W from the host shell', () => {
+    const { workspace } = makeWorkspace('reader' as const)
+    const plain = { ...workspace, readerMode: null, spotlight: null } as typeof workspace
+    const view = render(<KeyboardHarness workspace={plain} />)
+    const dialog = mountOwnedDialog(true)
+    const closed = vi.fn()
+    dialog.frame!.addEventListener('agent-code-extension-close', closed)
+
+    const event = new KeyboardEvent('keydown', { metaKey: true, code: 'KeyW', key: 'w', bubbles: true, cancelable: true })
+    dialog.content.dispatchEvent(event)
+
+    expect(closed).toHaveBeenCalledTimes(1)
+    expect(event.defaultPrevented).toBe(true)
+    expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
+    dialog.remove()
+    view.unmount()
+  })
+
+  it('still drops the palette chord in an ordinary app dialog', () => {
+    // The exemption is for the extension's shell only. Any other owned dialog
+    // keeps the gate: the palette must not open over it.
+    const { workspace } = makeWorkspace('reader' as const)
+    const plain = { ...workspace, readerMode: null, spotlight: null } as typeof workspace
+    const view = render(<KeyboardHarness workspace={plain} />)
+    const dialog = mountOwnedDialog(false)
+
+    fireEvent.keyDown(dialog.content, { metaKey: true, shiftKey: true, code: 'KeyP', key: 'P' })
+
+    expect(harness.appState.requestCommandInvocation).not.toHaveBeenCalled()
+    dialog.remove()
+    view.unmount()
   })
 
   it('⌘ digits fill the focused lane by row label, and a second held digit reaches rows 10–99', () => {
