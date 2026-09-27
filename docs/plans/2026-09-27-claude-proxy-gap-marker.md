@@ -12,8 +12,8 @@ the surviving chunks as one continuous answer.
 - The feed shows a DURABLE row among the conversation, where the loss
   began: **"Part of this response was not captured (HH:MM:SS–HH:MM:SS)"**.
   - The row stays after later turns.
-  - It comes back whenever the conversation's feed is rebuilt, within the
-    lifetime of the main process (decision 5).
+  - It comes back whenever the conversation's feed is rebuilt within this
+    app run. It does not survive an app restart (decision 5, #1445).
 - The saved transcript (JSONL, Claude's own file) is untouched and still
   fills in the full message as usual.
 
@@ -91,15 +91,22 @@ the surviving chunks as one continuous answer.
    phase. Same trade as #1040. UNCONFIRMED.
 4. **Where the gap is placed:** at its true position in the line order,
    with a package change. We don't approximate it app-side.
-5. **How long the marker stays: OWNER-APPROVED (B6 proxy, 2026-09-27):
-   option B**, a DURABLE feed-history row (temp/manager/assign/w3-1381-decision.md).
-   The owner's rule is that data loss is never hidden. A work-slot marker
-   (option A) would vanish once the agent worked again, so it would hide
-   the loss from anyone reviewing later. The row reads **"Part of this
-   response was not captured (HH:MM:SS–HH:MM:SS)"** and supersedes the
-   decision-1 wording. It persists after later turns and survives a
-   renderer reload. It is one row kind, adds no new UI surface, and uses
-   the existing muted MarkerRow styling.
+5. **How long the row stays: OWNER-APPROVED (B6 proxy, 2026-09-27, q119
+   as amended by q120), verbatim:** "Option B, bounded to the
+   main-process lifetime; restart durability needs a dedicated store and is
+   an owner decision (1445), related to #1235."
+   - The row is a durable FEED-HISTORY row, not a work-slot marker (a
+     work-slot marker would vanish once the agent worked again).
+   - It survives later turns in this app run, and every feed rebuild
+     within it. It does not survive an app restart: that is #1445.
+   - The row reads **"Part of this response was not captured
+     (HH:MM:SS–HH:MM:SS)"**, which supersedes the decision-1 wording. It is
+     one row kind, adds no new UI surface, and uses the existing muted
+     MarkerRow styling.
+   - Tried and withdrawn: reseeding prior runs' rows from the
+     AppRunJournal's `claude.proxy_transport_gap` incidents. B6 (q120)
+     ruled the journal forensic, lossy and without a conversation id; it
+     stays a diagnostic copy only.
    - Ruling: the row is held by MAIN, in memory, per provider
      CONVERSATION (`TransportGapLedger`). It rides the conversation's
      initial history chunk, the load every feed rebuild makes: a window
@@ -110,10 +117,8 @@ the surviving chunks as one continuous answer.
        on-disk record.
      - Bounded: the newest 50 gaps per conversation, and 500
        conversations (least recently recorded evicted).
-     - Lost on an app (main process) restart.
-     - Whether this bounded main-process lifetime is what option B
-       approves is ASKED of B6 (steering q119) and recorded in the PR
-       before READY.
+     - Lost on an app (main process) restart, per the approved answer
+       above (#1445).
    - Ruling: the span is app-clock time, from `since` (when the tail was
      last caught up, i.e. the previous poll that completed) to `until`
      (when the gap was detected). Wire events carry no timestamp, and the
