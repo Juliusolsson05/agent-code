@@ -1,5 +1,5 @@
 import { readFile, readdir, stat } from 'node:fs/promises'
-import { join } from 'path'
+import { dirname, join } from 'path'
 
 import { PROXY_EVENTS_DIR } from '@main/storage/paths.js'
 import { canonicalizePath, sanitizePathSegment } from '@shared/runtime/projectDir.js'
@@ -221,38 +221,64 @@ async function findLatestRun(
 }
 
 
+// The file a rotating mirror moves its full log to (codex-headless
+// `rotatedMirrorPath`, agent-code#372). Named here rather than imported
+// because this reader serves every provider; Claude's addon never rotates,
+// so for Claude runs this file simply does not exist.
+const ROTATED_EVENTS_FILE = 'proxy-events.1.jsonl'
+
 async function readEventsTail(path: string, size: number): Promise<string | null> {
   try {
-    if (size <= PROXY_EVENTS_BUNDLE_MAX_BYTES) {
-      return await readFile(path, 'utf-8')
+    if (size > PROXY_EVENTS_BUNDLE_MAX_BYTES) {
+      const tail = await readTailLines(path, size, PROXY_EVENTS_BUNDLE_MAX_BYTES)
+      return `${truncatedHeader(size - Buffer.byteLength(tail), path)}\n${tail}`
     }
-    // Read the trailing PROXY_EVENTS_BUNDLE_MAX_BYTES bytes. We can't
-    // use readFile with a position arg (no slice option in fs.promises
-    // readFile), so open + read directly.
-    const { open } = await import('node:fs/promises')
-    const handle = await open(path, 'r')
-    try {
-      const start = size - PROXY_EVENTS_BUNDLE_MAX_BYTES
-      const buf = Buffer.alloc(PROXY_EVENTS_BUNDLE_MAX_BYTES)
-      await handle.read(buf, 0, PROXY_EVENTS_BUNDLE_MAX_BYTES, start)
-      // Drop the first partial line so consumers always see a clean
-      // JSONL boundary at byte 0 of the captured content.
-      const content = buf.toString('utf-8')
-      const firstNewline = content.indexOf('\n')
-      const trimmed = firstNewline >= 0 ? content.slice(firstNewline + 1) : content
-      const droppedBytes = size - trimmed.length
-      const header = JSON.stringify({
-        kind: 'truncated',
-        reason: `proxy-events.jsonl exceeded ${PROXY_EVENTS_BUNDLE_MAX_BYTES} bytes; only the trailing portion is included in this bundle. Full log on disk: ${path}`,
-        dropped_bytes: droppedBytes,
-      })
-      return `${header}\n${trimmed}`
-    } finally {
-      await handle.close()
-    }
+    const current = await readFile(path, 'utf-8')
+    // WHY read across a rotation (agent-code#372): the Codex mirror renames
+    // a full file to `.1` and starts fresh. A bundle taken just after that
+    // would otherwise carry only the few events since the rotation, i.e.
+    // lose exactly the recent context it exists for. The remainder of the
+    // budget comes from the END of the rotated file, which is the traffic
+    // immediately before the current file's first line.
+    const rotatedPath = join(dirname(path), ROTATED_EVENTS_FILE)
+    let rotatedSize: number
+    try { rotatedSize = (await stat(rotatedPath)).size } catch { return current }
+    const budget = PROXY_EVENTS_BUNDLE_MAX_BYTES - size
+    if (budget <= 0) return current
+    const tail = await readTailLines(rotatedPath, rotatedSize, Math.min(budget, rotatedSize))
+    const dropped = rotatedSize - Buffer.byteLength(tail)
+    const header = dropped > 0 ? `${truncatedHeader(dropped, rotatedPath)}\n` : ''
+    return `${header}${tail}${current}`
   } catch {
     return null
   }
+}
+
+// The last `bytes` of a file, starting at a line boundary. A read that does
+// not start at byte 0 drops its first partial line, so consumers always see
+// clean JSONL.
+async function readTailLines(path: string, size: number, bytes: number): Promise<string> {
+  const { open } = await import('node:fs/promises')
+  const handle = await open(path, 'r')
+  try {
+    const start = size - bytes
+    const buf = Buffer.alloc(bytes)
+    const { bytesRead } = await handle.read(buf, 0, bytes, start)
+    const content = buf.subarray(0, bytesRead).toString('utf-8')
+    if (start === 0) return content
+    const firstNewline = content.indexOf('\n')
+    return firstNewline >= 0 ? content.slice(firstNewline + 1) : ''
+  } finally {
+    await handle.close()
+  }
+}
+
+function truncatedHeader(droppedBytes: number, path: string): string {
+  return JSON.stringify({
+    kind: 'truncated',
+    reason: `proxy-events.jsonl exceeded ${PROXY_EVENTS_BUNDLE_MAX_BYTES} bytes; only the trailing portion is included in this bundle. Full log on disk: ${path}`,
+    dropped_bytes: droppedBytes,
+  })
 }
 
 

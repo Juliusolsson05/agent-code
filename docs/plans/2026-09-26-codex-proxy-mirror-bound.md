@@ -76,3 +76,8 @@ A Codex session's `proxy-events.jsonl` mirror:
 - `debugRetention.ts` (W4's area).
 - Feed-debug and performance logs (already bounded).
 - `/v1/models` dedupe (Decision 6).
+
+## Execution notes
+- **Ruling:** a rotation waits until the stream has opened its fd (`!stream.pending`). Why: renaming earlier moves or misses a file the stream has not opened yet, and a startup burst was lost in the mutant. Cost if wrong: during one open the file can overshoot the cap, bounded by the 16 MiB queue.
+- **Ruling:** the bundle reader keeps its old behavior at exactly 5 MiB: the whole file, with no header. It reads `.1` only while the budget is positive. The truncation header's `dropped_bytes` now counts bytes, not UTF-16 units.
+- **Ruling:** the package has no plan file of its own. This plan covers both PRs, and codex-headless#56 links it.
