@@ -213,13 +213,14 @@ function hashText(input: string): string {
  *  Exported because the IPC layer's physical re-check guards it (#1268). */
 export const LSP_VIRTUAL_DIR = '.agent-code-lsp'
 
+/** The file name a pathless document is given under LSP_VIRTUAL_DIR. Exported
+ *  so the IPC layer checks exactly the leaf didOpen will name (#1412 review c). */
+export function lspVirtualDocumentName(clientUri: string, language: string): string {
+  return `virtual-${hashText(clientUri)}.${languageFileExtension(language)}`
+}
+
 function makeVirtualServerUri(workspaceRoot: string, clientUri: string, language: string): string {
-  const ext = languageFileExtension(language)
-  const filePath = resolve(
-    workspaceRoot,
-    LSP_VIRTUAL_DIR,
-    `virtual-${hashText(clientUri)}.${ext}`,
-  )
+  const filePath = resolve(workspaceRoot, LSP_VIRTUAL_DIR, lspVirtualDocumentName(clientUri, language))
   return pathToFileURL(filePath).href
 }
 

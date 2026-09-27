@@ -5,7 +5,7 @@ import { join, relative } from 'path'
 import type { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
 import { resolveInsideRoot, validateExistingTarget } from '@main/ipc/editorFs.js'
 import type { EditorFsRootRegistry } from '@main/ipc/editorFsRootRegistry.js'
-import { LSP_VIRTUAL_DIR } from '@main/lspManager.js'
+import { LSP_VIRTUAL_DIR, lspVirtualDocumentName } from '@main/lspManager.js'
 import type { LspManager } from '@main/lspManager.js'
 import type {
   LspCompletionContext,
@@ -37,10 +37,13 @@ async function assertRootUnchanged(workspaceRoot: string): Promise<void> {
   if ((await realpath(workspaceRoot)) !== workspaceRoot) throw new Error('LSP workspace root no longer resolves to the authorized root')
 }
 
-export function lspPhysicalTargetAssertion(context: { workspaceRoot: string; filePath: string | null }): () => Promise<void> {
-  const { workspaceRoot, filePath } = context
+export function lspPhysicalTargetAssertion(context: { workspaceRoot: string; filePath: string | null; virtualName?: string }): () => Promise<void> {
+  const { workspaceRoot, filePath, virtualName } = context
   if (filePath === null) {
     return async () => {
+      // The leaf name is required (#1412 review c): without it the check
+      // cannot see what didOpen will name, so the open is refused.
+      if (!virtualName) throw new Error('LSP virtual document has no leaf name to check')
       // Checked FIRST: a missing virtual directory below proves nothing about
       // where the root now points (review b, finding 2).
       await assertRootUnchanged(workspaceRoot)
@@ -54,6 +57,20 @@ export function lspPhysicalTargetAssertion(context: { workspaceRoot: string; fil
       }
       if (entry.isSymbolicLink()) throw new Error('LSP virtual document directory is a symbolic link')
       await validateExistingTarget(workspaceRoot, directory)
+      // The LEAF didOpen names (#1412 review c): a symlink created there in
+      // advance (its hash is steerable through the renderer's clientUri)
+      // resolved outside the root with no timing window at all. It must be
+      // absent, or a regular file inside the root.
+      const leaf = join(directory, virtualName)
+      let leafEntry
+      try {
+        leafEntry = await lstat(leaf)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+        throw error
+      }
+      if (leafEntry.isSymbolicLink() || !leafEntry.isFile()) throw new Error('LSP virtual document path is not a regular file')
+      await validateExistingTarget(workspaceRoot, leaf)
     }
   }
   return async () => {
@@ -339,7 +356,7 @@ export function registerLspIpc(
               language: params.language,
               workspaceRoot: context.workspaceRoot,
               filePath: context.filePath,
-              assertPhysicalTarget: lspPhysicalTargetAssertion(context),
+              assertPhysicalTarget: lspPhysicalTargetAssertion({ ...context, virtualName: lspVirtualDocumentName(params.clientUri, params.language) }),
             })
             // A page that left meanwhile does not get the marker back: clear()
             // dropped it, and the close clear() queued behind this entry will
@@ -455,7 +472,7 @@ export function registerLspIpc(
               language: params.language,
               workspaceRoot: context.workspaceRoot,
               filePath: context.filePath,
-              assertPhysicalTarget: lspPhysicalTargetAssertion(context),
+              assertPhysicalTarget: lspPhysicalTargetAssertion({ ...context, virtualName: lspVirtualDocumentName(params.clientUri, params.language) }),
             })
             if (!ok) break
           }

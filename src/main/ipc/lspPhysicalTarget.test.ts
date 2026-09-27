@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn(), on: vi.fn() } }))
 
 const { lspPhysicalTargetAssertion } = await import('./lsp.js')
+const VIRTUAL = 'virtual-1a2b3c.ts'
 
 // #1268 review A's real-filesystem probe: authorize `src/a.ts` inside the root,
 // then swap `src` for a symlink to an outside directory holding its own
@@ -51,14 +52,14 @@ it('refuses a leaf that became a symlink, even to a file inside the root', async
 it('refuses a virtual document whose directory is a symlink out of the root', async () => {
   const { root, outside } = await layout()
   await symlink(outside, join(root, '.agent-code-lsp'))
-  await expect(lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: null })()).rejects.toThrow(/symbolic link/)
+  await expect(lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: null, virtualName: VIRTUAL })()).rejects.toThrow(/symbolic link/)
 })
 
 it('passes a virtual document with no directory yet, or a real one', async () => {
   const { root } = await layout()
-  await expect(lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: null })()).resolves.toBeUndefined()
+  await expect(lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: null, virtualName: VIRTUAL })()).resolves.toBeUndefined()
   await mkdir(join(root, '.agent-code-lsp'))
-  await expect(lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: null })()).resolves.toBeUndefined()
+  await expect(lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: null, virtualName: VIRTUAL })()).resolves.toBeUndefined()
 })
 
 // Review a: a case-only rename on a case-insensitive filesystem still resolves
@@ -79,8 +80,38 @@ it('accepts a case-only rename of the authorized file', async () => {
 // checks that the root still resolves to itself.
 it('refuses a pathless document when the root was replaced by a symlink out', async () => {
   const { root, outside } = await layout()
-  const assertion = lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: null })
+  const assertion = lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: null, virtualName: VIRTUAL })
   await rename(root, join(base, 'root-moved'))
   await symlink(outside, root)
   await expect(assertion()).rejects.toThrow(/root/)
 })
+
+// #1412 review c: the virtual branch checked `.agent-code-lsp/` but not the
+// `virtual-<hash>.<ext>` leaf didOpen NAMES. A leaf symlink created in advance
+// (the hash of a renderer-chosen clientUri is steerable) resolved outside with
+// no timing window at all. The leaf must be absent or a regular, contained
+// file, and a pathless open without its leaf name is refused (fail closed).
+it('refuses a virtual document whose named leaf is a symlink out, or not a file', async () => {
+  const { root, outside } = await layout()
+  await mkdir(join(root, '.agent-code-lsp'))
+  await symlink(join(outside, 'a.ts'), join(root, '.agent-code-lsp', VIRTUAL))
+  await expect(lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: null, virtualName: VIRTUAL })()).rejects.toThrow()
+  await rm(join(root, '.agent-code-lsp', VIRTUAL))
+  await mkdir(join(root, '.agent-code-lsp', VIRTUAL))
+  await expect(lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: null, virtualName: VIRTUAL })()).rejects.toThrow()
+  await rm(join(root, '.agent-code-lsp', VIRTUAL), { recursive: true })
+  await writeFile(join(root, '.agent-code-lsp', VIRTUAL), '')
+  await expect(lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: null, virtualName: VIRTUAL })()).resolves.toBeUndefined()
+  await expect(lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: null })()).rejects.toThrow()
+})
+
+// #1412 review c (minor): the regular-file re-check had no test. An authorized
+// file replaced by a directory before didOpen is refused.
+it('refuses an authorized file that became a directory', async () => {
+  const { root } = await layout()
+  const assertion = lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: join('src', 'a.ts') })
+  await rm(join(root, 'src', 'a.ts'))
+  await mkdir(join(root, 'src', 'a.ts'))
+  await expect(assertion()).rejects.toThrow(/not a file/)
+})
+

@@ -24,3 +24,11 @@
 - **One await:** the window between the re-check and the notification is one await, inherent to any path-based open.
 - **A swap after a document is already open** (a later `didChange`, or a document request, for a URI the server already holds) is not guarded. The server already has that URI, and no per-change path check stops it from reading the path later. This issue is the authorization-to-use window of an OPEN.
 - **The IPC wiring** of the callback is not covered by a test, because the handlers need Electron.
+
+## After review b (1cb8b3cf)
+Every assertion first checks that the canonical root still resolves to itself (`assertRootUnchanged`). A pathless document's check used to return early when the virtual directory was missing, without checking the root. Review b's other findings are the path-based LSP limit; B6 (owner proxy) accepted this PR as narrowing the window, `Refs #1268`.
+
+## After review c
+- The virtual branch now checks the LEAF `didOpen` names (`virtual-<hash>.<ext>`, from `lspVirtualDocumentName`, shared with the manager). It must be absent, or a regular file inside the root. A leaf symlink created in advance escaped with no timing window. A pathless open without its leaf name is refused.
+- The regular-file re-check is pinned: an authorized file that became a directory is refused.
+- The IPC wiring of the callback still has no committed test. A wiring test is feasible with the existing Electron mock; it is left out under the freeze and stated as a residual.
