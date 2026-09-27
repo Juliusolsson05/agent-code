@@ -71,3 +71,16 @@ it('accepts a case-only rename of the authorized file', async () => {
   if (caseInsensitive) await expect(assertion()).resolves.toBeUndefined()
   else await expect(assertion()).rejects.toThrow()
 })
+
+// #1412 review b (finding 2): the ROOT itself swapped for a symlink out, with
+// no virtual-document directory at the target. The virtual branch returned
+// early on ENOENT without checking the root, and didOpen then named
+// `root/.agent-code-lsp/…`, which resolves outside. Every assertion now first
+// checks that the root still resolves to itself.
+it('refuses a pathless document when the root was replaced by a symlink out', async () => {
+  const { root, outside } = await layout()
+  const assertion = lspPhysicalTargetAssertion({ workspaceRoot: root, filePath: null })
+  await rename(root, join(base, 'root-moved'))
+  await symlink(outside, root)
+  await expect(assertion()).rejects.toThrow(/root/)
+})

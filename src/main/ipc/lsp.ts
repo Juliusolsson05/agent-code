@@ -1,5 +1,5 @@
 import { ipcMain, type WebContents } from 'electron'
-import { lstat } from 'fs/promises'
+import { lstat, realpath } from 'fs/promises'
 import { join, relative } from 'path'
 
 import type { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
@@ -27,10 +27,23 @@ import type {
  * `root/.agent-code-lsp/virtual-<hash>.<ext>` (makeVirtualServerUri). That
  * directory must not be a symlink out of the root.
  */
+/**
+ * The authorized root must still BE the root (#1412 review b): renamed away and
+ * replaced by a symlink out, every lexical path under it names outside
+ * content. `workspaceRoot` is the canonical path `roots.authorize` returned,
+ * so it must still resolve to exactly itself.
+ */
+async function assertRootUnchanged(workspaceRoot: string): Promise<void> {
+  if ((await realpath(workspaceRoot)) !== workspaceRoot) throw new Error('LSP workspace root no longer resolves to the authorized root')
+}
+
 export function lspPhysicalTargetAssertion(context: { workspaceRoot: string; filePath: string | null }): () => Promise<void> {
   const { workspaceRoot, filePath } = context
   if (filePath === null) {
     return async () => {
+      // Checked FIRST: a missing virtual directory below proves nothing about
+      // where the root now points (review b, finding 2).
+      await assertRootUnchanged(workspaceRoot)
       const directory = join(workspaceRoot, LSP_VIRTUAL_DIR)
       let entry
       try {
@@ -44,6 +57,7 @@ export function lspPhysicalTargetAssertion(context: { workspaceRoot: string; fil
     }
   }
   return async () => {
+    await assertRootUnchanged(workspaceRoot)
     const requested = resolveInsideRoot(workspaceRoot, filePath)
     const physical = await validateExistingTarget(workspaceRoot, requested)
     if (!(await lstat(physical)).isFile()) throw new Error('LSP document is not a file')
