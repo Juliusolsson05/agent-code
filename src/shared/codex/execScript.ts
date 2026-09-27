@@ -40,21 +40,140 @@ export type CodexExecScriptCall = {
   argument: string | null
 }
 
-/** Every `tools.<name>(` call in source order. Scanning resumes after each
- *  proven call, and after the opening parenthesis of an unproven one, so a
- *  string that merely contains the text `tools.x(` inside a proven argument
- *  is not double-counted. */
+/** Every `tools.<name>(` call in source order, found only in CODE.
+ *
+ * WHY a lexical scan and not a regex over the whole script (#1368 review c):
+ * a regex also matches `tools.exec_command(...)` inside a `//` comment or a
+ * string, and the reader then reports a command that never ran, which is
+ * worse than reporting none. The scan skips line and block comments, and
+ * single-, double- and backtick-quoted literals.
+ *
+ * Regex literals are skipped too, told apart from division by the usual
+ * lexer heuristic (a `/` where an expression may START is a regex). This is
+ * not optional: generated shell-quoting helpers such as
+ * `s.replace(/'/g, "'\\''")` are common, and without it the quote inside the
+ * regex opened a phantom string that swallowed the real
+ * `tools.exec_command(...)` after it. That was 70 recorded scripts in the
+ * first version of this scan.
+ *
+ * Known limit, conservative (a real call is missed, never invented): a call
+ * written inside a template's `${...}` interpolation is lexed past with the
+ * template, not collected.
+ *
+ * After a proven call the scan resumes past its closing parenthesis, so text
+ * inside the argument is never counted as a second call. After an unproven
+ * one it resumes just past the opening parenthesis. */
 export function codexExecScriptCalls(script: string): CodexExecScriptCall[] {
   const calls: CodexExecScriptCall[] = []
-  const pattern = /\btools\.([A-Za-z_$][\w$]*)\s*\(/g
-  let match: RegExpExecArray | null
-  while ((match = pattern.exec(script)) !== null) {
-    const openAt = match.index + match[0].length - 1
+  const callAt = /tools\.([A-Za-z_$][\w$]*)\s*\(/y
+  for (let i = 0; i < script.length; i += 1) {
+    const skipped = skipNonCode(script, i)
+    if (skipped === 'unterminated') break
+    if (skipped !== null) {
+      i = skipped
+      continue
+    }
+    // `tools` must start an identifier: `mytools.x(` is not a call to it.
+    if (script[i] !== 't' || /[\w$.]/.test(script[i - 1] ?? '')) continue
+    callAt.lastIndex = i
+    const match = callAt.exec(script)
+    if (!match) continue
+    const openAt = i + match[0].length - 1
     const closeAt = matchingCallEnd(script, openAt)
     calls.push({ tool: match[1], argument: closeAt === null ? null : script.slice(openAt + 1, closeAt).trim() })
-    if (closeAt !== null) pattern.lastIndex = closeAt + 1
+    i = closeAt ?? openAt
   }
   return calls
+}
+
+/**
+ * If a comment, string, template or regex literal starts at `at`, the index
+ * of its last character; `'unterminated'` if it never ends; otherwise null.
+ *
+ * A template's `${...}` is code, and may itself hold strings, regexes and
+ * further templates: `` `'${s.replace(/'/g, `'"'"'`)}'` `` is the recorded
+ * shell-quoting idiom. Skipping to the first backtick instead closed the
+ * outer template early, and the rest of the script was read out of phase.
+ */
+function skipNonCode(source: string, at: number): number | 'unterminated' | null {
+  const char = source[at]
+  if (char === '/' && source[at + 1] === '/') {
+    const newline = source.indexOf('\n', at + 2)
+    return newline < 0 ? 'unterminated' : newline
+  }
+  if (char === '/' && source[at + 1] === '*') {
+    const close = source.indexOf('*/', at + 2)
+    return close < 0 ? 'unterminated' : close + 1
+  }
+  if (char === '"' || char === "'") {
+    for (let i = at + 1; i < source.length; i += 1) {
+      if (source[i] === '\\') i += 1
+      else if (source[i] === char) return i
+    }
+    return 'unterminated'
+  }
+  if (char === '`') {
+    for (let i = at + 1; i < source.length; i += 1) {
+      if (source[i] === '\\') i += 1
+      else if (source[i] === '`') return i
+      else if (source[i] === '$' && source[i + 1] === '{') {
+        const close = closingInterpolation(source, i + 2)
+        if (close === 'unterminated') return close
+        i = close
+      }
+    }
+    return 'unterminated'
+  }
+  if (char === '/' && regexMayStart(source, at)) {
+    // No closing slash on the line: it was division after all.
+    return closingRegexSlash(source, at)
+  }
+  return null
+}
+
+// The `}` that ends a template interpolation whose code starts at `from`.
+function closingInterpolation(source: string, from: number): number | 'unterminated' {
+  let depth = 1
+  for (let i = from; i < source.length; i += 1) {
+    const skipped = skipNonCode(source, i)
+    if (skipped === 'unterminated') return skipped
+    if (skipped !== null) {
+      i = skipped
+      continue
+    }
+    if (source[i] === '{') depth += 1
+    else if (source[i] === '}' && --depth === 0) return i
+  }
+  return 'unterminated'
+}
+
+// A `/` starts a regex literal where an expression may begin: after an
+// operator or opening punctuation, after `return`-like keywords, or at the
+// start. After an identifier, a number or `)` / `]` it is division.
+function regexMayStart(source: string, slashAt: number): boolean {
+  let j = slashAt - 1
+  while (j >= 0 && /\s/.test(source[j]!)) j -= 1
+  if (j < 0) return true
+  const before = source[j]!
+  if ('(,=:[!&|?{};+-*%<>~^'.includes(before)) return true
+  const word = /[A-Za-z_$][\w$]*$/.exec(source.slice(Math.max(0, j - 10), j + 1))?.[0]
+  return word === 'return' || word === 'typeof' || word === 'case' || word === 'in' || word === 'of'
+}
+
+function closingRegexSlash(source: string, openAt: number): number | null {
+  let inClass = false
+  for (let i = openAt + 1; i < source.length; i += 1) {
+    const char = source[i]
+    if (char === '\n') return null
+    if (char === '\\') {
+      i += 1
+      continue
+    }
+    if (char === '[') inClass = true
+    else if (char === ']') inClass = false
+    else if (char === '/' && !inClass) return i
+  }
+  return null
 }
 
 /** Locate the closing parenthesis without executing or fully parsing generated

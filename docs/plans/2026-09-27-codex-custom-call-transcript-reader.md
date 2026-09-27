@@ -47,7 +47,21 @@ The reader runs in main over files, so the tests exercise the real entry point. 
 - `write_stdin` and MCP calls inside scripts, beyond naming them in the `tool_read` target.
 
 ## Execution notes
-- **Second fixture:** `codex-custom-call-patch-forms.jsonl` holds the two patch forms the 0.157 slice lacks, both recorded: a template-literal `tools.apply_patch` script (0.157, 2026-09-26) and a top-level `apply_patch` custom call (2026-05-19).
+- **Second fixture:** `codex-custom-call-forms.jsonl` (renamed after review round 1 added two records) holds the two patch forms the 0.157 slice lacks, both recorded: a template-literal `tools.apply_patch` script (0.157, 2026-09-26) and a top-level `apply_patch` custom call (2026-05-19).
 - **Fixture outputs:** the computed and non-command scripts' outputs are left out whole. One echoes MCP tool descriptions (provider text), and both run to 33–41 KB. Their calls are kept verbatim.
 - **Ruling: no separate grammar unit tests.** `codexExecScriptCalls` is exercised through the reader's real entry point by both fixtures. The moved helpers are pinned by the renderer suites, which pass unchanged. A unit test over the same scripts would only repeat those assertions. Cost if wrong: a grammar edge that neither fixture holds.
 - **Ruling: the recorded variable-argument patch** (`const patch = "…"; tools.apply_patch(patch)`) is not in a fixture, because its file name looks like a private project. It takes the same script-text path as the template form, which is covered.
+
+## Review round 1
+- **c (major): the call scan matched `tools.x(` inside comments and strings,** so the reader could report a command that never ran.
+  - `codexExecScriptCalls` is now a lexical scan that skips comments, strings, templates (with `${…}` nesting) and regex literals. Regex literals are told apart from division by the usual heuristic.
+  - Counted over the whole corpus (98,823 scripts), the lexer differs from the regex in 65 scripts, always by finding fewer calls:
+    - 62: patch text quoting `tools.x(`;
+    - 1: a template string holding a script that never runs;
+    - 2: malformed JS whose quotes pair differently, so the extra "call" really is inside a string.
+  - The lexer misses no call in well-formed code. The first lexer version did miss calls in 70 scripts: the shell-quoting idiom `s.replace(/'/g, …)` opened a phantom string. That is why the regex-literal and template handling exist.
+  - Recorded test: the patch-text case from 2026-07-12. The old scan turned it into a whole-script `shell_command`.
+- **c (minor): whole-script commands are head-truncated in search results.** Residual, and it predates this PR: search on main matches every item's full text and returns it head-truncated (`truncateItemText`), whatever the kind.
+- **c (minor): two contract parts were untested.**
+  - The test now asserts the joined text of a multi-block output.
+  - A recorded MCP-only script pins the `tool_read` target.

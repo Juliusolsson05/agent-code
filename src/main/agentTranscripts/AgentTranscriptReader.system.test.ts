@@ -130,25 +130,48 @@ describe('agent transcript tools on Claude and Codex JSONL', () => {
     expect(outputs.ok && outputs.items.filter(item => item.kind === 'tool_read' && item.tool === 'function_call_output').map(item => item.timestamp)).toEqual([
       at('2026-09-27T00:27:16.554Z'), at('2026-09-27T00:27:26.908Z'), at('2026-09-27T00:30:39.877Z'),
     ])
-    expect(outputs.ok && outputs.items.find(item => item.timestamp === at('2026-09-27T00:30:39.877Z'))).toMatchObject({
-      excerpt: expect.stringContaining('"exit_code":0'),
+    // Every text block, in order: the transport header AND each command's
+    // result (#1368 review c: keeping only the last part passed before).
+    const twoCommandOutput = records[7]!.payload as unknown as { output: Array<{ text: string }> }
+    expect(outputs.ok && outputs.items.find(item => item.timestamp === at('2026-09-27T00:27:26.908Z'))).toMatchObject({
+      excerpt: twoCommandOutput.output.map(block => block.text).join('\n').trim(),
     })
     const inspect = await inspectAgentTranscriptFile({ path })
     expect(inspect).toMatchObject({ ok: true, stats: { shellCommands: 4, userMessages: 1, assistantMessages: 2 } })
   })
 
-  // #1362: the two patch forms the 0.157 slice does not hold, both recorded.
-  // A template-literal argument cannot be decoded lexically, so its files come
-  // from the headers in the script text; the older top-level `apply_patch`
-  // custom call carries the patch as its whole input.
-  it('names the files of a template-literal patch script and of a top-level apply_patch call', async () => {
-    const path = jsonl('codex-patch-forms.jsonl', readFileSync(join(import.meta.dirname,
-      '../../../testing/fixtures/agent-transcripts/codex-custom-call-patch-forms.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)))
-    const edited = '/Users/xxxxxxxxxxxx/Desktop/Development/agent-code/.worktrees/review-1326-c/src/renderer/src/workspace/hook/actions/session.ts'
-    const result = await readAgentTranscriptFile({ path, provider: 'codex', projection: 'file_changes' })
+  // #1362: recorded custom-call forms the 0.157 slice does not hold.
+  // - A template-literal patch argument cannot be decoded lexically, so its
+  //   files come from the headers in the script text.
+  // - The older top-level `apply_patch` custom call carries the patch as its
+  //   whole input.
+  // - #1368 review c: a patch whose TEXT quotes
+  //   `tools.exec_command({"cmd":"rg …"})` (it edits a test fixture). A regex
+  //   scan read that as a call and reported a command that never ran; the
+  //   lexical scan skips string contents.
+  // - A script calling only an MCP tool is recorded as a script, targeted at
+  //   the tool it called.
+  it('reads the other recorded custom-call forms without inventing commands', async () => {
+    const path = jsonl('codex-custom-call-forms.jsonl', readFileSync(join(import.meta.dirname,
+      '../../../testing/fixtures/agent-transcripts/codex-custom-call-forms.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)))
+    const home = '/Users/xxxxxxxxxxxx/Desktop/Development/agent-code/.worktrees'
+    const edited = `${home}/review-1326-c/src/renderer/src/workspace/hook/actions/session.ts`
+    const quoting = [
+      `${home}/feed-render-rewrite/testing/fixtures/feed-presentation/operation-families.json`,
+      `${home}/feed-render-rewrite/testing/unit/scripts/renderingFixtureTools.test.ts`,
+    ]
+    const result = await readAgentTranscriptFile({ path, provider: 'codex', projection: 'timeline' })
     expect(result.ok && result.items).toEqual([
       { kind: 'patch', timestamp: Date.parse('2026-09-27T01:27:05.044Z'), files: [edited], summary: `apply_patch: ${edited}` },
       { kind: 'patch', timestamp: Date.parse('2026-05-19T07:15:19.499Z'), files: ['src/app/page.tsx'], summary: 'apply_patch: src/app/page.tsx' },
+      { kind: 'patch', timestamp: Date.parse('2026-07-12T19:14:02.294Z'), files: quoting, summary: `apply_patch: ${quoting.join(', ')}` },
+      {
+        kind: 'tool_read',
+        timestamp: Date.parse('2026-09-07T19:01:30.089Z'),
+        tool: 'exec',
+        target: 'mcp__agent_code__orchestration_wait_agents',
+        excerpt: expect.stringContaining('tools.mcp__agent_code__orchestration_wait_agents('),
+      },
     ])
   })
 
