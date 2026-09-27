@@ -349,6 +349,23 @@ describe('focus-mode keyboard ownership', () => {
     view.unmount()
   })
 
+  // #1394 review c (F1): a key aimed INSIDE a lower owner is judged by that
+  // owner, not by whichever owner is topmost. Radix's focus trap makes this
+  // state hard to reach, so the `closest()` scope is defense in depth; without
+  // this case, "always use the topmost owner" survived every test.
+  it('judges a key aimed at the extension shell by that shell, even with another owner mounted', () => {
+    const { workspace } = makeWorkspace('reader' as const)
+    const plain = { ...workspace, readerMode: null, spotlight: null } as typeof workspace
+    const view = render(<KeyboardHarness workspace={plain} />)
+    const extension = mountOwnedDialog(true)
+    mountOwnedDialog(false)
+
+    fireEvent.keyDown(extension.content, { metaKey: true, shiftKey: true, code: 'KeyP', key: 'P' })
+
+    expect(harness.appState.requestCommandInvocation).toHaveBeenCalledWith('open-command-palette', 'keybinding')
+    view.unmount()
+  })
+
   it('⌘ digits fill the focused lane by row label, and a second held digit reaches rows 10–99', () => {
     // The two-digit grammar had no behavioural test (#1013 review B, finding
     // 14). ⌘1 places row 1 and remembers the 1; ⌘2 inside the window makes
