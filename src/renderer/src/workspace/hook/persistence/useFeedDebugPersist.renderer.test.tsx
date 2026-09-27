@@ -9,11 +9,13 @@ import { useFeedDebugPersist } from './useFeedDebugPersist'
 
 const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
 const append = vi.fn<(input: Parameters<Window['api']['appendFeedDebugLog']>[0]) => Promise<void>>()
+const forget = vi.fn<(input: Parameters<Window['api']['forgetFeedDebugLog']>[0]) => Promise<void>>()
 
 beforeEach(() => {
   vi.useFakeTimers()
   append.mockReset().mockResolvedValue(undefined)
-  Object.defineProperty(window, 'api', { configurable: true, value: { appendFeedDebugLog: append } })
+  forget.mockReset().mockResolvedValue(undefined)
+  Object.defineProperty(window, 'api', { configurable: true, value: { appendFeedDebugLog: append, forgetFeedDebugLog: forget } })
 })
 
 afterEach(() => {
@@ -270,5 +272,36 @@ describe('feed debug persistence cadence and durability', () => {
     expect(refs.inFlightFeedDebugIdRef.current.a).toBe(2)
     await advance(3000)
     expect(append).toHaveBeenCalledTimes(2)
+  })
+})
+
+// #1392: main forgets a session's feed-debug state at PROCESS exit, but the
+// pane outlives the process and its later appends re-create that state. Only
+// the renderer knows when a session can never append again: its runtime is
+// gone. Then, and only then, it releases the id to main.
+describe('releasing a session whose runtime is gone (#1392)', () => {
+  it('forgets a removed session once, after its last flush, and keeps live ones', async () => {
+    const refs = makeRefs({ a: add(emptyRuntime(), 'a row'), b: add(emptyRuntime(), 'b row') })
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(1_000)
+    expect(append).toHaveBeenCalledTimes(2)
+    expect(forget).not.toHaveBeenCalled()
+
+    // Pane `a` closes: its runtime is removed.
+    refs.latestRuntimesRef.current = { b: refs.latestRuntimesRef.current.b! }
+    await advance(1_000)
+    expect(forget).toHaveBeenCalledExactlyOnceWith({ sessionId: 'a' })
+    expect(refs.persistedFeedDebugIdRef.current).not.toHaveProperty('a')
+    expect(refs.persistedFeedDebugIdRef.current.b).toBe(1)
+
+    await advance(3_000)
+    expect(forget).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not forget a session that never had a runtime while mounted', async () => {
+    const refs = makeRefs({})
+    renderHook(() => useFeedDebugPersist(refs))
+    await advance(2_000)
+    expect(forget).not.toHaveBeenCalled()
   })
 })

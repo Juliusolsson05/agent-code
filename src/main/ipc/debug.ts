@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron'
 
-import { queueFeedDebugAppend } from '@main/storage/feedDebugLog.js'
+import { forgetFeedDebugSession, queueFeedDebugAppend } from '@main/storage/feedDebugLog.js'
 import type { FeedDebugPersistEntry } from '@main/storage/feedDebugLog.js'
 import { saveDebugBundle } from '@main/storage/debugBundle.js'
 import type { SaveDebugBundleParams, SaveDebugBundleResult } from '@main/storage/debugBundle.js'
@@ -48,6 +48,18 @@ export function registerDebugIpc(
       )
     },
   )
+
+  // The renderer's release of a feed-debug log whose pane is gone (#1392).
+  // Main forgets on process exit too, but a pane outlives its process (a
+  // same-id wake reuses the id) and keeps appending, which re-creates the
+  // per-session state; only the renderer knows when no append can follow.
+  // Any append it queued earlier is already in the per-session queue (IPC
+  // order is preserved and the append handler queues synchronously), and its
+  // token makes it drop what it writes.
+  ipcMain.handle('debug:forget-feed-log', (_evt, params: { sessionId?: unknown }) => {
+    if (typeof params?.sessionId !== 'string' || params.sessionId.length === 0) return
+    forgetFeedDebugSession(params.sessionId)
+  })
 
   ipcMain.handle(
     'debug:save-bundle',

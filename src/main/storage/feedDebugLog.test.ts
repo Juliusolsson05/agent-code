@@ -175,22 +175,6 @@ describe('forget racing a queued append (#1207)', () => {
   })
 })
 
-// #1392 review a: an append that ARRIVES after the forget (late renderer
-// flush, or any id the IPC handler accepts) mints a new token and keeps its
-// state; no second forget comes. The recency cap is what bounds that.
-describe('late appends after forget (#1392)', () => {
-  it('keeps per-session state bounded for 300 sessions that append after their forget', async () => {
-    for (let i = 0; i < 300; i++) {
-      const sessionId = `late-${i}`
-      forgetFeedDebugSession(sessionId)
-      await queueFeedDebugAppend(sessionId, [entry(1)], 1_789_000_000_000)
-    }
-    const { feedDebugSessionStateSizesForTest } = await import('./feedDebugLog.js')
-    const sizes = feedDebugSessionStateSizesForTest()
-    for (const size of Object.values(sizes)) expect(size).toBeLessThanOrEqual(256)
-  })
-})
-
 // #1392 reviews a+b: the committed probe only covered successful writes.
 describe('forget racing a queued append, other interleavings (#1392)', () => {
   it('drops state after a forgotten append fails its size check', async () => {

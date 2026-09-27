@@ -133,39 +133,30 @@ const lastWrittenFeedDebugEpoch = new Map<string, number>()
  * once it has run belongs to a forgotten session and deletes that state again.
  * The token map is cleared by the same forget.
  *
- * The token alone is NOT a bound (#1392 review a). An append that ARRIVES
- * after the forget (the renderer's flush timer and teardown flush run
- * independently of the process exit that triggers the forget, and the IPC
- * handler accepts any id) mints a fresh token and keeps its state, and no
- * second forget ever comes. Main has no liveness oracle here short of
- * coupling this storage module to the session manager, so the map is also a
- * RECENCY list capped at MAX_REMEMBERED_FEED_DEBUG_SESSIONS: every queued
- * append moves its session to the end (same token object, so identity checks
- * still hold), and past the cap the least recently appended session is
- * forgotten exactly as forgetFeedDebugSession would. That makes the leak
- * bounded whatever the interleaving: at most the cap's worth of a few
- * numbers, not "zero", for late appends.
+ * An append that ARRIVES after the forget mints a fresh token and keeps its
+ * state; that is correct when the pane is still open (a same-id wake reuses
+ * the id, see sessionManager's agentPtyAttachCounts note), and the renderer
+ * releases the id when the pane really goes away (`debug:forget-feed-log`,
+ * sent by useFeedDebugPersist after the session's runtime is removed). That
+ * release, not a cap here, is what bounds these maps (#1392).
  *
- * Evicting a session that is in fact still live is harmless in practice:
- * the cap state re-primes from the file on disk (the fail-closed stat
- * path), the epoch simply re-registers, and the only thing lost is the
- * de-dup cursor, so a double send racing that exact moment could write a
- * duplicate debug row. 256 is far above the number of agents anyone runs
- * at once, so this only trims closed sessions.
+ * WHY not a cap on remembered sessions: round 2 of review found an LRU cap
+ * broke three ways. Evicting a session whose append was inside its `stat`
+ * deleted the cap placeholder its identity check relies on, so the append
+ * resolved WITHOUT writing and the renderer advanced its cursor past lost
+ * rows; eviction reset a capped file's drop count, so its next tombstone
+ * under-reported drops by orders of magnitude; and appends already queued for
+ * evicted ids kept their state while a stalled `stat` held them. A remembered
+ * set of FORGOTTEN ids fails too: the same-id wake makes a forgotten id live
+ * again, and every one of its appends would be treated as late.
  */
 const feedDebugSessionTokens = new Map<string, object>()
-const MAX_REMEMBERED_FEED_DEBUG_SESSIONS = 256
 
 function feedDebugSessionToken(sessionId: string): object {
-  const token = feedDebugSessionTokens.get(sessionId) ?? {}
-  // delete + set moves the id to the end of the Map's insertion order.
-  feedDebugSessionTokens.delete(sessionId)
-  feedDebugSessionTokens.set(sessionId, token)
-  for (const oldest of feedDebugSessionTokens.keys()) {
-    if (feedDebugSessionTokens.size <= MAX_REMEMBERED_FEED_DEBUG_SESSIONS) break
-    // An append of the evicted session still in its queue will see its token
-    // gone when it settles and drop what it wrote, as after a forget.
-    forgetFeedDebugSession(oldest)
+  let token = feedDebugSessionTokens.get(sessionId)
+  if (!token) {
+    token = {}
+    feedDebugSessionTokens.set(sessionId, token)
   }
   return token
 }

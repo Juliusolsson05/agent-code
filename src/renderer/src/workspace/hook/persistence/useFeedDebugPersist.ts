@@ -130,10 +130,33 @@ export function useFeedDebugPersist(refs: WorkspaceRefs): void {
         })
     }
 
+    // Sessions this hook has seen a runtime for. A session whose runtime is
+    // gone (pane closed, or replaced by a new id) can never append again, so
+    // it is released here: its flush cursors, and main's per-session state
+    // (#1392). Main's own forget runs at PROCESS exit, but the pane outlives
+    // the process (exit rows, a same-id wake) and its later appends
+    // re-created that state with nothing left to forget it.
+    //
+    // Entries not yet flushed when the runtime was removed are lost, as they
+    // were before: this changes only what is forgotten, not what is written.
+    const known = new Set<SessionId>()
+    const releaseGone = (): void => {
+      const runtimes = refs.latestRuntimesRef.current
+      for (const sessionId of known) {
+        if (runtimes[sessionId]) continue
+        known.delete(sessionId)
+        delete refs.persistedFeedDebugIdRef.current[sessionId]
+        delete refs.inFlightFeedDebugIdRef.current[sessionId]
+        void window.api.forgetFeedDebugLog({ sessionId }).catch(() => {})
+      }
+    }
+
     const flush = (): void => {
       for (const [sessionId, runtime] of Object.entries(refs.latestRuntimesRef.current)) {
+        known.add(sessionId)
         flushSession(sessionId, runtime)
       }
+      releaseGone()
     }
 
     // WHY an interval independent of runtimes: busy agents replace that map
