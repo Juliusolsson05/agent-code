@@ -36,22 +36,40 @@ issue still has open:
   - WHY rotate on the writer side: mitmdump is the single writer, runs single-threaded, and writes
     each line with open-append-close, so after `os.replace` no write can land in the old inode.
     Rotating from the app would race the writer.
-- **The poller follows rotations (tail -F semantics).** It records the events file's inode. When the
-  path's inode changes, it first drains the rotated generation (`proxy-events.1.jsonl`) from the
-  saved offset to its end, then restarts at offset 0 on the new file. Result: every event is emitted
-  exactly once, in order, across a rotation. The existing "file shrank ⇒ restart from 0" fallback
-  stays for a recreated file whose inode we never saw.
-  - The poll logic moves out of `ProxyServer` into a small `EventsFileTail` so it can be driven
-    directly in tests (no mitmdump, no timers).
-- **Debug bundle reads across the rotation.** `proxyEventsReader` (app) prepends the tail of
-  `proxy-events.1.jsonl` when the current file is smaller than the 5 MiB bundle cap, so a bug report
-  made right after a rotation still carries recent history.
+- **The tail holds the generation it reads open** (revised after review of claude-code-headless#64,
+  steering q53).
+  - The first version stat()ed the path and later open()ed it by name. A rotation between the two made
+    it read the new file with the old offset; reviewers reproduced lost and duplicated events.
+  - `EventsFileTail` now keeps a `FileHandle` on the current generation. Its size comes from `fstat` on
+    that handle, and rotation is detected when the *path's* inode changes.
+  - On rotation, the tail finishes the held generation, **opens the live file first**, and then reads
+    whole any unseen generation at `.1` before the live one. Anything between the two held handles can
+    only be at `.1`.
+  - Pinned by a test that rotates before every path-level await point.
+- **Gap policy: a bounded, reported gap, not an acknowledgement protocol** (q53 asked us to choose).
+  - The addon bumps `proxy-events.rotations` before each rename.
+  - When the poller stalls through more rotations than it can hold or drain (about 1 GiB of traffic at
+    the default), the generations deleted unread are counted as `lostGenerations`. `ProxyServer`
+    surfaces them as a `transport-gap` event plus one warning. The claim is "exactly once, or an
+    explicit gap".
+  - An ack protocol would need a second writer in the app. A stalled or dead app would then let the
+    proxy's disk grow without bound again, which is this issue.
+- **Addon hardening** (same review):
+  - `_write` never raises out of a mitmproxy hook, since the stream tap carries the user's live
+    response;
+  - a crashed partial line is terminated at startup, so the next event is not glued to it;
+  - the live file is recreated in its own step.
+- **Debug bundle reader: owned by W1 in #1332** (steering q54). This branch's own `readEventsTail`
+  change was reverted (`0a462fad`). #1332 makes one provider-neutral, rotation-safe reader: one
+  handle, `bytesRead` honoured, filling from `.1`. This branch merges main after #1332 and keeps only
+  Claude-specific wiring, if any is still needed.
 - **Retention unchanged.** With rotation, a live run is bounded, so the 10-minute grace no longer
   lets one session fill the disk; old oversized files from before this change age out normally.
 
 ## Tests
 
-- Package, real addon + real tailer: drive the real `mitmAddon.py` (`request` / `response` /
+- Package, real addon + real tailer (see the PR body for the final list, incl. the per-await-point
+  rotation cases and the ProxyServer wiring test): drive the real `mitmAddon.py` (`request` / `response` /
   chunk hooks, a small `PROXY_EVENTS_ROTATE_BYTES`) through several rotations while an
   `EventsFileTail` polls between writes; assert every event is emitted exactly once and in order,
   only one previous generation exists, and the live file stays under the threshold + one line.
@@ -59,10 +77,10 @@ issue still has open:
   events written between the last poll and the rename are lost (asserted by name).
 - Poll ordering: rename observed while the new file is still absent, and a rotation that happens
   while the old generation ended mid-poll — both orders pinned.
-- App: `proxyEventsReader` bundle test with a small current file + a previous generation.
+- App: none on this branch; the bundle reader's tests live in W1's #1332 (q54).
 
 ## Delivery
 
-claude-code-headless PR (addon + tailer), three reviews, then the agent-code PR bumping the pointer
-(lockfile resync for the `file:` dep) with the `proxyEventsReader` change and this plan.
+claude-code-headless#64 (addon + tailer), three reviews plus verification, then the agent-code PR
+bumping the pointer (lockfile resync for the `file:` dep) with this plan, after #1332 merges.
 `Fixes #1273` goes on the agent-code PR only if both residual items are covered.
