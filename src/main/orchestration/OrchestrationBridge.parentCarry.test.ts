@@ -201,3 +201,27 @@ it('forgets aliases after the tombstone TTL and keeps at most 500', async () => 
     vi.useRealTimers()
   }
 })
+
+// #1369 review c: the carry drops both parents' status caches. The successor
+// may have cached "no closed children" in the spawn -> commit window, before
+// the carry landed; the replaced id may still hold the list that owned them.
+// Fake timers freeze the 250 ms cache, so only the invalidation can send the
+// next poll to the renderer.
+it.each(['parent-a', 'parent-b'])('drops %s\'s cached status when the parent is carried', async parent => {
+  sent.length = 0
+  vi.useFakeTimers()
+  try {
+    const bridge = new OrchestrationBridge()
+    const listing = bridge.listAgents({ parentSessionId: parent })
+    await vi.advanceTimersByTimeAsync(0)
+    const list = sent.splice(sent.findIndex(request => request.type === 'list-agents'), 1)[0]!
+    bridge.resolve({ requestId: list.requestId, ok: true, type: 'list-agents', agents: [] } as never)
+    await listing
+    bridge.carryParent('parent-a', 'parent-b')
+    void bridge.listAgents({ parentSessionId: parent })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(sent.some(request => request.type === 'list-agents' && request.parentSessionId === parent)).toBe(true)
+  } finally {
+    vi.useRealTimers()
+  }
+})

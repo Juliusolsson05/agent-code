@@ -973,10 +973,12 @@ export class OrchestrationBridge {
     // Clone-boundary input from the renderer; a malformed carry must be a
     // no-op, never an alias keyed by `undefined`.
     if (typeof from !== 'string' || typeof to !== 'string' || !from || !to || from === to) return
-    // `to` is a live pane again (it may itself have been replaced earlier and
-    // come back, e.g. Undo Close). An edge OUT of it would now send its new
-    // children elsewhere, and dropping it is also what keeps the edges acyclic:
-    // after this, `to` reaches nothing, so `from -> to` cannot close a loop.
+    // `to` is a live pane. None of today's callers (replace, Reload Agents,
+    // Undo Close) passes a `to` that already has an edge out: each mints a
+    // fresh id (#1369 review c). The delete is what keeps the edges acyclic
+    // by construction anyway: after it, `to` reaches nothing, so `from -> to`
+    // cannot close a loop, even if a future caller revives a replaced id
+    // (an edge out of it would then send its new children elsewhere).
     this.replacedParents.delete(to)
     this.replacedParents.delete(from)
     this.replacedParents.set(from, { to, at: Date.now() })
