@@ -454,24 +454,52 @@ function bucketCaps(totalBudget: number): Record<DebugStorageBucket, number> {
   }
 }
 
+/**
+ * Which legacy root-level bundles were saved by hand, or 'unknown' when the
+ * ledger exists but could not be read (steering q109).
+ *
+ * WHY 'unknown' instead of an empty set: the manual/legacy split is what keeps
+ * a hand-saved bundle out of the deletable `debug-bundles-legacy` bucket. An
+ * empty set on a transient read failure (EACCES, EMFILE) classified every
+ * manual bundle as deletable for that prune; with the cache below it would
+ * have stayed that way until the file changed. 'unknown' makes every legacy
+ * bundle protected for that prune instead. Only ENOENT is a real "no ledger".
+ */
+export type ManualLegacyBundlePaths = Set<string> | 'unknown'
+
 // WHY the legacy ledger parse is cached by file identity (#1278): nothing has
 // appended to the pre-split mixed ledger since manual and autosave bundles got
 // their own folders (debugBundleLog.ts), yet it was re-read and re-parsed on
 // every prune, every five minutes for the life of the process (18.4 MB on the
-// author's machine). Keying on mtime + size rather than caching forever keeps
-// it correct if an operator hand-edits or deletes the file: any change re-parses.
-// A missing file caches too (as an empty set), because readFile failing is
-// what loadManualLegacyBundlePaths already treats as "no manual bundles".
+// author's machine).
+//
+// The identity is inode + ctime + mtime + size, not mtime + size alone
+// (steering q109): a replacement by rename gets a new inode, and ctime moves on
+// ANY content or metadata change and, unlike mtime, cannot be set back with
+// utimes, so a same-size edit that restores the old mtime still re-parses.
+// A failed stat or read ('unknown') is never cached: the next prune retries,
+// exactly as it did before the cache existed.
 let legacyLedgerCache: { key: string; paths: Set<string> } | null = null
 
 export async function cachedManualLegacyBundlePaths(
   file: string = DEBUG_BUNDLE_LOG_FILE,
-  load: () => Promise<Set<string>> = loadManualLegacyBundlePaths,
-): Promise<Set<string>> {
-  const identity = await stat(file).then(info => `${info.mtimeMs}:${info.size}`, () => 'missing')
+  load: (file: string) => Promise<ManualLegacyBundlePaths> = loadManualLegacyBundlePaths,
+): Promise<ManualLegacyBundlePaths> {
+  let identity: string
+  try {
+    const info = await stat(file)
+    identity = `${info.ino}:${info.ctimeMs}:${info.mtimeMs}:${info.size}`
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return 'unknown'
+    identity = 'missing'
+  }
   const key = `${file}\0${identity}`
   if (legacyLedgerCache?.key === key) return legacyLedgerCache.paths
-  const paths = await load()
+  const paths = await load(file)
+  if (paths === 'unknown') {
+    legacyLedgerCache = null
+    return paths
+  }
   legacyLedgerCache = { key, paths }
   return paths
 }
@@ -594,7 +622,7 @@ async function collectIncidentRunDirs(): Promise<Artifact[]> {
 
 async function collectLegacyDebugBundleDirs(
   dir: string,
-  manualLegacyBundlePaths: Set<string>,
+  manualLegacyBundlePaths: ManualLegacyBundlePaths,
 ): Promise<Artifact[]> {
   try {
     const entries = await readdir(dir, { withFileTypes: true })
@@ -625,8 +653,10 @@ async function collectLegacyDebugBundleDirs(
 
 export function legacyDebugBundleBucketForPath(
   bundlePath: string,
-  manualLegacyBundlePaths: Set<string>,
+  manualLegacyBundlePaths: ManualLegacyBundlePaths,
 ): DebugStorageBucket {
+  // An unreadable ledger protects every legacy bundle; see ManualLegacyBundlePaths.
+  if (manualLegacyBundlePaths === 'unknown') return 'debug-bundles-manual'
   return manualLegacyBundlePaths.has(resolve(bundlePath))
     ? 'debug-bundles-manual'
     : 'debug-bundles-legacy'
@@ -646,13 +676,15 @@ function isProtectedFromDebugPrune(artifact: Artifact): boolean {
     artifact.bucket === 'debug-bundles-manual'
 }
 
-async function loadManualLegacyBundlePaths(): Promise<Set<string>> {
+async function loadManualLegacyBundlePaths(file: string = DEBUG_BUNDLE_LOG_FILE): Promise<ManualLegacyBundlePaths> {
   const manual = new Set<string>()
   let raw: string
   try {
-    raw = await readFile(DEBUG_BUNDLE_LOG_FILE, 'utf8')
-  } catch {
-    return manual
+    raw = await readFile(file, 'utf8')
+  } catch (error) {
+    // Only a missing ledger means "no manual bundles"; any other failure is
+    // unknown and fails closed (steering q109).
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? manual : 'unknown'
   }
 
   for (const line of raw.split('\n')) {

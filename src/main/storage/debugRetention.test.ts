@@ -1,10 +1,10 @@
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, statSync, utimesSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { cachedManualLegacyBundlePaths, collectSessionRecordingDirs, removeEmptyProxyParents, runPrunePasses } from './debugRetention.js'
+import { cachedManualLegacyBundlePaths, collectSessionRecordingDirs, legacyDebugBundleBucketForPath, removeEmptyProxyParents, runPrunePasses } from './debugRetention.js'
 import type {
   DebugStorageArtifact,
   DebugStorageBucket,
@@ -268,5 +268,60 @@ describe('cachedManualLegacyBundlePaths (#1278)', () => {
     writeFileSync(ledger, '{"event":"saved","reason":"manual","bundlePath":"/b/1"}\n{"event":"saved","reason":"manual","bundlePath":"/b/2"}\n')
     await cachedManualLegacyBundlePaths(ledger, load)
     expect(load).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('legacy ledger classification fails closed (steering q109)', () => {
+  const manualRow = (bundlePath: string) => `${JSON.stringify({ event: 'saved', reason: 'manual', bundlePath })}\n`
+
+  // The blocker: a read failure returned an empty set, which classified every
+  // hand-saved legacy bundle as deletable, and the identity cache then kept
+  // that empty set after access recovered.
+  it('protects every legacy bundle while the ledger is unreadable, and classifies correctly once it is readable', async () => {
+    const ledger = join(root, 'saved-debug-bundles.jsonl')
+    const manualBundle = join(root, '2026-01-01T00-00-00')
+    const otherBundle = join(root, '2026-01-02T00-00-00')
+    writeFileSync(ledger, manualRow(manualBundle))
+    chmodSync(ledger, 0o000)
+    try {
+      const unreadable = await cachedManualLegacyBundlePaths(ledger)
+      expect(unreadable).toBe('unknown')
+      expect(legacyDebugBundleBucketForPath(manualBundle, unreadable)).toBe('debug-bundles-manual')
+      expect(legacyDebugBundleBucketForPath(otherBundle, unreadable)).toBe('debug-bundles-manual')
+    } finally {
+      chmodSync(ledger, 0o600)
+    }
+    const readable = await cachedManualLegacyBundlePaths(ledger)
+    expect(legacyDebugBundleBucketForPath(manualBundle, readable)).toBe('debug-bundles-manual')
+    expect(legacyDebugBundleBucketForPath(otherBundle, readable)).toBe('debug-bundles-legacy')
+  })
+
+  // chmod moves ctime, so the sequence above re-parses through the identity
+  // key alone. This pins the other half on its own: a failed load is never
+  // cached, even when the file's identity has not changed at all.
+  it('retries a failed load on the next call even with an unchanged file identity', async () => {
+    const ledger = join(root, 'saved-debug-bundles.jsonl')
+    writeFileSync(ledger, manualRow('/b/1'))
+    const results: Array<Set<string> | 'unknown'> = ['unknown', new Set(['/b/1'])]
+    const load = vi.fn(async () => results.shift()!)
+    expect(await cachedManualLegacyBundlePaths(ledger, load)).toBe('unknown')
+    expect(await cachedManualLegacyBundlePaths(ledger, load)).toEqual(new Set(['/b/1']))
+    expect(load).toHaveBeenCalledTimes(2)
+  })
+
+  // An operator edit with the same size that also restores the old mtime.
+  it('re-parses a same-size edit whose mtime was set back', async () => {
+    const ledger = join(root, 'saved-debug-bundles.jsonl')
+    writeFileSync(ledger, manualRow('/bundles/2026-01-01T00-00-01'))
+    // A whole-second mtime, so setting it back later reproduces it exactly.
+    const pinned = new Date('2026-01-01T00:00:00Z')
+    utimesSync(ledger, pinned, pinned)
+    const before = statSync(ledger)
+    expect(await cachedManualLegacyBundlePaths(ledger)).toEqual(new Set(['/bundles/2026-01-01T00-00-01']))
+    writeFileSync(ledger, manualRow('/bundles/2026-01-01T00-00-02'))
+    utimesSync(ledger, pinned, pinned)
+    expect(statSync(ledger).size).toBe(before.size)
+    expect(statSync(ledger).mtimeMs).toBe(before.mtimeMs)
+    expect(await cachedManualLegacyBundlePaths(ledger)).toEqual(new Set(['/bundles/2026-01-01T00-00-02']))
   })
 })
