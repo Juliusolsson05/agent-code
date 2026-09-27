@@ -15,7 +15,7 @@ An agent whose session has the new, **off-by-default** built-in domain `usage` c
 
 ## Decisions (defaults; UNCONFIRMED)
 1. **Tool contract: `usage_read`, with no `force` input.** It returns `{ snapshot }`, the same sanitized JSON as `ac_usage_read`. No `force`, because a fleet of agents polling with `force: true` would defeat the 30 s cache and hit every provider's quota endpoint once per call. The Usage UI and root management keep `force`.
-2. **Gating:** configurable (it gets a Settings → MCP row, and orchestration create accepts it) and off by default (not in the shipped default set). It is not confirmation-gated and not parent-held-only: the tool is read-only, returns no credentials, and shows only numbers the user's own Usage screen shows.
+2. **Gating:** configurable (it gets a Settings → MCP row, and orchestration create accepts it) and off by default (not in the shipped default set). It is not confirmation-gated (the tool is read-only, returns no credentials, and shows only numbers the user's own Usage screen shows), but it IS parent-held-only (review a): an orchestrating parent can grant it only if it holds it, so an agent never gets quota the user did not enable.
 3. **Every provider** may carry it, like `mcp_servers`.
 4. **One implementation.** `readUsageSnapshotForTools()` in `src/main/usage/usageService.ts` does the sanitize round trip. Both `usage.read` and the new tool use it, injected into the MCP host as a dependency, because `src/mcp` must not import main. It never reports a provider error as zero usage, which is the existing contract, unchanged.
 5. **In passing:** fix `usage.read`'s stale "OpenCode is not covered" description.
