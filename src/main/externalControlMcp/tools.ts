@@ -150,10 +150,29 @@ export function createOperatorMcpServer(port: ControlOperatorPort): Server {
 // publishes the descriptor as-is. zod 4.4.3 did not do this. The descriptor's
 // JSON Schema is the source of truth, so its required keys are re-imposed on
 // every object it describes. That is a no-op on 4.4.3 and a repair on 4.6.x.
-// The walk follows plain nested `properties` only, not `$ref`s, because only
-// object schemas the descriptor spells out can carry their own `required`.
+// The walk follows nested `properties` and array `items`, through optional
+// and nullable wrappers. It does not follow `$ref`s: in the current catalog a
+// `$ref` is only z.json()'s recursive value, which declares no `required`.
 function withDeclaredRequiredKeys(schema: z.ZodType, jsonSchema: unknown): z.ZodType {
-  if (!(schema instanceof z.ZodObject) || !isJsonObjectSchema(jsonSchema)) return schema
+  if (!isJsonObjectSchema(jsonSchema)) return schema
+  // WHY walk through wrappers (steering q92, review b of #1366): an optional or
+  // nullable nested object arrives as ZodOptional / ZodNullable, and an array
+  // of objects as ZodArray, so a walk that stopped at non-objects left their
+  // `required` lists dropped from the built-in tools/list, while the external
+  // Server kept them. `clone` with the repaired inner schema keeps each
+  // wrapper's own checks (an array's min/max, for example); rebuilding it with
+  // `.optional()` / `z.array()` would silently lose them.
+  if (schema instanceof z.ZodOptional || schema instanceof z.ZodNullable) {
+    const inner = schema.unwrap() as z.ZodType
+    const repaired = withDeclaredRequiredKeys(inner, jsonSchema)
+    return repaired === inner ? schema : schema.clone({ ...schema._zod.def, innerType: repaired } as never) as z.ZodType
+  }
+  if (schema instanceof z.ZodArray) {
+    const element = schema.element as z.ZodType
+    const repaired = withDeclaredRequiredKeys(element, jsonSchema.items)
+    return repaired === element ? schema : schema.clone({ ...schema._zod.def, element: repaired } as never) as z.ZodType
+  }
+  if (!(schema instanceof z.ZodObject)) return schema
   const properties = isJsonObjectSchema(jsonSchema.properties) ? jsonSchema.properties : {}
   const shape = schema.shape as Record<string, z.ZodType>
   let result: z.ZodObject = schema
