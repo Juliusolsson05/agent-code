@@ -366,8 +366,32 @@ describe('review round 2 (review A)', () => {
     await tick()
     c.cancelPick('p1')
     hold.release()
-    expect(await picking).toBeNull()
+    expect(await picking).toEqual({ kind: 'cancelled' })
     expect(g.sent.some(s => s.method === 'Overlay.setInspectMode' && s.params?.mode === 'searchForNode')).toBe(false)
+  })
+
+  // #1305: every pick failure used to answer null, which the renderer reads
+  // as the user's own cancel. Each now says what happened.
+  it('answers why a pick failed instead of a cancel-shaped null', async () => {
+    const { c } = controller()
+    // No pocket.
+    expect(await c.pick('nope')).toEqual({ kind: 'failed', reason: 'unavailable' })
+    // DevTools open: the debugger cannot attach, and the overlay never arms.
+    const d = fakeGuest()
+    c.register('pd', 'sd', d.guest)
+    d.openDevTools()
+    expect(await c.pick('pd')).toEqual({ kind: 'failed', reason: 'devtools-open' })
+    expect(d.sent.some(s => s.method === 'Overlay.setInspectMode')).toBe(false)
+    // Any other CDP failure.
+    const e = fakeGuest()
+    c.register('pe', 'se', e.guest)
+    e.dbg.attach.mockImplementation(() => { throw new Error('Debugger attach failed') })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await c.pick('pe')).toEqual({ kind: 'failed', reason: 'error' })
+    warn.mockRestore()
+    // The feature switched off.
+    c.setFlags({ enabled: false, allowEvaluate: false })
+    expect(await c.pick('pe')).toEqual({ kind: 'failed', reason: 'unavailable' })
   })
 
   it('#4 a cancel that lands while the overlay is being enabled never arms it', async () => {
@@ -379,7 +403,7 @@ describe('review round 2 (review A)', () => {
       if (method === 'Overlay.enable') c.cancelPick('p1')
       return send(method, params)
     })
-    expect(await c.pick('p1')).toBeNull()
+    expect(await c.pick('p1')).toEqual({ kind: 'cancelled' })
     expect(g.sent.some(s => s.method === 'Overlay.setInspectMode' && s.params?.mode === 'searchForNode')).toBe(false)
   })
 

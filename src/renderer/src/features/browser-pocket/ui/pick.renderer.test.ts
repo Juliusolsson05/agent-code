@@ -29,7 +29,7 @@ function composer(sessionId: string, value: string, caret: number) {
 }
 
 beforeEach(() => {
-  window.api = { ...(window.api ?? {}), pickInPocket: vi.fn(async () => RESULT) } as unknown as typeof window.api
+  window.api = { ...(window.api ?? {}), pickInPocket: vi.fn(async () => ({ kind: 'picked', result: RESULT })) } as unknown as typeof window.api
 })
 afterEach(() => { document.body.innerHTML = '' })
 
@@ -63,11 +63,37 @@ describe('pickIntoComposer', () => {
     expect(toast).toHaveBeenCalledWith(expect.stringMatching(/copied/i))
   })
 
-  it('a cancelled pick changes nothing', async () => {
-    window.api = { ...(window.api ?? {}), pickInPocket: vi.fn(async () => null) } as unknown as typeof window.api
+  it('a cancelled pick changes nothing and says nothing', async () => {
+    window.api = { ...(window.api ?? {}), pickInPocket: vi.fn(async () => ({ kind: 'cancelled' })) } as unknown as typeof window.api
     composer('s1', 'draft', 5)
     const { ws, setDraftInput } = workspace('claude', 'draft')
-    await pickIntoComposer('p1', 's1' as never, ws, vi.fn(), vi.fn())
+    const toast = vi.fn()
+    await pickIntoComposer('p1', 's1' as never, ws, vi.fn(), toast)
     expect(setDraftInput).not.toHaveBeenCalled()
+    expect(toast).not.toHaveBeenCalled()
+  })
+
+  // #1305: a failed pick used to look exactly like a cancel. Each reason is
+  // said in fixed words, and an IPC rejection is said as a failure too.
+  it.each([
+    ['devtools-open', "Close the pocket's DevTools to pick an element."],
+    ['unavailable', "The browser pocket isn't available for picking right now."],
+    ['error', "Couldn't pick an element. Try again."],
+  ])('says a %s failure', async (reason, sentence) => {
+    window.api = { ...(window.api ?? {}), pickInPocket: vi.fn(async () => ({ kind: 'failed', reason })) } as unknown as typeof window.api
+    composer('s1', 'draft', 5)
+    const { ws, setDraftInput } = workspace('claude', 'draft')
+    const toast = vi.fn()
+    await pickIntoComposer('p1', 's1' as never, ws, vi.fn(), toast)
+    expect(toast.mock.calls).toEqual([[sentence]])
+    expect(setDraftInput).not.toHaveBeenCalled()
+  })
+
+  it('says a rejected request as a failure, not a cancel', async () => {
+    window.api = { ...(window.api ?? {}), pickInPocket: vi.fn(async () => { throw new Error('IPC gone') }) } as unknown as typeof window.api
+    const { ws } = workspace('claude', 'draft')
+    const toast = vi.fn()
+    await pickIntoComposer('p1', 's1' as never, ws, vi.fn(), toast)
+    expect(toast.mock.calls).toEqual([["Couldn't pick an element. Try again."]])
   })
 })

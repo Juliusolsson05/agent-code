@@ -1,4 +1,4 @@
-import type { LanePort, PocketDrivingEvent, PocketFlags, PocketPickResult, PortWatchSession } from '@shared/browserPocket/types.js'
+import type { LanePort, PocketDrivingEvent, PocketFlags, PocketPickOutcome, PortWatchSession } from '@shared/browserPocket/types.js'
 
 import { emptyBuffers, entriesSince, reduceCdpEvent, type CdpBuffers, type ConsoleEntry, type NetworkEntry } from '../core/cdpBuffers.js'
 
@@ -477,9 +477,14 @@ export class BrowserPocketController {
 
   // ----------------------------------------------------------- picker
 
-  async pick(pocketId: string): Promise<PocketPickResult | null> {
+  async pick(pocketId: string): Promise<PocketPickOutcome> {
     const p = this.pockets.get(pocketId)
-    if (!p || !this.flags.enabled) return null
+    // WHY an outcome and not null (#1305): every failure below used to be
+    // null, which the renderer treats as the user's own cancel.
+    if (!p || !this.flags.enabled) return { kind: 'failed', reason: 'unavailable' }
+    // DevTools holds the page's debugger, so attaching would throw. Say that
+    // cause before touching the queue, as the agent gate does (`devtools_open`).
+    if (p.guest.isDevToolsOpened()) return { kind: 'failed', reason: 'devtools-open' }
     // A second pick replaces the first instead of leaving it hanging for 60 s.
     p.pickAbort?.()
     // The cancel handle exists from the FIRST moment, before the import and
@@ -507,7 +512,16 @@ export class BrowserPocketController {
       }
     })
     p.queue = job.catch(() => undefined)
-    return job.catch(() => null)
+    return job.then(
+      (result): PocketPickOutcome => (result ? { kind: 'picked', result } : { kind: 'cancelled' }),
+      (error: unknown): PocketPickOutcome => {
+        // The raw CDP error stays here (it can name the page URL); the
+        // renderer gets a reason and says it in its own words (q22).
+        console.warn('[browser-pocket] pick failed:', error)
+        // DevTools can open while the pick waits in the queue.
+        return { kind: 'failed', reason: p.guest.isDevToolsOpened() ? 'devtools-open' : 'error' }
+      },
+    )
   }
 
   cancelPick(pocketId: string): void {
