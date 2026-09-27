@@ -124,3 +124,25 @@ describe('AgentActivityStore', () => {
     expect(keys.size).toBe(1)
   })
 })
+
+// #1303: the context id was cached BEFORE its context line was written. One
+// failed append (ENOSPC, EIO) then left every later interval for that agent
+// this month pointing at a context line that never reached disk, and
+// readIntervals dropped each one silently.
+describe('a failed context write', () => {
+  it('does not orphan the agent\'s later intervals', async () => {
+    const store = new AgentActivityStore(dir)
+    const internal = store as unknown as { appendLines: (file: string, lines: string[]) => Promise<void> }
+    const realAppend = internal.appendLines.bind(store)
+    let failNext = true
+    internal.appendLines = async (file, lines) => {
+      if (failNext) { failNext = false; throw Object.assign(new Error('no space left'), { code: 'ENOSPC' }) }
+      return realAppend(file, lines)
+    }
+    const start = Date.parse('2026-09-01T09:00:00Z')
+    await expect(store.appendInterval({ context, startedAt: start, endedAt: start + HOUR })).rejects.toThrow('no space left')
+    await store.appendInterval({ context, startedAt: start + 2 * HOUR, endedAt: start + 3 * HOUR })
+    const read = await new AgentActivityStore(dir).readIntervals(start, start + 4 * HOUR)
+    expect(read.map(interval => interval.startedAt)).toEqual([start + 2 * HOUR])
+  })
+})

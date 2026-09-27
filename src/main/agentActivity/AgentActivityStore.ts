@@ -154,15 +154,24 @@ export class AgentActivityStore {
       const key = contextKey(interval.context)
       const lines: string[] = []
       let id = ids.get(key)
+      const isNewContext = id === undefined
       if (id === undefined) {
         id = ids.size + 1
-        ids.set(key, id)
         const contextLine: ContextLine = { t: 'c', c: id, ...interval.context }
         lines.push(JSON.stringify(contextLine))
       }
       const intervalLine: IntervalLine = { t: 'i', c: id, s: interval.startedAt, e: interval.endedAt }
       lines.push(JSON.stringify(intervalLine))
       await this.appendLines(join(this.dir, `${month}.jsonl`), lines)
+      // Cache the id only once its context line is on disk (#1303). Caching it
+      // first meant one failed append (ENOSPC, EIO) left every later interval
+      // for this agent this month pointing at a context line that never
+      // landed, and readIntervals drops an interval with no context. Not
+      // caching on failure means the next interval re-mints the same id
+      // (`ids.size + 1` is unchanged) and writes the context line again. If
+      // the failed append landed partially, a duplicate context line with the
+      // same id and content is harmless on read.
+      if (isNewContext) ids.set(key, id)
     })
   }
 
