@@ -1,4 +1,4 @@
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -131,6 +131,76 @@ describe('bounded local performance history', () => {
     const onDisk = JSON.parse(await readFile(join(root, 'runs', 'run-mixed', 'incidents.json'), 'utf8')) as Array<{ id: number; rule: string }>
     expect(onDisk.map(row => row.id).sort()).toEqual([1, 2, 9])
     expect(onDisk.find(row => row.id === 9)).toEqual(foreign)
+  })
+
+  // Review of #1411 (a, b, c): a file refused WHOLE (not an array, a newer
+  // format, over the row limit, oversized) kept no marker, so a restarted
+  // helper's next incident replaced it with only the new row, and it was lost.
+  for (const [label, body] of [
+    ['a newer-format object', JSON.stringify({ version: 2, incidents: [incident] })],
+    ['51 valid rows, one over the limit', JSON.stringify(Array.from({ length: 51 }, (_, index) => ({ ...incident, id: index + 1, at: 1000 + index })))],
+    ['malformed JSON', '[{"id":1,'],
+  ] as const) {
+    it(`sets a wholly refused current-run incident file aside instead of overwriting it: ${label}`, async () => {
+      const root = await mkdtemp(join(tmpdir(), 'agent-code-monitor-'))
+      roots.push(root)
+      const runDir = join(root, 'runs', 'run-refused')
+      await mkdir(runDir, { recursive: true })
+      await writeFile(join(runDir, 'incidents.json'), body)
+
+      const restarted = new MonitorHistoryStore(root, 'run-refused')
+      await restarted.settled()
+      restarted.record(snapshot(11_000), null, [{ ...incident, id: 99, at: 11_000 }], 0, 1)
+      await restarted.settled()
+
+      expect(await restarted.readIncident(11_000, 99)).toMatchObject({ rule: 'renderer-stall' })
+      const aside = (await readdir(runDir)).filter(name => name.startsWith('incidents.refused-'))
+      expect(aside).toHaveLength(1)
+      expect(await readFile(join(runDir, aside[0]!), 'utf8')).toBe(body)
+      expect(restarted.status().state).toBe('degraded')
+    })
+  }
+
+  // Review of #1411 (a, b, c), a surviving mutation: maintenance deletes a
+  // prior run it believes empty. A run whose incident file holds only rows
+  // this build cannot read, or that it refused whole, is not empty.
+  it('never expires a prior run whose incidents it could not read', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-code-monitor-'))
+    roots.push(root)
+    const foreignOnly = join(root, 'runs', 'run-foreign-only')
+    const refused = join(root, 'runs', 'run-refused-whole')
+    await mkdir(foreignOnly, { recursive: true })
+    await mkdir(refused, { recursive: true })
+    await writeFile(join(foreignOnly, 'incidents.json'), JSON.stringify([{ ...incident, rule: 'rule-from-a-newer-build' }]))
+    await writeFile(join(refused, 'incidents.json'), JSON.stringify({ version: 2 }))
+
+    const store = new MonitorHistoryStore(root, 'run-now')
+    await store.settled()
+    store.record(snapshot(90_000), null, [], 0, 0)
+    await store.settled()
+
+    await expect(stat(foreignOnly)).resolves.toBeTruthy()
+    await expect(stat(refused)).resolves.toBeTruthy()
+  })
+
+  // Review of #1411 (a): with the run's file full of carried rows, a new
+  // readable incident has no room. Keeping the carried rows is right; hiding
+  // that the new one was not kept is not.
+  it('reports coverage as shortened when carried rows leave no room for a new incident', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-code-monitor-'))
+    roots.push(root)
+    const runDir = join(root, 'runs', 'run-full')
+    await mkdir(runDir, { recursive: true })
+    await writeFile(join(runDir, 'incidents.json'), JSON.stringify(Array.from({ length: 50 }, (_, index) => ({ ...incident, id: index + 1, rule: 'rule-from-a-newer-build' }))))
+
+    const store = new MonitorHistoryStore(root, 'run-full')
+    await store.settled()
+    store.record(snapshot(11_000), null, [{ ...incident, id: 99, at: 11_000 }], 0, 1)
+    await store.settled()
+
+    expect(store.status().shortened).toBe(true)
+    const onDisk = JSON.parse(await readFile(join(runDir, 'incidents.json'), 'utf8')) as unknown[]
+    expect(onDisk).toHaveLength(50)
   })
 
   it('repairs a torn append and keeps coarse tiers peak-preserving', async () => {
