@@ -64,14 +64,24 @@ function mount(answers: OlderHistoryLoadResult[]) {
 
 it('says a failed page in fixed words, once per burst of retries', async () => {
   vi.useFakeTimers({ toFake: ['Date'] })
-  const { paneToasts } = mount(['failed', 'failed', 'failed'])
+  const { paneToasts, toastSessions } = mount(['failed', 'failed', 'failed', 'failed'])
   await act(async () => { await loadOlder!() })
-  expect(paneToasts).toEqual([OLDER_HISTORY_FAILED])
+  // The literal words (#1413 review c): comparing against the exported
+  // constant would let a reworded or interpolated message pass. And on THIS
+  // pane.
+  expect(paneToasts).toEqual(["Couldn't load older messages. Scroll up again to retry."])
+  expect(toastSessions).toEqual(['agent'])
+  expect(OLDER_HISTORY_FAILED).toBe(paneToasts[0])
   // Every scroll tick near the top retries; a burst is one toast.
   await act(async () => { await loadOlder!() })
   expect(paneToasts).toHaveLength(1)
+  // Still inside the window a second later (review c: a window shrunk to
+  // 500 ms would toast here).
+  vi.setSystemTime(Date.now() + 1_000)
+  await act(async () => { await loadOlder!() })
+  expect(paneToasts).toHaveLength(1)
   // After the coalescing window, a new failure is said again.
-  vi.setSystemTime(Date.now() + 5_001)
+  vi.setSystemTime(Date.now() + 4_001)
   await act(async () => { await loadOlder!() })
   expect(paneToasts).toEqual([OLDER_HISTORY_FAILED, OLDER_HISTORY_FAILED])
 })

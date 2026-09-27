@@ -147,7 +147,7 @@ describe('what an older-history request reports', () => {
       setRuntimes(prev => ({ ...prev, [id]: { ...prev[id]!, ...patch } }))
     }
     const { result } = renderHook(() => useHistoryActions(setRuntimes, refs, updateRuntime, ipcSessionFeed))
-    return { load: () => result.current.loadOlderHistory('session'), runtime: () => runtimes.session! }
+    return { load: () => result.current.loadOlderHistory('session'), runtime: () => runtimes.session!, refs }
   }
 
   it('answers failed when the page cannot be read, and leaves a retry possible', async () => {
@@ -162,6 +162,34 @@ describe('what an older-history request reports', () => {
     expect(answer).toBe('failed')
     expect(runtime()).toMatchObject({ hasOlderHistory: true, loadingOlderHistory: false })
     vi.restoreAllMocks()
+  })
+
+  // #1413 review c: every early return is `skipped`, never `failed`. A
+  // `failed` here would toast "Couldn't load older messages" on every scroll
+  // tick of a feed that simply has nothing older.
+  it.each([
+    ['no older history', { hasOlderHistory: false, historyOldestMarker: 'anchor' }],
+    ['a load already running', { hasOlderHistory: true, loadingOlderHistory: true, historyOldestMarker: 'anchor' }],
+  ] as const)('answers skipped for %s', async (_name, runtime) => {
+    const loadOlderHistory = vi.fn()
+    Object.defineProperty(window, 'api', { configurable: true, value: { loadOlderHistory, gitWorktrees: vi.fn() } })
+    const { load } = harness(runtime)
+    let answer: unknown
+    await act(async () => { answer = await load() })
+    expect(answer).toBe('skipped')
+    expect(loadOlderHistory).not.toHaveBeenCalled()
+  })
+
+  it('answers skipped for a session it cannot page (no meta, no provider session)', async () => {
+    Object.defineProperty(window, 'api', { configurable: true, value: { loadOlderHistory: vi.fn(), gitWorktrees: vi.fn() } })
+    const { load, refs } = harness({ hasOlderHistory: true, historyOldestMarker: 'anchor' })
+    let answer: unknown
+    ;(refs.stateRef.current as { sessions: Record<string, unknown> }).sessions = { session: { kind: 'claude', cwd: '/tmp/project' } }
+    await act(async () => { answer = await load() })
+    expect(answer).toBe('skipped')
+    ;(refs.stateRef.current as { sessions: Record<string, unknown> }).sessions = {}
+    await act(async () => { answer = await load() })
+    expect(answer).toBe('skipped')
   })
 
   it('answers loaded for a page, and skipped when nothing was asked', async () => {

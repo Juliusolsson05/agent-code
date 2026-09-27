@@ -42,3 +42,9 @@ Renderer tests drive the real hook and the real TileLeaf. The app is not launche
   - Test: the real Feed, two upward wheels at 0, two requests (red on the old Feed). A downward wheel makes none. It also kills a's survivor (`loadingOlderRef` left true).
 - **b (Major): the cooldown was shared across agents in one lane.** This is q106, fixed.
 - **b (Minor): the raw error still reaches `console.warn` and the perf span.** Declined: these are developer diagnostics, not user-visible text (q22 governs what the user sees). The perf journal already records file paths on this path by design (`finishOlderChunk`).
+- **c (MERGE-READY; four test gaps, each pinned):**
+  - every early return answers `skipped`;
+  - a retry 1 s into the window stays suppressed;
+  - the toast text is asserted literally;
+  - the toast goes to this pane.
+  c's mutations M7 (no-older → failed) and T3 (5 s → 500 ms) now fail.
