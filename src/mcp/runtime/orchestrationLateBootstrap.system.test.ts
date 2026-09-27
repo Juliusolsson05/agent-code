@@ -86,7 +86,8 @@ describe('create_agent whose child starts after the 30 s deadline (#1370)', () =
       const reply = await call
       const text = ((reply.content as Array<{ text: string }>)[0]!).text
       expect(text).toMatch(/UNKNOWN/)
-      expect(text).toMatch(/delivered to it automatically: do not send it again/)
+      expect(text).toMatch(/delivers its bootstrap prompt to it automatically/)
+      expect(text).toMatch(/Check orchestration_read_agent for promptSubmitted/)
       expect(deliverPromptToAgent).not.toHaveBeenCalled()
 
       // The provider finally starts and the renderer answers.
@@ -102,6 +103,88 @@ describe('create_agent whose child starts after the 30 s deadline (#1370)', () =
     } finally {
       await client.close()
       await server.close()
+    }
+  })
+
+  // Review of #1375 (a): a provider with no readiness gate (OpenCode, Grok) answers a warming
+  // composer with not-ready. The punctual path hands that failure to the parent to retry; the late
+  // path's parent was told delivery is automatic, so the late path retries it itself.
+  const notReady = {
+    ok: false, stage: 'before-write', code: 'not-ready', message: 'composer is still starting',
+    retrySafe: true, disposition: 'retry-same-session', promptWritten: false, enterWritten: false,
+  }
+
+  async function lateCreate(deliverPromptToAgent: ReturnType<typeof vi.fn>, journal?: { recordIncident: ReturnType<typeof vi.fn> }) {
+    const sessionManager = {
+      deliverPromptToAgent,
+      canWaitForPromptReadiness: vi.fn(() => false),
+      deliverPromptWhenReady: vi.fn(async () => ({ ok: true })),
+      getSessionKind: vi.fn(() => 'opencode'),
+    }
+    const server = createBuiltInMcpServer(
+      { sessionId: 'parent-1', cwd: '/tmp/project', domains: ['orchestration'] },
+      { orchestrationBridge: bridge as never, sessionManager: sessionManager as never, ...(journal ? { appRunJournal: journal as never } : {}) },
+    )
+    const client = new Client({ name: 'late-bootstrap-test', version: '0.0.0' })
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    await server.connect(serverTransport)
+    await client.connect(clientTransport)
+    const call = client.callTool({ name: 'orchestration_create_agent', arguments: { kind: 'opencode', prompt: 'review the PR' } })
+    await vi.waitFor(() => expect(renderer.heldCreate).not.toBeNull())
+    await vi.advanceTimersByTimeAsync(30_000)
+    await call
+    bridge.resolve({
+      requestId: renderer.heldCreate!.requestId as string, ok: true, type: 'create-agent', agent: agent('child-late'),
+    } as never)
+    return { close: async () => { await client.close(); await server.close() } }
+  }
+
+  it('retries a late child that is not ready yet until the brief lands', async () => {
+    const deliverPromptToAgent = vi.fn()
+      .mockResolvedValueOnce(notReady)
+      .mockResolvedValueOnce(notReady)
+      .mockResolvedValue({ ok: true })
+    const run = await lateCreate(deliverPromptToAgent)
+    try {
+      await vi.waitFor(() => expect(deliverPromptToAgent).toHaveBeenCalledTimes(1))
+      await vi.advanceTimersByTimeAsync(2_000)
+      await vi.waitFor(() => expect(deliverPromptToAgent).toHaveBeenCalledTimes(2))
+      await vi.advanceTimersByTimeAsync(4_000)
+      await vi.waitFor(() => expect(deliverPromptToAgent).toHaveBeenCalledTimes(3))
+      await vi.waitFor(() => expect(renderer.requests.map(request => request.type)).toContain('mark-bootstrap-prompt-delivered'))
+      expect(bridge.promptSubmissionCount('child-late')).toBe(1)
+    } finally {
+      await run.close()
+    }
+  })
+
+  it('gives up after about a minute and records it', async () => {
+    const deliverPromptToAgent = vi.fn(async () => notReady)
+    const journal = { recordIncident: vi.fn() }
+    const run = await lateCreate(deliverPromptToAgent, journal)
+    try {
+      await vi.waitFor(() => expect(deliverPromptToAgent).toHaveBeenCalledTimes(1))
+      for (const delay of [2_000, 4_000, 8_000, 16_000, 30_000]) await vi.advanceTimersByTimeAsync(delay)
+      await vi.waitFor(() => expect(journal.recordIncident).toHaveBeenCalledWith(expect.objectContaining({ reason: 'create_agent_late_bootstrap_never_ready' })))
+      expect(deliverPromptToAgent).toHaveBeenCalledTimes(6)
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(deliverPromptToAgent).toHaveBeenCalledTimes(6)
+    } finally {
+      await run.close()
+    }
+  })
+
+  it('stops retrying once a prompt has landed on the child some other way', async () => {
+    const deliverPromptToAgent = vi.fn(async () => notReady)
+    const run = await lateCreate(deliverPromptToAgent)
+    try {
+      await vi.waitFor(() => expect(deliverPromptToAgent).toHaveBeenCalledTimes(1))
+      // The parent checked orchestration_read_agent and sent the brief itself.
+      bridge.notePromptSubmitted('child-late')
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(deliverPromptToAgent).toHaveBeenCalledTimes(1)
+    } finally {
+      await run.close()
     }
   })
 })

@@ -33,7 +33,7 @@ vi.mock('@main/window/windowRegistry.js', () => ({
 
 const { OrchestrationBridge, OrchestrationOutcomeUnknownError } = await import('./OrchestrationBridge.js')
 
-type Incident = { kind: string; context?: Record<string, unknown> }
+type Incident = { kind: string; reason?: string; context?: Record<string, unknown> }
 let incidents: Incident[]
 let bridge: InstanceType<typeof OrchestrationBridge>
 
@@ -194,7 +194,8 @@ describe('a late-created child still gets its bootstrap prompt (#1370)', () => {
     expect(error).toBeInstanceOf(OrchestrationOutcomeUnknownError)
     // Otherwise the parent's next move — sending the brief once list_agents shows the child —
     // would deliver it twice.
-    expect(String(error)).toMatch(/delivered to it automatically: do not send it again/)
+    expect(String(error)).toMatch(/delivers its bootstrap prompt to it automatically/)
+    expect(String(error)).toMatch(/Check orchestration_read_agent for promptSubmitted before sending it yourself/)
     expect(late).not.toHaveBeenCalled()
 
     bridge.resolve({ requestId: request.requestId, ok: true, type: 'create-agent', agent: child('child-late') } as never)
@@ -225,6 +226,27 @@ describe('a late-created child still gets its bootstrap prompt (#1370)', () => {
     await expect(create).resolves.toMatchObject({ sessionId: 'child-fast' })
     await vi.advanceTimersByTimeAsync(30_000)
     expect(late).not.toHaveBeenCalled()
+  })
+
+  // Review of #1375 (a): the parent closed while the renderer was spawning.
+  // Its brief must not start an ownerless agent.
+  it('runs nothing when the parent is gone by the time the child arrives', async () => {
+    const late = vi.fn(async () => {})
+    const create = bridge.createAgent({ parentSessionId: 'parent-1', kind: 'claude', onLateCreate: late })
+    const settled = create.catch((error: unknown) => error)
+    const request = lastSent('create-agent') as { requestId: string }
+    await vi.advanceTimersByTimeAsync(30_000)
+    await settled
+    windowOwner.mockImplementation(sessionId => (sessionId === 'parent-1' ? null : 'window-1'))
+    try {
+      bridge.resolve({ requestId: request.requestId, ok: true, type: 'create-agent', agent: child('child-late') } as never)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(late).not.toHaveBeenCalled()
+      const skipped = incidents.find(incident => incident.reason === 'create_agent_late_bootstrap_parent_gone')
+      expect(skipped?.context).toMatchObject({ sessionId: 'child-late', parentSessionId: 'parent-1' })
+    } finally {
+      windowOwner.mockImplementation(() => 'window-1')
+    }
   })
 
   it('reports a late delivery that throws as an incident instead of losing it', async () => {

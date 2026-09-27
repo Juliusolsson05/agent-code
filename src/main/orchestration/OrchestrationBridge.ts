@@ -326,7 +326,10 @@ export class OrchestrationBridge {
         error.requestId,
         error.requestType,
         error.parentSessionId,
-        'If the child is created late, its bootstrap prompt is delivered to it automatically: do not send it again.',
+        // Honest about what automatic means (review of #1375, a): a child that is
+        // never ready, or whose parent is gone, is not delivered to, so the
+        // parent is told how to check rather than promised a delivery.
+        'If the child is created late, Agent Code delivers its bootstrap prompt to it automatically, retrying while it starts. Check orchestration_read_agent for promptSubmitted before sending it yourself, or it may arrive twice.',
       )
     }
     this.lateCreates.delete(attempt.requestId)
@@ -651,6 +654,21 @@ export class OrchestrationBridge {
       },
     })
     if (!onLateCreate) return
+    // The parent may have closed while the renderer was still spawning: the
+    // renderer checks the parent BEFORE its slow spawn and files the child
+    // after it, so a close in between can miss the child (review of #1375,
+    // a). Starting the parent's brief then puts an ownerless agent to work.
+    // The same lease check dispatch uses decides it; the child itself is left
+    // for the user, because closing an agent is not this path's call.
+    if (!windowForSession(parentSessionId)) {
+      this.journal?.recordIncident({
+        kind: 'orchestration.prompt_delivery_failed',
+        severity: 'warn',
+        reason: 'create_agent_late_bootstrap_parent_gone',
+        context: { sessionId: response.agent.sessionId, parentSessionId },
+      })
+      return
+    }
     const agent = this.enrichAgent(response.agent)
     void onLateCreate(agent).catch((error: unknown) => {
       this.journal?.recordIncident({
