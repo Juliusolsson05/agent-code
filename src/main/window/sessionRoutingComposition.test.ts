@@ -339,7 +339,13 @@ describe('read-only gap repair through the registry, forwarder and IPC', () => {
     recordPendingBequest(left, right, ['predecessor'])
     const slices = new Set([left, right])
     const store = {
-      removeWindow: vi.fn(async (windowId: string) => { slices.delete(windowId) }),
+      // The slice leaves the file only after a real write turn, so a commit
+      // that does not wait for the removal still sees the predecessor
+      // (#1338 verification a: an un-awaited removal survived otherwise).
+      removeWindow: vi.fn(async (windowId: string) => {
+        await new Promise(resolve => setTimeout(resolve, 0))
+        slices.delete(windowId)
+      }),
       // The closed window's slice lists the predecessor until it is removed.
       sessionIds: () => new Set(slices.has(left) ? ['predecessor', 'successor'] : ['successor']),
     }
