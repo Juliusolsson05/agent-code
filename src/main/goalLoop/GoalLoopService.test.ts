@@ -420,8 +420,33 @@ describe('GoalLoopService', () => {
       // 44.999 s: the 30 s traffic did not restart the 45 s grace, and it has
       // not expired yet either.
       expect(deliver).not.toHaveBeenCalled()
-      await vi.advanceTimersByTimeAsync(1_001)
+      // 45.000 s exactly (review of #1337: asserting at 46 s let a 46 s grace pass).
+      await vi.advanceTimersByTimeAsync(1)
       expect(deliver).toHaveBeenCalledTimes(1)
+    } finally { vi.useRealTimers() }
+  })
+
+  // The other half of #1314: the turn our 45 s delivery started ends at 60 s, and
+  // with the screen still latched that boundary gets its OWN bounded grace — a
+  // second continuation at 105 s, not at once. Instant store only: with the file
+  // store, whether the 60 s trigger is processed inside this window depends on
+  // real disk latency, which is exactly what made the old case unstable.
+  it('a turn boundary after our delivery gets a fresh bounded grace, not an immediate prompt (#1314)', async () => {
+    const { svc, manager, deliver, processState } = await service(undefined, instantStore())
+    vi.useFakeTimers()
+    try {
+      await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+      processState.active = true
+      idleTurn(manager)
+      await vi.advanceTimersByTimeAsync(45_000)
+      expect(deliver).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(15_000)
+      manager.emit('semantic-event', { sessionId: 's1', event: { type: 'turn_started', turnId: 't-ours' } })
+      manager.emit('semantic-event', { sessionId: 's1', event: { type: 'turn_completed', turnId: 't-ours' } })
+      await vi.advanceTimersByTimeAsync(44_999)
+      expect(deliver).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(deliver).toHaveBeenCalledTimes(2)
     } finally { vi.useRealTimers() }
   })
 
@@ -826,8 +851,8 @@ describe('GoalLoopService hook turns that end without a Stop (#1028 review)', ()
   // (Codex reasoning with no summary deltas, a long tool, Resume during a
   // running tool) are the busy cases Resume must NOT mistake for it.
   afterEach(() => { vi.useRealTimers() })
-  const hookTurn = async () => {
-    const ctx = await service()
+  const hookTurn = async (store?: GoalLoopStore) => {
+    const ctx = await service(undefined, store)
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     await ctx.svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
     ctx.svc.observeProviderHook('s1', 'post-tool-use')
@@ -961,7 +986,10 @@ describe('GoalLoopService hook turns that end without a Stop (#1028 review)', ()
   })
 
   it('Resume right after our own delivery waits for that turn', async () => {
-    const { svc, manager, deliver } = await hookTurn()
+    // Instant store (review of #1337): with the file store the delivery's real
+    // persist() is still in flight when Resume fires, which parks the trigger
+    // and hid a missing markOwedATurn from this case.
+    const { svc, manager, deliver } = await hookTurn(instantStore())
     idleTurn(manager)
     svc.observeProviderHook('s1', 'stop', { blocked: false })
     await vi.advanceTimersByTimeAsync(0)
