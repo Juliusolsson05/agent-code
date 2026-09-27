@@ -12,9 +12,12 @@ import type { SessionMeta, WorkspaceState } from '@renderer/workspace/types'
 
 // #1282: Reload Agents (Dangerous Agents toggle) walked a snapshot and
 // re-checked nothing across its awaits. The workspace is the owner's
-// sanitized persisted v3 workspace (a Claude and a Codex lane agent); the
-// spawn IPC is the one mocked edge, and it is held open so the test can
-// change the workspace while the reload is mid-flight, as a user can.
+// sanitized persisted v3 workspace (a Claude and a Codex lane agent). The
+// mocked edges are the main-process IPC calls (spawnSession, killOwnedSession,
+// and the goal-loop control/carry calls) plus the history loader; spawn and
+// kill can be held open so a test changes the workspace in the exact interval
+// a user can, and the assertions are made INSIDE that interval where it is
+// the dangerous one (#1326 round 2), not only on the final state.
 
 vi.mock('./initialHistory', () => ({ loadInitialHistoryForSession: vi.fn(async () => undefined) }))
 const originalApi = window.api
@@ -144,9 +147,11 @@ it('keeps a draft typed, and an unread marker set, while the reload ran', async 
   })
 })
 
-// An agent respawned EARLY in the loop can be closed while a later one's
-// spawn is in flight; the commit must re-check it too.
-it('does not file an early agent closed while a later agent was respawning', async () => {
+// #1326 round-2 review C2: an agent respawned EARLY in the loop used to run
+// unfiled until every later spawn returned, so closing its pane while a later
+// spawn stalled killed only the old backend and left the successor running.
+// Pinned on that interval, with the later spawn still held.
+it('files an early successor before a later spawn returns, so closing it stops it', async () => {
   const probe = harness()
   const [first, second] = probe.order as [string, string]
   cleanup()
@@ -156,14 +161,68 @@ it('does not file an early agent closed while a later agent was respawning', asy
   let reload!: Promise<void>
   await act(async () => { reload = h.hook.result.current.reloadAgentSessions(true) })
   await vi.waitFor(() => expect(h.spawnSession).toHaveBeenCalledWith(expect.objectContaining({ kind: secondKind })))
-  h.writer.setState(prev => {
-    const sessions = { ...prev.sessions }
-    delete sessions[first]
-    return { ...prev, sessions }
-  })
+  // The later spawn is still pending; the early successor is already the pane.
+  expect(h.writer.getState().sessions[`${firstKind}-restarted`]).toBeDefined()
+  expect(h.writer.getState().sessions[first]).toBeUndefined()
+  expect(h.writer.getState().stage.lanes.map(lane => lane.selectedSessionId)).toContain(`${firstKind}-restarted`)
+  // The user closes it through the real close action: its backend is killed.
+  await act(async () => { await h.hook.result.current.killSession(`${firstKind}-restarted`, 'close.focused') })
+  expect(h.killOwnedSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: `${firstKind}-restarted`, caller: 'close.focused' }))
   await act(async () => { h.release(); await reload })
   expect(h.writer.getState().sessions[`${firstKind}-restarted`]).toBeUndefined()
-  expect(h.killOwnedSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: `${firstKind}-restarted`, caller: 'reload.orphaned-successor' }))
+})
+
+// #1326 round-2 review C1: a close that completes while reload's pre-spawn
+// kill is in flight must not be followed by a spawn for the closed agent.
+it('does not spawn for an agent closed while its old backend was being killed', async () => {
+  const h = harness()
+  let releaseKill!: (value: boolean) => void
+  h.killHolds.set(h.claudeLane, new Promise<boolean>(resolve => { releaseKill = resolve }))
+  let reload!: Promise<void>
+  await act(async () => { reload = h.hook.result.current.reloadAgentSessions(true) })
+  await vi.waitFor(() => expect(h.killOwnedSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: h.claudeLane, caller: 'reload.agent-sessions' })))
+  h.writer.setState(prev => {
+    const sessions = { ...prev.sessions }
+    delete sessions[h.claudeLane]
+    return { ...prev, sessions }
+  })
+  await act(async () => { releaseKill(true); h.release(); await reload })
+  expect(h.spawnSession).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'claude' }))
+})
+
+// #1326 round-2 review A1: a fresh start (the old row's id was a provisional
+// proxy-header one, which is never resumed) reports the new process's durable
+// provider id; the successor must keep it, and its history load must run.
+it('keeps the durable provider id a fresh respawn reports', async () => {
+  const h = harness()
+  h.writer.setState(prev => ({
+    ...prev,
+    sessions: { ...prev.sessions, [h.claudeLane]: { ...prev.sessions[h.claudeLane]!, providerSessionId: 'provisional-id', providerSessionIdSource: 'proxy-header' } },
+  }))
+  h.spawnSession.mockImplementation(async (options: SessionSpawnOptions) => ({
+    sessionId: `${options.kind}-restarted`,
+    providerSessionId: options.resumeSessionId ?? `${options.kind}-native-new`,
+  }))
+  await act(async () => { h.release(); await h.hook.result.current.reloadAgentSessions(true) })
+  expect(h.spawnSession).toHaveBeenCalledWith(expect.objectContaining({ kind: 'claude', resumeSessionId: undefined }))
+  expect(h.writer.getState().sessions['claude-restarted']).toMatchObject({ providerSessionId: 'claude-native-new', providerSessionIdSource: 'runtime-start' })
+})
+
+// #1326 round-2 review C (survivor): a provider-runtime change on the same
+// row (ensureSessionLive can update it after recovery) means the spawned
+// successor runs the wrong runtime; it must be orphaned, not filed.
+it('does not file a successor when the agent’s provider runtime changed mid-reload', async () => {
+  const h = harness()
+  let reload!: Promise<void>
+  await act(async () => { reload = h.hook.result.current.reloadAgentSessions(true) })
+  await vi.waitFor(() => expect(h.spawnSession).toHaveBeenCalledWith(expect.objectContaining({ kind: 'claude' })))
+  h.writer.setState(prev => ({
+    ...prev,
+    sessions: { ...prev.sessions, [h.claudeLane]: { ...prev.sessions[h.claudeLane]!, providerRuntime: prev.sessions[h.claudeLane]!.providerRuntime === 'terminal' ? undefined : 'terminal' } },
+  }))
+  await act(async () => { h.release(); await reload })
+  expect(h.writer.getState().sessions['claude-restarted']).toBeUndefined()
+  expect(h.killOwnedSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'claude-restarted', caller: 'reload.orphaned-successor' }))
 })
 
 // #1326 review A1: the Dangerous Agents switch does not serialize clicks, so
@@ -258,6 +317,15 @@ it('files the other successors when an orphan kill rejects', async () => {
   await act(async () => { h.release(); await reload })
   expect(h.writer.getState().sessions[`${firstKind}-restarted`]).toBeDefined()
   expect(h.writer.getState().sessions[`${secondKind}-restarted`]).toBeUndefined()
+  // #1326 round-2 review C3: not swallowed. Retried once at once, then kept
+  // and retried by the next reload, which stops it once the IPC recovers.
+  const orphanKills = () => h.killOwnedSession.mock.calls.filter(([req]) => (req as { sessionId: string }).sessionId === `${secondKind}-restarted`).length
+  expect(orphanKills()).toBe(2)
+  h.killHolds.delete(`${secondKind}-restarted`)
+  await act(async () => { await h.hook.result.current.reloadAgentSessions(true) })
+  expect(orphanKills()).toBe(3)
+  await act(async () => { await h.hook.result.current.reloadAgentSessions(true) })
+  expect(orphanKills()).toBe(3)
 })
 
 // #1326 review A5: a failed respawn of an agent closed meanwhile has no pane
@@ -298,4 +366,20 @@ it.each([
   await act(async () => { h.release(); await reload })
   expect(h.writer.getState().sessions['claude-restarted']).toBeUndefined()
   expect(h.killOwnedSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'claude-restarted', caller: 'reload.orphaned-successor' }))
+})
+
+// #1326 round-2 review A (survivor): the old row's provisional proxy-header id
+// is never resumed, so when the fresh process reports none, the successor must
+// carry none; copying it would point history and resume at the old process.
+it('does not carry a provisional provider id onto a fresh successor', async () => {
+  const h = harness()
+  h.writer.setState(prev => ({
+    ...prev,
+    sessions: { ...prev.sessions, [h.claudeLane]: { ...prev.sessions[h.claudeLane]!, providerSessionId: 'provisional-id', providerSessionIdSource: 'proxy-header' } },
+  }))
+  h.spawnSession.mockImplementation(async (options: SessionSpawnOptions) => ({ sessionId: `${options.kind}-restarted`, providerSessionId: undefined }))
+  await act(async () => { h.release(); await h.hook.result.current.reloadAgentSessions(true) })
+  const successor = h.writer.getState().sessions['claude-restarted']!
+  expect(successor.providerSessionId).toBeUndefined()
+  expect(successor.providerSessionIdSource).toBeUndefined()
 })

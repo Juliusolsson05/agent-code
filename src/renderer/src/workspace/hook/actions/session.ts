@@ -360,6 +360,9 @@ function waitForSessionInputReady(
   })
 }
 
+/** A reload successor whose agent went away while it spawned. */
+type ReloadOrphan = { newId: SessionId; owner: Pick<SessionMeta, 'cwd' | 'kind' | 'providerRuntime'> }
+
 export function useSessionActions(
   state: { activeTabId: string; sessions: Record<SessionId, SessionMeta>; tabs: Tab[] },
   setState: WorkspaceSetState,
@@ -1482,6 +1485,35 @@ export function useSessionActions(
   // dangerous mode, then remaps visible panes and buried records
   // onto the fresh session ids. Plain terminal sessions are left
   // untouched.
+  // Successors of a reload whose agent was closed while they spawned, and
+  // whose kill has failed twice; keyed by successor id.
+  const unstoppedReloadSuccessorsRef = useRef(new Map<SessionId, ReloadOrphan>())
+  // WHY a failed orphan kill is retried and remembered instead of swallowed
+  // (#1326 round-2 review C3): the successor is filed nowhere, so no pane
+  // exists from which the user could close it, and a swallowed rejection
+  // meant a hidden backend with no owner at all. A rejection here is an IPC
+  // or main-side failure, not "already gone" (that resolves false), so one
+  // immediate retry covers a transient one. After that the successor stays in
+  // `unstoppedReloadSuccessorsRef`, which the next reload retries first, and
+  // application quit kills every backend regardless (applicationShutdown's
+  // killAll), so it is never ownerless. It does not throw: the other agents
+  // of this reload must still be restarted and filed (#1326 review A4).
+  // The log line is curated: IPC error text can carry env values (q22).
+  const killOrphan = useCallback(async (orphan: ReloadOrphan): Promise<void> => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await killSession(orphan.newId, 'reload.orphaned-successor', orphan.owner)
+        unstoppedReloadSuccessorsRef.current.delete(orphan.newId)
+        return
+      } catch {
+        // Retried once below, then remembered.
+      }
+    }
+    unstoppedReloadSuccessorsRef.current.set(orphan.newId, orphan)
+    // eslint-disable-next-line no-console
+    console.warn('[workspace] could not stop a reload successor of a closed agent; retrying on the next reload:', orphan.newId)
+  }, [killSession])
+
   const reloadAgentSessionsNow = useCallback(
     async (dangerousMode: boolean) => {
       const current = refs.stateRef.current
@@ -1525,15 +1557,6 @@ export function useSessionActions(
       })
       if (agentEntries.length === 0) return
 
-      const oldRuntimes = refs.latestRuntimesRef.current
-      const idMap = new Map<SessionId, SessionId>()
-      // Old ids whose respawn failed. See the setState below for why these
-      // stay in the workspace instead of being removed (#1239).
-      const failedIds = new Set<SessionId>()
-      const freshSessions: Record<SessionId, SessionMeta> = {}
-      // Successors that can still complete a goal loop; see carryGoalLoops.
-      const goalLoopCapable = new Set<SessionId>()
-
       // Is `oldId` still the agent this loop set out to reload? (#1282) The
       // loop awaits a kill and a spawn per agent while the user keeps
       // working, and it used to re-check nothing: an agent closed meanwhile
@@ -1543,10 +1566,10 @@ export function useSessionActions(
       // canCommit (#815). Read through the setState updater, the one place
       // that sees the state as it is now, not as this closure captured it.
       //
-      // Returns the LIVE row (not the captured one) so the commit can file
-      // the successor with whatever changed meanwhile that does not affect
-      // the spawn: a project merge re-files the same id under another
-      // project (#1326 review A2), a rename changes its title.
+      // Returns the LIVE row (not the captured one) so the commit files the
+      // successor with whatever changed meanwhile that does not affect the
+      // spawn: a project merge re-files the same id under another project
+      // (#1326 review A2), a rename changes its title.
       const liveReloadable = (oldId: SessionId, meta: SessionMeta): SessionMeta | null => {
         let live: SessionMeta | null = null
         setState(prev => {
@@ -1558,12 +1581,20 @@ export function useSessionActions(
         })
         return live
       }
-      // Per successor, the fields the SPAWN decided (identity, MCP domains,
-      // the provider session it resumed). Everything else comes from the
-      // live row at commit.
-      const spawnedFields = new Map<SessionId, Partial<SessionMeta>>()
-      const oldMetas = new Map<SessionId, SessionMeta>()
 
+      // Successors an earlier reload spawned for an agent closed meanwhile
+      // and then could not stop (see killOrphan). Retried first, so a
+      // transient IPC failure does not leave them running until quit.
+      for (const orphan of [...unstoppedReloadSuccessorsRef.current.values()]) await killOrphan(orphan)
+
+      // WHY each agent is committed as soon as ITS spawn returns, and not in
+      // one batch at the end (#1326 round-2 review C): while an early
+      // successor waited for a later agent's slow spawn it was running but
+      // filed nowhere, so closing its pane killed only the OLD backend and the
+      // hidden successor kept working (with Dangerous Agents on, after Close).
+      // Round 1 had made the batch commit synchronous, which fixed the commit
+      // itself but not that interval. Filed immediately, the successor is the
+      // pane: a close from then on is an ordinary close of the new id.
       for (const [oldId, meta] of agentEntries) {
         // Closed or replaced since the snapshot: nothing of ours to reload.
         if (!liveReloadable(oldId, meta)) continue
@@ -1573,24 +1604,28 @@ export function useSessionActions(
           // Kill failures still fall through to respawn — the old
           // process may already be gone.
         }
+        // Again after the kill's await (#1326 round-2 review C1): a close that
+        // finished meanwhile must not be followed by a spawn for it.
+        if (!liveReloadable(oldId, meta)) continue
 
         delete refs.seenUuidsRef.current[oldId]
         clearLiveEntryWindowSession(oldId)
 
+        const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
+        const builtInMcpOverrides = sessionMcpOverrides(meta)
+        const builtInMcpDomains =
+          isAgentProviderKind(kind)
+            ? resolveSessionBuiltInMcpDomains({
+                provider: kind,
+                sessionOverrides: builtInMcpOverrides,
+                defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
+              })
+            : undefined
+        const resumeSessionId = resumableProviderSessionId(meta)
+        const owner = { cwd: meta.cwd, kind, providerRuntime: meta.providerRuntime }
+        let spawned: Awaited<ReturnType<typeof window.api.spawnSession>>
         try {
-          const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
-          const builtInMcpOverrides = sessionMcpOverrides(meta)
-          const builtInMcpDomains =
-            isAgentProviderKind(kind)
-              ? resolveSessionBuiltInMcpDomains({
-                  provider: kind,
-                  sessionOverrides: builtInMcpOverrides,
-                  defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
-                })
-              : undefined
-          const resumeSessionId = resumableProviderSessionId(meta)
-          const restoredMeta = withoutProvisionalProviderSession(meta)
-          const { sessionId: newId, userMcpServerIds } = await window.api.spawnSession({
+          spawned = await window.api.spawnSession({
             tldrIdentity: tldrIdentityForSession(oldId, meta),
             kind,
             providerRuntime: meta.providerRuntime,
@@ -1601,103 +1636,94 @@ export function useSessionActions(
             builtInMcpDomains,
             ...(isAgentProviderKind(kind) ? { userMcpOverrides: userMcpOverridesFrom(builtInMcpOverrides) } : {}),
           })
-          // Whether it is still ours is decided once, at commit, below: that
-          // check also covers an agent closed while this spawn was in flight.
-          idMap.set(oldId, newId)
-          oldMetas.set(oldId, meta)
-          if (builtInMcpDomains?.includes('goal_loop')) goalLoopCapable.add(newId)
-          // The provider session the successor actually resumed is the one
-          // captured here, not whatever the live row says by commit time; a
-          // provisional (proxy-header) id is dropped exactly as before.
-          const { providerSessionId, providerSessionIdSource } = restoredMeta
-          spawnedFields.set(newId, {
-            ...(providerSessionId !== undefined ? { providerSessionId } : {}),
-            ...(providerSessionIdSource !== undefined ? { providerSessionIdSource } : {}),
-            tldrIdentity: tldrIdentityForSession(oldId, meta),
-            ...(builtInMcpDomains !== undefined ? { builtInMcpDomains, builtInMcpOverrides } : {}),
-            ...(userMcpServerIds !== undefined ? { userMcpServerIds } : {}),
-          })
         } catch {
           // WHY the rejection's text is dropped (#1252 review): it is the raw
           // provider exception relayed through IPC, which can carry secrets,
           // and the pane renders `processError` verbatim. Main's recovery
           // path already returns this same fixed message for the same failure.
-          failedIds.add(oldId)
+          //
+          // A failed respawn whose agent was closed meanwhile has nothing
+          // left to show a `failed` pane in (#1326 review A5); recreating its
+          // runtime would leave an invisible stale entry under a closed id.
+          if (liveReloadable(oldId, meta)) markRespawnFailed(oldId)
+          continue
         }
-      }
-
-      // Commit-time re-check (#1282): an agent respawned early in the loop
-      // can be closed or replaced while a LATER agent's spawn is in flight,
-      // so the per-agent check above is not the last word. Its successor is
-      // killed rather than filed.
-      //
-      // WHY there is no await from here to the end of the commit (#1326
-      // review A3/A4): the orphan kills used to be awaited INSIDE this loop.
-      // A close during one of those kills was then never re-checked (the
-      // closed agent's successor was filed anyway), and a kill that rejected
-      // aborted the reload with other successors spawned but never filed.
-      // Checks and commit are now one synchronous run the user cannot
-      // interleave with; orphans are killed after it, each on its own.
-      const orphans: Array<{ newId: SessionId; meta: SessionMeta }> = []
-      for (const [oldId, newId] of [...idMap]) {
-        const meta = oldMetas.get(oldId)!
+        const newId = spawned.sessionId
+        // No await between this check and the commit below: nothing the user
+        // does can land in between.
         const live = liveReloadable(oldId, meta)
-        if (live) {
+        if (!live) {
+          await killOrphan({ newId, owner })
+          continue
+        }
+
+        // The provider session the successor actually runs. A resumed one is
+        // the id it was asked to resume. A fresh start (the old row had only
+        // a provisional proxy-header id, which is never resumed) may report
+        // the new process's durable id at startup (#1326 round-2 review A1):
+        // dropping it skipped the history load and let an autosave persist a
+        // row with no resume identity. Same rule as spawn()'s own commit.
+        // The live row's provider fields are never used: the successor did
+        // not resume whatever the old process reported meanwhile.
+        const restoredMeta = withoutProvisionalProviderSession(meta)
+        const { providerSessionId: _liveProviderSessionId, providerSessionIdSource: _liveSource, ...liveRest } = live
+        const providerIdentity: Partial<SessionMeta> = resumeSessionId
+          ? { providerSessionId: restoredMeta.providerSessionId, providerSessionIdSource: restoredMeta.providerSessionIdSource }
+          : spawned.providerSessionId
+            ? { providerSessionId: spawned.providerSessionId, providerSessionIdSource: 'runtime-start' }
+            : {}
+        const fresh: SessionMeta = {
           // `agentNameId` needs no line here: the live row still carries the
-          // identity, and `...live` moves it onto the new local id. Do not
+          // identity, and `...liveRest` moves it onto the new local id. Do not
           // add a `?? oldId` fallback — a workspace with no identity has no
           // allocated name to lose, and minting here would put a second
           // author on the one decision the reconciler owns.
-          const { providerSessionId: _liveProviderSessionId, providerSessionIdSource: _liveSource, ...liveRest } = live
-          freshSessions[newId] = { ...liveRest, ...spawnedFields.get(newId) }
-          continue
+          ...liveRest,
+          ...Object.fromEntries(Object.entries(providerIdentity).filter(([, value]) => value !== undefined)),
+          tldrIdentity: tldrIdentityForSession(oldId, meta),
+          ...(builtInMcpDomains !== undefined ? { builtInMcpDomains, builtInMcpOverrides } : {}),
+          ...(spawned.userMcpServerIds !== undefined ? { userMcpServerIds: spawned.userMcpServerIds } : {}),
         }
-        idMap.delete(oldId)
-        goalLoopCapable.delete(newId)
-        orphans.push({ newId, meta })
-      }
-      // A failed respawn whose agent was closed meanwhile has nothing left
-      // to show a `failed` pane in (#1326 review A5); recreating its runtime
-      // would leave an invisible stale entry under a closed id.
-      for (const oldId of [...failedIds]) {
-        const meta = agentEntries.find(([id]) => id === oldId)?.[1]
-        if (!meta || !liveReloadable(oldId, meta)) failedIds.delete(oldId)
-      }
-      const killOrphans = async (): Promise<void> => {
-        for (const { newId, meta } of orphans) {
-          try {
-            await killSession(newId, 'reload.orphaned-successor', { cwd: meta.cwd, kind: meta.kind ?? DEFAULT_PROVIDER, providerRuntime: meta.providerRuntime })
-          } catch {
-            // Best effort, like the pre-kill above: the successor is already
-            // unfiled, and one failed kill must not stop the others.
-          }
+        commitSuccessor(oldId, newId, fresh)
+        // Reload Agents resolves each successor's domains from CURRENT
+        // defaults; one that lost goal_loop keeps no loop it cannot complete
+        // (#1287 review A).
+        if (builtInMcpDomains?.includes('goal_loop')) carryGoalLoops(new Map([[oldId, newId]]))
+        else stopGoalLoops([oldId])
+        if (hasDurableProviderSession(fresh)) {
+          void loadInitialHistoryForSession({ sessionId: newId, meta: fresh, refs, setRuntimes })
         }
       }
 
-      if (idMap.size === 0 && failedIds.size === 0) {
-        await killOrphans()
-        return
-      }
-
-      setRuntimes(prev => {
-        const next: Record<SessionId, SessionRuntime> = { ...prev }
-        for (const oldId of idMap.keys()) delete next[oldId]
+      function markRespawnFailed(oldId: SessionId): void {
         // A failed respawn keeps its pane, in the same `failed` state a
         // failed wake uses: its backend was killed above, so the pane must
         // say so and offer Retry (which wakes it under the same id).
-        for (const oldId of failedIds) {
-          const current = next[oldId] ?? emptyRuntime()
-          next[oldId] = {
-            ...current,
+        //
+        // WHY it stays exactly where it was (#1239): this used to delete it,
+        // and the project it left empty, with no message. Toggling Dangerous
+        // Agents By Default therefore made any agent with a broken CLI, proxy
+        // or MCP start vanish from the workspace, its process already killed,
+        // and autosave made that permanent.
+        setRuntimes(prev => ({
+          ...prev,
+          [oldId]: {
+            ...(prev[oldId] ?? emptyRuntime()),
             processStatus: 'failed',
             processError: SESSION_START_FAILED_MESSAGE,
             recoveryFailureCode: 'start-failed',
             inputReady: false,
             inputReadinessReason: null,
             inputReadinessChangedAt: Date.now(),
-          }
-        }
-        for (const [oldId, newId] of idMap.entries()) {
+          },
+        }))
+      }
+
+      function commitSuccessor(oldId: SessionId, newId: SessionId, fresh: SessionMeta): void {
+        const idMap = new Map([[oldId, newId]])
+        setRuntimes(prev => {
+          const next: Record<SessionId, SessionRuntime> = { ...prev }
+          delete next[oldId]
           // WHY merge instead of replacing with a fresh runtime:
           //
           // Codex resume can synchronously replay JSONL and even emit
@@ -1710,10 +1736,10 @@ export function useSessionActions(
           // "Agent has exited".
           const existing = prev[newId]
           const restored: SessionRuntime = { ...(existing ?? emptyRuntime()) }
-          // From the LIVE predecessor runtime (#1282), not the snapshot taken
+          // From the LIVE predecessor runtime (#1282), not a snapshot taken
           // before the slow kill/spawn sequence: text typed, images pasted
           // and a "finished, not seen" marker set meanwhile all carry over.
-          const predecessor = prev[oldId] ?? oldRuntimes[oldId]
+          const predecessor = prev[oldId]
           restored.draftInput = predecessor?.draftInput ?? existing?.draftInput ?? ''
           if (predecessor?.draftImages?.length) restored.draftImages = predecessor.draftImages
           if (predecessor?.unreadSince != null) {
@@ -1721,64 +1747,32 @@ export function useSessionActions(
             restored.unreadKind = predecessor.unreadKind
           }
           // Terminal-runtime agents included: their history reloads into
-          // `entries` with everyone else's below, and the pane stays on the
-          // raw TUI regardless (see loadInitialHistoryForSession).
-          Object.assign(restored, seedResumedRuntimeFields(existing, freshSessions[newId]))
+          // `entries` with everyone else's, and the pane stays on the raw TUI
+          // regardless (see loadInitialHistoryForSession).
+          Object.assign(restored, seedResumedRuntimeFields(existing, fresh))
           next[newId] = restored
-        }
-        return next
-      })
-
-      setState(prev => {
-        const nextSessions = pickOwnedSessions(
-          prev.sessions,
-          collectOwnedSessionIds(prev),
-        )
-        for (const oldId of idMap.keys()) delete nextSessions[oldId]
-        for (const [newId, meta] of Object.entries(freshSessions)) {
-          nextSessions[newId] = meta
-        }
-
-        // A successor carries its predecessor's LIVE pool membership (the
-        // `...liveRest` above), so it keeps its project and its place, even
-        // when a project merge moved it while the reload ran.
-        //
-        // WHY an agent whose respawn FAILED stays exactly where it was
-        // (#1239): this used to delete it, and the project it left empty,
-        // with no message. Toggling Dangerous Agents By Default therefore
-        // made any agent with a broken CLI, proxy or MCP start vanish from
-        // the workspace, its process already killed, and autosave made that
-        // permanent. It now keeps its id, lane and metadata, and its runtime
-        // (set above) shows `failed` with the spawn error and Retry.
-        //
-        // Remap lanes through the old->new idMap; failed ids have no entry,
-        // so their lanes keep pointing at the pane that is still there.
-        return {
-          ...prev,
-          // Reload-all gives every restarted agent a fresh id; remap
-          // relationship pointers across all sessions (children keep pointing
-          // at the right parent) and remap the pinned list (pins follow).
-          sessions: remapSessionsRelationships(nextSessions, idMap),
-          pinnedSessionIds: remapPinnedSessionIds(prev.pinnedSessionIds, idMap),
-          stage: remapTiledLanes(prev.stage, idMap),
-        }
-      })
-      // Reload Agents resolves each successor's domains from CURRENT
-      // defaults; one that lost goal_loop keeps no loop it cannot complete
-      // (#1287 review A).
-      carryGoalLoops(new Map([...idMap].filter(([, newId]) => goalLoopCapable.has(newId))))
-      stopGoalLoops([...idMap].filter(([, newId]) => !goalLoopCapable.has(newId)).map(([oldId]) => oldId))
-      for (const [newId, meta] of Object.entries(freshSessions)) {
-        if (!hasDurableProviderSession(meta)) continue
-        void loadInitialHistoryForSession({
-          sessionId: newId,
-          meta,
-          refs,
-          setRuntimes,
+          return next
+        })
+        setState(prev => {
+          // The unowned rows reported at the top are dropped by every commit
+          // (idempotent), so none survives the reload/autosave cycle.
+          const sessions = pickOwnedSessions(prev.sessions, collectOwnedSessionIds(prev))
+          delete sessions[oldId]
+          // The successor carries its predecessor's LIVE pool membership (the
+          // `...liveRest` above), so it keeps its project and its place, even
+          // when a project merge moved it while the reload ran.
+          sessions[newId] = fresh
+          return {
+            ...prev,
+            // A fresh id: remap relationship pointers across all sessions
+            // (children keep pointing at the right parent), the pinned list
+            // (pins follow) and the lanes.
+            sessions: remapSessionsRelationships(sessions, idMap),
+            pinnedSessionIds: remapPinnedSessionIds(prev.pinnedSessionIds, idMap),
+            stage: remapTiledLanes(prev.stage, idMap),
+          }
         })
       }
-      // Only now, after the commit above ran with no await in between.
-      await killOrphans()
     },
     [
       refs.dangerousAgentsRef,
@@ -1788,6 +1782,7 @@ export function useSessionActions(
       refs.useProxyStreamingRef,
       setRuntimes,
       setState,
+      killOrphan,
     ],
   )
 

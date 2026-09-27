@@ -8,8 +8,7 @@
 
 ## Change
 - **Before each kill,** the agent must still be the same owned agent (`canCommit`'s rule: same cwd, kind and runtime, and still owned). Otherwise it is skipped, with no kill and no spawn.
-- **After its spawn,** the same check runs again. If the agent went away meanwhile, the new process is killed and nothing is filed.
-- **At commit,** only entries whose old agent is still present are applied; any other successor is killed.
+- **After its kill and after its spawn,** the same check runs again. If the agent went away, nothing is spawned, or the new process is killed and nothing is filed. (Superseded in detail by the round sections below: each agent now commits on its own.)
 - **The draft, draft images and the unread marker** are read from the live runtime at commit time.
 
 ## Tests
@@ -23,3 +22,15 @@ On the recorded workspace fixture: a close during the reload, a replace during i
 - **Mutation survivors (cwd check, project-ownership clause).** Pinned by a cwd change and a removed project mid-reload.
 
 Tests: 7 new cases on the same fixture, 5 red against the round-1 head (the two mutation pins pass there, as they cover existing behavior).
+
+## Review round 2 (#1326): each agent commits on its own
+Round 1's synchronous batch commit left two intervals open, and round 2 (reviewers A and C, steering q47) found them:
+- **C1: after the pre-spawn kill.** A close that finished while the old backend's kill was awaited was followed by a spawn anyway. The loop now re-checks ownership after that await.
+- **C2: an early successor unfiled while a later spawn stalls.** Closing the pane killed only the old backend, and the successor kept running, possibly in dangerous mode. **Each agent is now committed as soon as its own spawn returns** (the same one-pair remap `replaceSession` uses), so the successor IS the pane, and a close from then on is an ordinary close. The only remaining interval is the spawn itself; a close there orphans the successor, which is killed at once, not after the whole loop.
+- **C3: a swallowed orphan-kill rejection.** The contract is now: retry once at once; if that also fails, keep the successor in `unstoppedReloadSuccessorsRef`, which the next reload retries first; log a curated line (no IPC text, q22). Application quit (`killAll`) stops every backend regardless, so none is ever ownerless. It still does not throw, so the other agents are restarted and filed (round 1, A4).
+- **A1: dropped durable provider id.** A fresh start (the old id was provisional, so nothing is resumed) now keeps the `providerSessionId` spawn reports, as `runtime-start`, the same rule as `spawn()`. The live row's provider fields are never copied.
+- **The `providerRuntime` clause** of the ownership rule is now pinned too.
+
+Not adopted: routing reload through `replaceSession`. That function spawns successor-first with the ambient dangerous-mode setting and a Codex same-rollout handoff; reload kills first and passes an explicit mode. Merging them changes behavior beyond this fix.
+
+Tests (on the same fixture): C2 is asserted with the later spawn still held, closing through the real `killSession` action. C1 closes while the reload's kill is held. C3 counts the retry and the next reload's retry. A1 covers both directions: a reported durable id is kept, and a provisional id is not carried. 4 of these are red on the round-2 head; the `providerRuntime` and provisional-id cases pin existing guards, and a mutation removing either one fails them.
