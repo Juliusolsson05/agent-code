@@ -806,6 +806,23 @@ describe('WorkflowBridge session carry (#1280)', () => {
     expect(runIds(bridge, 'target', '/second')).toEqual(['target-run'])
   })
 
+  // Round-5 review B (surviving mutant): the home is the lineage ROOT's, not
+  // the parent's. A grandchild resumed under the target twice over still
+  // goes home to the source. Chronological order, as FileWorkflowStore lists.
+  it('restores a twice-resumed aliased run home to its lineage root at restart', async () => {
+    const file = aliasFile()
+    writeFileSync(file, JSON.stringify({ source: 'target' }))
+    const bridge = new WorkflowBridge(service([
+      reference('source-run', 'source', { cwd: '/first' }),
+      reference('child-run', 'target', { cwd: '/first', resumedFromRunId: 'source-run', lineageId: 'source-run' }),
+      reference('grandchild-run', 'target', { cwd: '/first', resumedFromRunId: 'child-run', lineageId: 'source-run' }),
+      reference('target-run', 'target', { cwd: '/second' }),
+    ]), { send: vi.fn(), aliasFile: file })
+    await bridge.start()
+    expect(runIds(bridge, 'source', '/first')).toEqual(['grandchild-run'])
+    expect(runIds(bridge, 'target', '/second')).toEqual(['target-run'])
+  })
+
   // The same rule at restart, in the storage order that would otherwise lose
   // it: the aliased run is listed before the successor's own run.
   it('keeps both runs apart at restart whatever order storage lists them in', async () => {
