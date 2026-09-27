@@ -712,8 +712,12 @@ describe('control history retention (#1274)', () => {
     const minute = 60_000
     const inside = await call(directory, { at: new Date(RETENTION_NOW.getTime() - CONTROL_HISTORY_RETENTION_MS + minute).toISOString(), result: settled() })
     const outside = await call(directory, { at: new Date(RETENTION_NOW.getTime() - CONTROL_HISTORY_RETENTION_MS - minute).toISOString(), result: settled() })
-    await journal(directory, [inside, outside])
-    expect(await kept(directory, [inside.callId, outside.callId])).toEqual([true, false])
+    // Exactly at the edge is still inside (#1330 verification: `>=` vs `>`
+    // survived every other case). With infrequent deletion as the owner's
+    // standing preference, the boundary instant is kept.
+    const edge = await call(directory, { at: new Date(RETENTION_NOW.getTime() - CONTROL_HISTORY_RETENTION_MS).toISOString(), result: settled() })
+    await journal(directory, [inside, outside, edge])
+    expect(await kept(directory, [inside.callId, outside.callId, edge.callId])).toEqual([true, false, true])
     // The owner's 90-day window (2026-09-27); pinned by value, not only through the constant.
     expect(CONTROL_HISTORY_RETENTION_MS).toBe(90 * 24 * 60 * 60 * 1000)
   })
