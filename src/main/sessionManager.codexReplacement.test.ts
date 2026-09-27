@@ -655,6 +655,7 @@ describe('SessionManager Codex replacement handoff', () => {
     )
     createSession.mockImplementationOnce(() => predecessor)
     const builtInMcpHost = {
+      pinReportingIdentity: async () => {},
       registerSession: vi.fn(() => {
         throw new Error('recorded successor MCP preflight failure')
       }),
@@ -755,6 +756,7 @@ describe('SessionManager Codex replacement handoff', () => {
     )
     const activeMcpRegistrations = new Set<string>()
     const builtInMcpHost = {
+      pinReportingIdentity: async () => {},
       registerSession: vi.fn((scope: { sessionId: string }) => {
         activeMcpRegistrations.add(scope.sessionId)
         return []

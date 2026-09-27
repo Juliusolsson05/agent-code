@@ -48,11 +48,25 @@ All three reviewers (and steering q45) found that age alone can evict a goal tha
 - **Declined: remember revisions before the commit (b's survivor).** b found no user-visible effect, and neither do I: after a refused write the record is still in memory, and its own revision wins.
 - **Residual:** a pane added in the renderer is not in the persisted workspace until its autosave, up to 400 ms later. If it also has no live MCP registration in that window, its identity is unprotected. A new agent's pane has a live registration, so that needs an agent that spawned and exited within 400 ms, while the store is at the cap.
 
-## Steering q51: registration during the rename
-The round-2 recheck sampled in-use just BEFORE the awaited rename. `registerSession` is synchronous and can land during that await, after every sample, and the rename then published a file without that live agent's goal.
+## Steering q51/q52: final design, no deletion ever races registration
+The q51 attempt, "evict, then give the record back if its identity registered during the rename", was withdrawn. q52 showed it still loses a live goal: when the evictee is the only unused record, there is no second record to displace, so it cannot be given back. It also left a crash window between two renames. Each round had found a new loss path, because the design deleted first and compensated after.
 
-A lock was not possible: registration cannot wait on the store's queue. The fix closes the window from the store's side. Once the eviction's rename has landed, `restoreEvicteesNowInUse` asks in-use again, which now includes every registration that happened before or during the rename. Any evictee now in use gets its record back, displacing the next record nothing uses, in one write that keeps the file at the cap. This runs inside the same serialized store operation, so no read, `goal_complete` or update queued behind it can observe the gap. The restore write has its own rename, so it loops for up to 3 passes. This replaces the round-2 "busy" refusal: one mechanism, not two.
+**Final design.**
+- Each store counts **pins** per identity. `pin()` and `unpin()` run in the store's own `serialize` queue, the same queue every `update` and `complete` runs in.
+- The spawn path awaits `BuiltInMcpHttpHost.pinReportingIdentity(scope)` **before** `registerSession`. It pins the exact identity the registration will report as (explicit, or the session-id fallback). `revokeSession` releases it. Counting matters because a replacement registers its successor before revoking its predecessor under the same identity.
+- An eviction chooses its victim (the least recently written record that is neither pinned nor named by the persisted workspace) and commits it inside ONE queued operation. A pin queued before that operation protects the record. A pin queued behind an eviction in flight waits for that write to land, so the session never becomes live while a write deleting its record is landing.
+- When no unused record exists, the new identity's write is **refused** with `<label> storage is full.`, and nothing is deleted.
+- Removed: the restore pass, the pre-rename "busy" recheck, and `liveTldrIdentities` (the host's registration scan). There is one mechanism, not a compensation.
 
-Residuals, stated concretely:
-- **A crash (app kill or power loss) between the eviction's rename and the restore write**, a few milliseconds, while a registration for the evictee landed during that rename. The record is then gone from disk. The agent's process dies with the app, but its workspace row survives, so after restart that agent shows "No goal yet" and its `goal_complete` fails until it sets a goal again.
-- **Three consecutive registrations** each naming a fresh evictee during three successive restore renames. The third evictee then stays evicted.
+**What the invariant is.** A record is never deleted while its identity is live or named by the persisted workspace. Consider a session that registers AFTER an eviction chose its identity: at the moment of choosing, the identity was unused, so that eviction was correct. The session starts with "No goal yet", exactly like any identity evicted earlier.
+
+**Residual (stated concretely).** A pane added in the renderer reaches the persisted workspace at its autosave, up to 400 ms later. Its live session is pinned from spawn, so the pane is protected; the window only matters for a pane whose session is not live, which a new pane is not.
+
+**Tests.** Each is red on the q51 head `659adf13` (where `pin` does not exist) and each is mutation-checked:
+- the sole-unused-record case from q52 is refused, the file is byte-identical, and the live goal can still be completed;
+- a pin requested during an eviction's rename resolves only after that write has landed;
+- pins are counted;
+- the spawn path pins before it registers (`sessionManager.wake.test.ts`);
+- the host pins exactly the registration's identity and releases it on revoke.
+
+Mutations: ignoring pins in the choice fails 5 tests; a pin that bypasses the queue fails the race test.

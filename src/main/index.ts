@@ -1224,7 +1224,7 @@ async function startApp(): Promise<void> {
   // the cap. Until the workspace file has opened the answer is unknown, and a
   // store at its cap then refuses new identities for those startup seconds
   // instead of guessing (steering q40).
-  const identitiesInUse = () => tldrIdentitiesInUse(reportingWorkspaceWindows?.() ?? null, builtInMcpHost.liveTldrIdentities())
+  const identitiesInUse = () => tldrIdentitiesInUse(reportingWorkspaceWindows?.() ?? null)
   const { tldrStore, goalStore } = createReportingStores(STATE_DIR, identitiesInUse)
   const tldrEnforcement = new TldrEnforcement(tldrStore, undefined, goalStore)
   // Before any session can register: the sweep removes every entry, and each

@@ -272,17 +272,33 @@ it('a browser client connected while disabled needs no second discovery or reloa
   } finally { await client.close(); await host.stop() }
 })
 
-// #1328 review: the TLDR/Goal stores never evict an identity a running agent
-// reports as. A revoked registration (a killed or replaced session) no longer
-// protects its identity, or closed agents would pin records forever.
-it('lists the TLDR identities of registered, unrevoked sessions only', async () => {
+// #1328 q52: a session's reporting identity is pinned in both stores before
+// it registers, and released when it is revoked. Pins are counted by the
+// store; this pins exactly the identity the registration will report as,
+// including the session-id fallback.
+it('pins the identity a session will report as, and releases it on revoke', async () => {
   const host = new BuiltInMcpHttpHost()
+  const calls: string[] = []
+  const store = (name: string) => ({
+    update: async () => { throw new Error('unused') },
+    complete: async () => { throw new Error('unused') },
+    pin: async (id: string) => { calls.push(`${name}.pin ${id}`) },
+    unpin: async (id: string) => { calls.push(`${name}.unpin ${id}`) },
+  })
+  host.setDependencies({ tldrStore: store('tldr'), goalStore: store('goal') } as never)
   await host.start()
   try {
-    host.registerSession({ sessionId: 'running', tldrIdentity: 'identity-running', cwd: '/tmp/project', providerKind: 'claude', domains: ['tldr'] })
-    host.registerSession({ sessionId: 'closed', tldrIdentity: 'identity-closed', cwd: '/tmp/project', providerKind: 'codex', domains: ['goal'] })
-    expect(host.liveTldrIdentities()).toEqual(new Set(['identity-running', 'identity-closed']))
-    host.revokeSession('closed')
-    expect(host.liveTldrIdentities()).toEqual(new Set(['identity-running']))
+    const explicit = { sessionId: 'running', tldrIdentity: 'identity-running', cwd: '/tmp/project', providerKind: 'claude' as const, domains: ['tldr' as const] }
+    const fallback = { sessionId: 'no-explicit-identity', cwd: '/tmp/project', providerKind: 'codex' as const, domains: ['goal' as const] }
+    const none = { sessionId: 'no-reporting', cwd: '/tmp/project', providerKind: 'codex' as const, domains: ['ping' as const] }
+    for (const scope of [explicit, fallback, none]) {
+      await host.pinReportingIdentity(scope)
+      host.registerSession(scope)
+    }
+    expect(calls).toEqual(['tldr.pin identity-running', 'goal.pin identity-running', 'tldr.pin no-explicit-identity', 'goal.pin no-explicit-identity'])
+    calls.length = 0
+    host.revokeSession('no-explicit-identity')
+    host.revokeSession('no-reporting')
+    expect(calls).toEqual(['tldr.unpin no-explicit-identity', 'goal.unpin no-explicit-identity'])
   } finally { await host.stop() }
 })

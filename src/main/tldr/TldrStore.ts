@@ -50,6 +50,11 @@ export class TldrStore extends EventEmitter {
 
   private readonly inUse: () => ReadonlySet<string> | null
 
+  /** Identities of live sessions, counted: a replacement registers its
+   *  successor before revoking its predecessor under the same identity, so
+   *  the predecessor's unpin must not release the successor. */
+  private readonly pins = new Map<string, number>()
+
   /**
    * The Goal capability (#936) is a second instance rather than a second store
    * class: goals need exactly these guarantees — one serialized atomic writer,
@@ -65,9 +70,9 @@ export class TldrStore extends EventEmitter {
       maxHistoryFiles?: number
       historyDirectoryName?: string
       label?: string
-      /** Identities that may never be evicted at the cap; null = unknown,
-       *  which evicts nothing. Omitted = no identity is known to be in use
-       *  (tests of unrelated behavior). See update(). */
+      /** Identities the persisted workspace names, never evicted at the cap;
+       *  null = unknown, which evicts nothing. Live sessions are protected by
+       *  pin() instead. Omitted = none (tests of unrelated behavior). */
       inUse?: () => ReadonlySet<string> | null
     } = {},
   ) {
@@ -161,6 +166,25 @@ export class TldrStore extends EventEmitter {
     const copy = await preserveBytes(`${this.file}.invalid`, source)
     this.unpreserved = null
     console.warn(`[${this.label.toLowerCase()}] set aside ${setAside} invalid record(s); original preserved at ${copy}`)
+  }
+
+  /** Mark an identity live before its session is registered (#1328 q52).
+   *  Runs in the write queue: an eviction already in flight finishes first,
+   *  and every eviction chosen after this skips the identity. */
+  pin(identity: string): Promise<void> {
+    return this.serialize(async () => {
+      this.pins.set(identity, (this.pins.get(identity) ?? 0) + 1)
+    })
+  }
+
+  /** The session holding a pin was revoked. Queued like pin(), so a revoke
+   *  and a re-registration keep their order. */
+  unpin(identity: string): Promise<void> {
+    return this.serialize(async () => {
+      const count = (this.pins.get(identity) ?? 0) - 1
+      if (count > 0) this.pins.set(identity, count)
+      else this.pins.delete(identity)
+    })
   }
 
   read(identities: string[]): Promise<Record<string, TldrRecord>> {
@@ -329,8 +353,22 @@ export class TldrStore extends EventEmitter {
       // workspace sessions only, so an evicted record is one no view shows.
       // When no candidate exists, or in-use is unknown, the store refuses as
       // before: ambiguity fails closed (steering q40).
+      //
+      // WHY live sessions protect themselves through `pin()` and this queue
+      // (#1328, steering q51/q52): the first design asked main for its live
+      // registrations while choosing, then wrote. A session registering
+      // during the awaited rename was still evicted, and every repair that
+      // tried to give its record back afterwards found a new way to lose it
+      // (no second victim, a crash between two renames). Now the choice and
+      // the write are ONE queued operation, and a session pins its identity
+      // through the same queue before it becomes live: a pin queued first
+      // protects it, a pin queued behind an eviction waits for its outcome.
+      // A record is therefore never deleted while its identity is live, and
+      // nothing is ever deleted and then compensated.
       const needed = records[identity] ? 0 : Object.keys(records).length + 1 - TLDR_MAX_RECORDS
-      const evicted = needed > 0 ? leastRecentlyWritten(records, needed, this.inUse()) : []
+      const workspace = needed > 0 ? this.inUse() : null
+      const protectedIds = workspace === null ? null : new Set([...workspace, ...this.pins.keys()])
+      const evicted = needed > 0 ? leastRecentlyWritten(records, needed, protectedIds) : []
       if (evicted.length < needed) throw new Error(`${this.label} storage is full.`)
       // A fresh record, deliberately WITHOUT any completion carried over: for
       // the Goal store this is how a new goal clears the old one's completion
@@ -343,7 +381,6 @@ export class TldrStore extends EventEmitter {
       await this.commit(identity, records, record, authorized, evicted)
       // Only once the eviction is durable: a refused write evicted nothing.
       for (const [id, evictedRecord] of evictedRecords) this.setAsideRevisions.set(id, evictedRecord.revision)
-      await this.restoreEvicteesNowInUse(identity, evictedRecords)
       // The current record is already durable and acknowledged. History is the
       // secondary view of it, so a history failure (a full disk, a corrupt file)
       // must not turn a successful report into a failed tool call that the
@@ -417,54 +454,6 @@ export class TldrStore extends EventEmitter {
     const next = Object.assign(Object.create(null) as Record<string, TldrRecord>, records, { [identity]: record })
     for (const id of evict) delete next[id]
     await this.write(next, authorized)
-  }
-
-  /**
-   * Give back any evicted record whose identity came into use while its
-   * eviction was being written (#1328 round 2 a/b, steering q51).
-   *
-   * WHY after the write and not a lock around it: the in-use answer comes
-   * from main's live MCP registrations and the persisted workspace, and
-   * `registerSession` is synchronous — it cannot wait on this store's queue.
-   * Any sample taken before the awaited rename can be overtaken by a
-   * registration that lands DURING it (the first fix rechecked just before
-   * the rename and so still missed exactly that). Asking again once the
-   * rename has landed sees every registration that happened before it, and
-   * the restore runs inside the same serialized operation, so no read,
-   * goal_complete or update queued behind this one can ever observe the gap:
-   * for every other store operation the record was never gone.
-   *
-   * The restored record displaces the next record nothing uses, in one write
-   * (the file stays at the cap). That write has its own rename, so it loops;
-   * three passes need three consecutive registrations each naming a fresh
-   * evictee during successive renames. What remains is a CRASH between the
-   * first rename and the restore: the record is then lost from disk, with
-   * the running agent (it dies with the app) — stated in the PR body.
-   */
-  private async restoreEvicteesNowInUse(writer: string, evicted: Map<string, TldrRecord>): Promise<void> {
-    let pending = evicted
-    for (let pass = 0; pass < 3 && pending.size > 0; pass++) {
-      const inUse = this.inUse()
-      // In-use only becomes unknown before the workspace file opens, and an
-      // eviction needed it known, so null here cannot follow a non-null.
-      if (inUse === null) return
-      const revive = [...pending].filter(([id]) => inUse.has(id))
-      if (revive.length === 0) return
-      const current = this.records!
-      const protect = new Set([...inUse, writer, ...revive.map(([id]) => id)])
-      const displaced = leastRecentlyWritten(current, revive.length, protect)
-      // Nothing left to displace: every record is in use. Keep the file at
-      // the cap and the writer's record; the evictee stays evicted (the same
-      // fail-closed "full" answer update() gives when nothing is free).
-      if (displaced.length < revive.length) return
-      const next = Object.assign(Object.create(null) as Record<string, TldrRecord>, current, Object.fromEntries(revive))
-      for (const id of displaced) delete next[id]
-      const displacedRecords = new Map(displaced.map(id => [id, current[id]!] as const))
-      await this.write(next, () => true)
-      for (const [id] of revive) this.setAsideRevisions.delete(id)
-      for (const [id, displacedRecord] of displacedRecords) this.setAsideRevisions.set(id, displacedRecord.revision)
-      pending = displacedRecords
-    }
   }
 
   /** Temp file, revocation re-checked after the I/O, atomic rename, then the

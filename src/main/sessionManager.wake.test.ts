@@ -212,7 +212,7 @@ describe('SessionManager restart wake recovery', () => {
 
   it('launches a TLDR agent without the skill when the TLDR skill cannot deploy, and says so', async () => {
     const { SessionManager } = await import('./sessionManager')
-    const host = { registerSession: vi.fn((_scope: { sessionId: string }) => []), revokeSession: vi.fn() }
+    const host = { pinReportingIdentity: vi.fn(async () => {}), registerSession: vi.fn((_scope: { sessionId: string }) => []), revokeSession: vi.fn() }
     const journal = journalSpy()
     const skillError = new Error('TLDR skill destination is user-owned')
     const reconcile = vi.fn(async () => [{ skill: 'tldr' as const, error: skillError }])
@@ -230,6 +230,10 @@ describe('SessionManager restart wake recovery', () => {
     // the way the old abort path revoked it. Losing the skill costs guidance,
     // and the tool still brings its own server instructions.
     expect(host.revokeSession).not.toHaveBeenCalled()
+    // #1328 q52: the reporting identity is pinned in the stores' write
+    // queues BEFORE the session is registered (becomes live), never after.
+    expect(host.pinReportingIdentity).toHaveBeenCalledWith(expect.objectContaining({ tldrIdentity: 'summary-agent', domains: ['tldr'] }))
+    expect(host.pinReportingIdentity.mock.invocationCallOrder[0]!).toBeLessThan(host.registerSession.mock.invocationCallOrder[0]!)
     expect(warnings).toEqual([{ sessionId: result.sessionId, skills: ['tldr'] }])
     // The raw error stays in main's journal, keyed by which step failed.
     // Keyed by ids.sessionId like the `.degraded` row, so triage filtering on
@@ -249,7 +253,7 @@ describe('SessionManager restart wake recovery', () => {
 
   it('launches a Goal-only agent the same way when the Goal skill cannot deploy', async () => {
     const { SessionManager } = await import('./sessionManager')
-    const host = { registerSession: vi.fn((_scope: { sessionId: string }) => []), revokeSession: vi.fn() }
+    const host = { pinReportingIdentity: vi.fn(async () => {}), registerSession: vi.fn((_scope: { sessionId: string }) => []), revokeSession: vi.fn() }
     const reconcile = vi.fn(async () => [{ skill: 'goal' as const, error: new Error('Goal skill destination is user-owned') }])
     const manager = new SessionManager(null, host as unknown as BuiltInMcpHttpHost, null, reconcile)
     const warnings: unknown[] = []
@@ -268,7 +272,7 @@ describe('SessionManager restart wake recovery', () => {
     // the user informed, where silence would bring back the omission the old
     // strict rule existed to prevent.
     const { SessionManager } = await import('./sessionManager')
-    const host = { registerSession: vi.fn((_scope: { sessionId: string }) => []), revokeSession: vi.fn() }
+    const host = { pinReportingIdentity: vi.fn(async () => {}), registerSession: vi.fn((_scope: { sessionId: string }) => []), revokeSession: vi.fn() }
     const journal = journalSpy()
     const reconcile = vi.fn(async () => { throw new Error('managed skills state unreadable') })
     const manager = new SessionManager(null, host as unknown as BuiltInMcpHttpHost, journal as never, reconcile)
@@ -296,7 +300,7 @@ describe('SessionManager restart wake recovery', () => {
     // reconcile's own `.error` row still lands, because the skill really is
     // broken machine-wide.
     const { SessionManager } = await import('./sessionManager')
-    const host = { registerSession: vi.fn((_scope: { sessionId: string }) => []), revokeSession: vi.fn() }
+    const host = { pinReportingIdentity: vi.fn(async () => {}), registerSession: vi.fn((_scope: { sessionId: string }) => []), revokeSession: vi.fn() }
     const journal = journalSpy()
     let releaseReconcile!: () => void
     const reconcileGate = new Promise<void>(resolve => { releaseReconcile = resolve })

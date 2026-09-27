@@ -659,11 +659,13 @@ describe('a store at its record cap (#1277)', () => {
     ['Goal', 'goal.json', realRecords.goal.records, GOAL],
   ] as const)('never evicts a %s record the recorded workspace still names', async (label, name, source, options) => {
     const recorded = await recordedWorkspace()
-    const inUse = tldrIdentitiesInUse(recorded.windows as never, ['live-unsaved-agent'])!
+    const inUse = tldrIdentitiesInUse(recorded.windows as never)!
     const explicit = Object.values(recorded.windows[0]!.workspace.sessions).map(meta => meta.tldrIdentity as string).filter(Boolean)
     expect(explicit.length).toBeGreaterThan(5)
     const document = fullDocument(source as never, { oldest: [...explicit, 'live-unsaved-agent'] })
     const { file, store } = await storeAtCap(name, document, { ...options, inUse: () => inUse })
+    // A live agent not yet in the saved workspace is protected by its pin.
+    await store.pin('live-unsaved-agent')
     await store.update('new-agent', 'Starting work.', () => true)
     const records = await onDisk(file)
     for (const id of [...explicit, 'live-unsaved-agent']) expect(records).toHaveProperty(id)
@@ -683,33 +685,65 @@ describe('a store at its record cap (#1277)', () => {
     delete meta.tldrIdentity
     meta.builtInMcpDomains = ['goal']
     expect(sessions[sessionId]).toBe(meta)
-    const inUse = tldrIdentitiesInUse(recorded.windows as never, [])!
+    const inUse = tldrIdentitiesInUse(recorded.windows as never)!
     const { file, store } = await storeAtCap('goal.json', fullDocument(realRecords.goal.records as never, { oldest: [sessionId] }), { ...GOAL, inUse: () => inUse })
     await store.update('new-agent', 'Starting work.', () => true)
     expect(await onDisk(file)).toHaveProperty(sessionId)
     expect((await store.complete(sessionId, 'Delivered.', () => true)).completionNote).toBe('Delivered.')
   })
 
-  // #1328 round 2 (a, b) and steering q51: in-use is sampled before the
-  // write, and a registration can land during the awaited rename itself,
-  // after every sample. The rename hook below makes `identity-0` live at
-  // exactly that point; its record must still be there once the store's
-  // operation completes, and a record nothing uses goes instead.
-  it('gives a record back when its identity registers during the eviction’s rename', async () => {
-    const live = new Set<string>()
-    const { file, store } = await storeAtCap('goal.json', fullDocument(realRecords.goal.records as never), { ...GOAL, inUse: () => live })
-    let hooked = 0
-    renameFault.current = to => { if (to === file && ++hooked === 1) live.add('identity-0'); return false }
+  // #1328 steering q52: the sole unused record's identity goes live. Every
+  // other record is named by the workspace; the new agent's write must be
+  // REFUSED and nothing deleted (the compensating design evicted it anyway
+  // and then had no second victim to give it back with).
+  it('refuses a new identity when the only unused record belongs to a live session', async () => {
+    const document = fullDocument(realRecords.goal.records as never)
+    const workspace = new Set(Object.keys(document.records).filter(id => id !== 'identity-0'))
+    const { file, store } = await storeAtCap('goal.json', document, { ...GOAL, inUse: () => workspace })
+    const before = await readFile(file, 'utf8')
+    await store.pin('identity-0')
+    await expect(store.update('new-agent', 'Starting work.', () => true)).rejects.toThrow('Goal storage is full.')
+    expect(await readFile(file, 'utf8')).toBe(before)
+    expect((await store.complete('identity-0', 'Delivered.', () => true)).completionNote).toBe('Delivered.')
+    // Released, it is the one record a new agent may displace.
+    await store.unpin('identity-0')
     await store.update('new-agent', 'Starting work.', () => true)
-    // The same store, and a fresh one reading the file: nobody sees the gap.
-    expect(Object.keys(await store.read(['identity-0', 'new-agent'])).sort()).toEqual(['identity-0', 'new-agent'])
+    expect(await onDisk(file)).not.toHaveProperty('identity-0')
+  })
+
+  // #1328 steering q51/q52: a registration arriving while an eviction is
+  // being written (here, inside its rename) must not become live until that
+  // write's outcome is known. Its pin waits in the store's queue, so by the
+  // time the session is registered the eviction has fully landed, and every
+  // later eviction skips it.
+  it('makes a pin requested during an eviction wait for that write to land', async () => {
+    const { file, store } = await storeAtCap('goal.json', fullDocument(realRecords.goal.records as never), GOAL)
+    const order: string[] = []
+    let pinned!: Promise<void>
+    renameFault.current = to => {
+      if (to === file && !pinned) pinned = store.pin('identity-1').then(() => { order.push('pin resolved') })
+      return false
+    }
+    await store.update('new-agent', 'Starting work.', () => true).then(() => { order.push('eviction landed') })
+    await pinned
+    expect(order).toEqual(['eviction landed', 'pin resolved'])
+    // identity-0 was chosen before the pin was queued; identity-1 is now live.
+    await store.update('newer-agent', 'Starting too.', () => true)
     const records = await onDisk(file)
-    expect(Object.keys(records)).toHaveLength(TLDR_MAX_RECORDS)
-    expect(records).toHaveProperty('identity-0')
-    expect(records).not.toHaveProperty('identity-1')
-    // Its goal can still be completed, and its revision did not restart.
-    const done = await store.complete('identity-0', 'Delivered.', () => true)
-    expect(done.revision).toBe((fullDocument(realRecords.goal.records as never).records['identity-0']!.revision) + 1)
+    expect(records).not.toHaveProperty('identity-0')
+    expect(records).toHaveProperty('identity-1')
+    expect(records).not.toHaveProperty('identity-2')
+  })
+
+  // Replacement registers its successor before revoking its predecessor
+  // under the same identity: the predecessor's unpin must not release it.
+  it('counts pins, so one session’s release does not unprotect another’s', async () => {
+    const { file, store } = await storeAtCap('goal.json', fullDocument(realRecords.goal.records as never), GOAL)
+    await store.pin('identity-0')
+    await store.pin('identity-0')
+    await store.unpin('identity-0')
+    await store.update('new-agent', 'Starting work.', () => true)
+    expect(await onDisk(file)).toHaveProperty('identity-0')
   })
 
   // #1328 round 2 (c): the app's stores are built by createReportingStores;

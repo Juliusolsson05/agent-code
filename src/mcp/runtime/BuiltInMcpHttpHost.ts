@@ -73,8 +73,10 @@ type BuiltInMcpServerFactory = (
 ) => McpServer
 
 export type BuiltInMcpDependencies = UserMcpToolDependencies & SkillsToolDependencies & {
-  tldrStore?: Pick<TldrStore, 'update'>
-  goalStore?: Pick<TldrStore, 'update' | 'complete'>
+  // pin/unpin are optional only so tests of unrelated tools can pass a bare
+  // `update`; the app's stores always have them (see pinReportingIdentity).
+  tldrStore?: Pick<TldrStore, 'update'> & Partial<Pick<TldrStore, 'pin' | 'unpin'>>
+  goalStore?: Pick<TldrStore, 'update' | 'complete'> & Partial<Pick<TldrStore, 'pin' | 'unpin'>>
   tldrEnforcement?: Pick<TldrEnforcement, 'handle' | 'forget'>
   isTldrWriteAuthorized?: () => boolean
   orchestrationBridge?: OrchestrationBridge
@@ -243,6 +245,32 @@ export class BuiltInMcpHttpHost {
     await new Promise<void>(resolve => server.close(() => resolve()))
   }
 
+  /** The TLDR/Goal identity a registration with this scope reports as: the
+   *  same rule registerSession's scope uses. */
+  private reportingIdentity(scope: { tldrIdentity?: string; sessionId: string; providerKind: AgentProviderKind; domains: readonly BuiltInMcpDomain[] | undefined }): string | undefined {
+    return scope.tldrIdentity
+      ?? (hasReportingDomain(filterBuiltInMcpDomainsForProvider(scope.providerKind, scope.domains)) ? scope.sessionId : undefined)
+  }
+
+  /**
+   * Pin the identity a session is about to register as, in both reporting
+   * stores, and wait until the pin is in each store's write queue (#1328 q52).
+   *
+   * WHY the spawn path awaits this BEFORE registerSession, and not the
+   * registration itself: registerSession is synchronous, and the stores'
+   * cap eviction must be ordered against "this identity became live". A pin
+   * queued before an eviction protects the record; one queued behind an
+   * in-flight eviction waits for its outcome, so the session never becomes
+   * live while a write that deletes its record is still landing. revokeSession
+   * releases the pin. A pin whose registration then fails is never released,
+   * which only ever protects a record too much.
+   */
+  async pinReportingIdentity(scope: { tldrIdentity?: string; sessionId: string; providerKind: AgentProviderKind; domains: readonly BuiltInMcpDomain[] | undefined }): Promise<void> {
+    const identity = this.reportingIdentity(scope)
+    if (!identity) return
+    await Promise.all([this.dependencies.tldrStore?.pin?.(identity), this.dependencies.goalStore?.pin?.(identity)])
+  }
+
   registerSession(scope: {
     tldrIdentity?: string
     sessionId: string
@@ -285,7 +313,7 @@ export class BuiltInMcpHttpHost {
     this.revokeSession(scope.sessionId)
     const token = randomBytes(32).toString('base64url')
     const mcpScope = {
-      tldrIdentity: scope.tldrIdentity ?? (hasReportingDomain(domains) ? scope.sessionId : undefined),
+      tldrIdentity: this.reportingIdentity(scope),
       sessionId: scope.sessionId,
       cwd: scope.cwd,
       domains,
@@ -324,17 +352,6 @@ export class BuiltInMcpHttpHost {
     return [{ ...config, headers: { ...config.headers } }]
   }
 
-  /** Every TLDR/Goal identity a registered, unrevoked session reports as.
-   *  The stores must never evict one of these at their cap (#1277 review):
-   *  that agent is running and can still call goal_complete on its record. */
-  liveTldrIdentities(): Set<string> {
-    const live = new Set<string>()
-    for (const registration of this.registrations.values()) {
-      if (!registration.revoked && registration.scope.tldrIdentity) live.add(registration.scope.tldrIdentity)
-    }
-    return live
-  }
-
   sessionTldrIdentity(sessionId: string): string | undefined {
     const token = this.tokensBySession.get(sessionId)
     return token ? this.registrations.get(token)?.scope.tldrIdentity : undefined
@@ -365,6 +382,14 @@ export class BuiltInMcpHttpHost {
     // tear down — each request owns and closes its own scoped server.
     if (registration) registration.revoked = true
     this.dependencies.tldrEnforcement?.forget(token)
+    // Release the pin pinReportingIdentity took for this registration. The
+    // stores count pins, so a replacement's successor (registered before its
+    // predecessor is revoked, same identity) stays protected.
+    const identity = registration?.scope.tldrIdentity
+    if (identity) {
+      void this.dependencies.tldrStore?.unpin?.(identity).catch(() => {})
+      void this.dependencies.goalStore?.unpin?.(identity).catch(() => {})
+    }
   }
 
   private serverConfig(token: string): BuiltInMcpServerConfig {
