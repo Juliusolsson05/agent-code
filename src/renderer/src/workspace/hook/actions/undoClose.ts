@@ -1,3 +1,4 @@
+import { tldrIdentityForSession } from '@renderer/features/tldr/identity'
 import { carryOrchestrationParents, carryWorkflowRuns, handOverGoalLoops, stopGoalLoops } from '@renderer/workspace/hook/actions/successorCarry'
 import { carriedRelationships } from '@renderer/workspace/idRemap'
 import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
@@ -195,7 +196,7 @@ export function useUndoCloseAction(
   // when main refused because the cwd is gone (see RespawnOutcome). `spawned`
   // says whether a backend now exists that a bail-out must kill.
   const respawn = useCallback(
-    async (meta: SessionMeta): Promise<RespawnOutcome> => {
+    async (meta: SessionMeta, closedSessionId: SessionId): Promise<RespawnOutcome> => {
       const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
       if (kind === 'extension-view') {
         return { sessionId: crypto.randomUUID() as SessionId, spawned: false }
@@ -217,7 +218,12 @@ export function useUndoCloseAction(
           // undo-restored transcript silently lose tools. The effective list is
           // deliberately not restored — the restored session is a NEW provider
           // process, so it resolves those choices against current Settings.
-          tldrIdentity: meta.tldrIdentity,
+          // The same rule as Reload Agents (#1347): an identity can be
+          // DERIVED (reporting domains on, no explicit field), and then it
+          // is the closed session id. Passing only the explicit field gave
+          // such an agent a fresh identity: new TLDR/Goal claims, and its
+          // analytics split in two.
+          tldrIdentity: tldrIdentityForSession(closedSessionId, meta),
           builtInMcpOverrides: sessionMcpOverrides(meta),
         })
         return { sessionId, spawned: true }
@@ -260,7 +266,7 @@ export function useUndoCloseAction(
       if (projectId === undefined) return 'stale'
       if (!refs.stateRef.current.tabs.some(tab => tab.id === projectId)) return 'stale'
 
-      const respawned = await respawn(meta)
+      const respawned = await respawn(meta, entry.sessionId)
       if (respawned === 'folder-missing') {
         // WHY 'stale' and not 'retryable-failure' (#1264 R2-1): the entry
         // would be pushed back and re-fail forever — a worktree removed after
@@ -374,7 +380,7 @@ export function useUndoCloseAction(
       // missing session could corrupt, so the gentler rule covers everyone.
       let foldersMissing = 0
       for (const member of entry.sessions) {
-        const respawned = await respawn(member.meta)
+        const respawned = await respawn(member.meta, member.sessionId)
         if (respawned === 'folder-missing') foldersMissing++
         if (typeof respawned === 'string') continue
         idMap.set(member.sessionId, respawned.sessionId)
