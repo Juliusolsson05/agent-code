@@ -1069,6 +1069,44 @@ describe('input values that steer a request are part of the binding (#1420, B6 R
     expect(await blob(id, 'tok')).toEqual(tokBytes)
   })
 
+  // B6 manager check at fb61adfa: on a case-insensitive disk (macOS default,
+  // Windows) `TOK.bin` IS `tok.bin`, and the guard compared ids with case, so
+  // an agent save naming `TOK` overwrote the withheld `tok` secret. Ids are
+  // compared case-insensitively; the refusal holds on any filesystem.
+  const upper = (entryValue: string) => ({ ...endpoint(), entry: { command: 'node', args: ['client.js'], env: { MCP_ENDPOINT: entryValue } }, inputs: [{ id: 'trusted-host', description: 'host' }, { id: 'TOK', description: 'token' }] })
+  it('an agent cannot overwrite a withheld secret through a case-only variant of its id', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    await live.setSecret(id, 'trusted-host', 'evil.example', 'agent')
+    const bytes = await blob(id, 'tok')
+    const result = await service().save({ id, ...upper('https://${input:trusted-host}/mcp?key=${input:TOK}'), secrets: { TOK: 'bpr_live_agent_case_1111' } } as UserMcpSaveInput, 'agent')
+    expect(result.ok).toBe(false)
+    expect(await blob(id, 'tok')).toEqual(bytes)
+  })
+
+  it('an agent cannot replace an orphaned secret through a case-only variant of its id', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    const bytes = await blob(id, 'tok')
+    await service().save({ id, ...endpoint(), entry: { command: 'node', args: ['client.js'], env: {} }, inputs: [] } as UserMcpSaveInput, 'agent')
+    const result = await service().save({ id, ...upper('https://${input:trusted-host}/mcp?key=${input:TOK}'), secrets: { TOK: 'bpr_live_agent_case_2222' } } as UserMcpSaveInput, 'agent')
+    expect(result.ok).toBe(false)
+    expect(await blob(id, 'tok')).toEqual(bytes)
+  })
+
+  it('an agent cannot replace an undecryptable secret through a case-only variant of its id', async () => {
+    const live = service()
+    await live.save({ ...endpoint(), secrets: { 'trusted-host': 'trusted.example', tok: TOKEN } } as UserMcpSaveInput)
+    const id = (await live.snapshot()).servers[0]!.id
+    const unreadable = Buffer.from('sealed by another keychain', 'utf8')
+    await writeFile(join(dir, 'mcp-secrets', id, 'tok.bin'), unreadable, { mode: 0o600 })
+    const result = await service().save({ id, ...upper('https://${input:trusted-host}/mcp?key=${input:TOK}'), secrets: { TOK: 'bpr_live_agent_case_3333' } } as UserMcpSaveInput, 'agent')
+    expect(result.ok).toBe(false)
+    expect(await blob(id, 'tok')).toEqual(unreadable)
+  })
+
   // Gap 2 (B6): both guards had no committed test.
   it('confirm refuses a record bound to ANOTHER destination, and Settings shows it as not set', async () => {
     const live = service()

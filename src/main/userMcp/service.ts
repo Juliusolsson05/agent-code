@@ -78,6 +78,18 @@ export type UserMcpServiceDeps = {
  * deleted or switched off. The renderer contributes only the pane's explicit
  * per-agent choices; everything else is read here at launch.
  */
+/**
+ * Whether `inputId` names one of `ids`, ignoring letter case (B6 check at
+ * fb61adfa). Secrets live in `<inputId>.bin`, and on a case-insensitive disk
+ * (macOS by default, Windows) `TOK.bin` IS `tok.bin`: an agent writing `TOK`
+ * overwrote the withheld `tok`. Case-folding refuses it on every filesystem,
+ * which is the fail-closed side (a user can still rename or re-enter).
+ */
+function sameInputId(ids: readonly string[], inputId: string): boolean {
+  const folded = inputId.toLowerCase()
+  return ids.some(id => id.toLowerCase() === folded)
+}
+
 /** Why an agent's write or removal was refused (see withheldInputIds). */
 const WITHHELD_REFUSAL = (inputId: string): string =>
   `Secret "${inputId}" is withheld until the user confirms or re-enters it in Settings → MCP, so an agent cannot replace or remove it.`
@@ -163,7 +175,7 @@ export class UserMcpService {
       }
       if (actor === 'agent' && existing) {
         const withheld = await this.withheldInputIds(existing)
-        const overwrite = Object.keys(input.secrets ?? {}).find(inputId => withheld.includes(inputId))
+        const overwrite = Object.keys(input.secrets ?? {}).find(inputId => sameInputId(withheld, inputId))
         if (overwrite) return { ok: false, error: WITHHELD_REFUSAL(overwrite) }
       }
       const entry = normalizeEntry(input.entry)
@@ -337,7 +349,7 @@ export class UserMcpService {
       const server = this.document.servers.find(candidate => candidate.id === id)
       if (!server) return { ok: false, error: 'That server no longer exists.' }
       if (!server.inputs.some(input => input.id === inputId)) return { ok: false, error: `No secret named "${inputId}".` }
-      if (actor === 'agent' && (await this.withheldInputIds(server)).includes(inputId)) {
+      if (actor === 'agent' && sameInputId(await this.withheldInputIds(server), inputId)) {
         return { ok: false, error: WITHHELD_REFUSAL(inputId) }
       }
       // q127: ANY input an agent changes, clearing included.
