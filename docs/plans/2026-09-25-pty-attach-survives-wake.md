@@ -10,7 +10,7 @@
 The attach count and restore size describe the renderer's VIEW, not the process. Process cleanup leaves them alone, and the view's own `detachAgentPty` (on unmount, including pane close) remains the only release.
 
 ## Residuals (not in this PR)
-- Plain terminals: `terminalAttached` has no detach call at all and is only cleared by cleanup. Keeping it would leak an id per closed terminal, so the terminal half needs a renderer detach first. Recorded on #1281.
+- Plain terminals: `terminalAttached` has no detach call at all and is only cleared by cleanup. Keeping it would leak an id per closed terminal, so the terminal half needs a renderer detach first. Recorded on #1281. Done in `2026-09-26-terminal-attach-survives-respawn.md`.
 - A renderer reload or crash never runs the leaf cleanup (#1283 item 3). That predates this change, but it now also survives a process exit.
 
 ## Test

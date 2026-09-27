@@ -25,6 +25,7 @@ function installHeadless(
 ): void {
   ;(session as unknown as { headless: unknown }).headless = {
     getScreen: () => screen,
+    getSettledScreen: () => screen,
     getConditionSnapshot: () => ({ provider: 'codex', conditions, ts: Date.now() }),
   }
 }
@@ -226,6 +227,7 @@ describe('CodexSession prompt readiness lifecycle', () => {
     let screen = 'Do you trust the contents of this directory?'
     ;(session as unknown as { headless: unknown }).headless = {
       getScreen: () => screen,
+      getSettledScreen: () => screen,
       getConditionSnapshot: () => ({ provider: 'codex', conditions, ts: Date.now() }),
     }
 
