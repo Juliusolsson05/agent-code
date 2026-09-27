@@ -71,7 +71,33 @@ function previewOf(content: string): string {
 }
 
 export function createClaudeQueueState(): ClaudeQueueState {
-  return { pending: [], decisions: [], debt: null, removeDebt: null, nextSeq: 0 }
+  return { pending: [], decisions: [], droppedDecisions: 0, debt: null, removeDebt: null, nextSeq: 0 }
+}
+
+/**
+ * How many of the most recent decisions a session keeps (#676).
+ *
+ * WHY a window and not the whole session: the log was append-only for a session's lifetime, and
+ * every departure copied the whole array, so a long-lived session paid memory and O(n) per
+ * departure for history nothing reads (no UI, no debug bundle — the state lives in a renderer map).
+ * P4 ("the diagnosis IS this record") is about explaining what the queue is doing NOW; the recent
+ * decisions do that. Evicted ones are counted, so decisions.length + droppedDecisions === nextSeq
+ * stays exact.
+ */
+export const QUEUE_DECISION_WINDOW = 200
+
+/** The one place decisions are appended: append, trim to the window, count what was dropped. */
+function withDecisions(
+  state: ClaudeQueueState,
+  added: readonly QueueDecision[],
+): Pick<ClaudeQueueState, 'decisions' | 'droppedDecisions'> {
+  if (added.length === 0) return { decisions: state.decisions, droppedDecisions: state.droppedDecisions }
+  const combined = state.decisions.length + added.length
+  const drop = Math.max(0, combined - QUEUE_DECISION_WINDOW)
+  const decisions = drop === 0
+    ? [...state.decisions, ...added]
+    : [...state.decisions, ...added].slice(drop)
+  return { decisions, droppedDecisions: state.droppedDecisions + drop }
 }
 
 function decide(
@@ -311,10 +337,9 @@ function settleDebtByCohort(state: ClaudeQueueState): ClaudeQueueState {
   return {
     ...state,
     pending: without(state.pending, removed),
-    decisions: [
-      ...state.decisions,
+    ...withDecisions(state, [
       ...removed.map(i => decide(i, 'delivered-inferred', [], debt.at)),
-    ],
+    ]),
     debt: null,
   }
 }
@@ -356,7 +381,7 @@ function settleRemoveDebtByCohort(state: ClaudeQueueState): ClaudeQueueState {
   return {
     ...state,
     pending,
-    decisions: decisions.length > 0 ? [...state.decisions, ...decisions] : state.decisions,
+    ...withDecisions(state, decisions),
     removeDebt: null,
   }
 }
@@ -439,10 +464,9 @@ function applyRemove(state: ClaudeQueueState, op: QueueOperationRecord): ClaudeQ
     return {
       ...state,
       pending: without(state.pending, [victim]),
-      decisions: [
-        ...state.decisions,
+      ...withDecisions(state, [
         decide(victim, 'consumed-observed', ['queue-operation content'], op.timestamp ?? null),
-      ],
+      ]),
     }
   }
 
@@ -519,10 +543,9 @@ function applyPopAll(state: ClaudeQueueState, op: QueueOperationRecord): ClaudeQ
   return {
     ...state,
     pending: without(state.pending, [target]),
-    decisions: [
-      ...state.decisions,
+    ...withDecisions(state, [
       decide(target, 'popped-to-composer', ['popAll content'], op.timestamp ?? null),
-    ],
+    ]),
   }
 }
 
@@ -578,15 +601,14 @@ export function applyQueuedCommandObservation(
   return {
     ...state,
     pending: without(state.pending, [claimed]),
-    decisions: [
-      ...state.decisions,
+    ...withDecisions(state, [
       decide(
         claimed,
         'consumed-observed',
         [observation.uuid ?? 'queued-command attachment'],
         debt.at,
       ),
-    ],
+    ]),
     removeDebt: remaining > 0 ? { ...debt, count: remaining } : null,
   }
 }
@@ -607,10 +629,9 @@ export function applyCommittedUserEntry(
     return {
       ...state,
       pending: without(state.pending, [claimed]),
-      decisions: [
-        ...state.decisions,
+      ...withDecisions(state, [
         decide(claimed, 'delivered-observed', [entry.uuid ?? 'committed-entry'], state.debt.at),
-      ],
+      ]),
       debt: remaining > 0 ? { ...state.debt, count: remaining, entriesSeen: 0 } : null,
     }
   }
@@ -645,9 +666,8 @@ export function markStaleWhenIdle(state: ClaudeQueueState, idle: boolean): Claud
   return {
     ...settled,
     pending: settled.pending.map(i => (i.stale ? i : { ...i, stale: true })),
-    decisions: [
-      ...settled.decisions,
+    ...withDecisions(settled, [
       ...settled.pending.filter(i => !i.stale).map(i => decide(i, 'stale-unattributed', [], null)),
-    ],
+    ]),
   }
 }

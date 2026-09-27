@@ -8,6 +8,7 @@ import {
   applyQueueOperation,
   createClaudeQueueState,
   markStaleWhenIdle,
+  QUEUE_DECISION_WINDOW,
 } from './reconcile'
 import { derivePriority } from './priority'
 import { PRIORITY_LATER, PRIORITY_NEXT, type ClaudeQueueState } from './types'
@@ -250,7 +251,10 @@ describe('remove: the two upstream callers disagree, and we resolve safely', () 
     expect(settled.pending).toEqual([])
     expect(settled.decisions.filter(d => d.reason === 'consumed-observed')).toHaveLength(13)
     expect(settled.decisions.filter(d => d.reason === 'delivered-inferred')).toHaveLength(3)
-    expect(settled.decisions).toHaveLength(settled.nextSeq)
+    // Conservation (#676): every departure is either in the recent window or counted as evicted.
+    // This corpus is far below the window, so nothing was evicted and every decision is present.
+    expect(settled.droppedDecisions).toBe(0)
+    expect(settled.decisions.length + settled.droppedDecisions).toBe(settled.nextSeq)
   })
 
   it('never deletes a queued prompt when a notification is also removable', () => {
@@ -786,5 +790,26 @@ describe('recorded corpus replay', () => {
     // asserting less than it appears to.
     expect(reasons).toContain('delivered-observed')
     expect(reasons).toContain('consumed-inferred')
+  })
+})
+
+// #676: the decision log was append-only for a session's lifetime (and every departure copied the
+// whole array). A long-lived session that queues and consumes prompts now keeps a bounded window of
+// the most recent decisions and counts the rest, so conservation stays exact.
+describe('decision window', () => {
+  it('keeps the newest QUEUE_DECISION_WINDOW decisions of a long session and counts the rest', () => {
+    let state = createClaudeQueueState()
+    const cycles = 1_000
+    for (let index = 0; index < cycles; index += 1) {
+      state = applyQueueOperation(state, { operation: 'enqueue', content: `prompt ${index}`, timestamp: `2026-09-26T00:00:${String(index % 60).padStart(2, '0')}.000Z` })
+      state = applyQueueOperation(state, { operation: 'remove', content: `prompt ${index}`, timestamp: `2026-09-26T00:00:${String(index % 60).padStart(2, '0')}.500Z` })
+    }
+    expect(state.pending).toEqual([])
+    expect(state.decisions).toHaveLength(QUEUE_DECISION_WINDOW)
+    expect(state.droppedDecisions).toBe(cycles - QUEUE_DECISION_WINDOW)
+    expect(state.decisions.length + state.droppedDecisions).toBe(state.nextSeq)
+    // The window holds the most recent departures, in order.
+    expect(state.decisions.at(-1)?.preview).toBe(`prompt ${cycles - 1}`)
+    expect(state.decisions[0]?.preview).toBe(`prompt ${cycles - QUEUE_DECISION_WINDOW}`)
   })
 })

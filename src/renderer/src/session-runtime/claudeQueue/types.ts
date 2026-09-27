@@ -121,8 +121,13 @@ export type QueueRemoveDebt = {
 
 export type ClaudeQueueState = {
   pending: PendingItem[]
-  /** Append-only within a session. The diagnosis IS this record (principle P4). */
+  /**
+   * The most recent QUEUE_DECISION_WINDOW departures. The diagnosis IS this record (principle P4):
+   * it explains what the queue is doing now. Older decisions are evicted and counted (#676).
+   */
   decisions: QueueDecision[]
+  /** Decisions evicted from the window; decisions.length + droppedDecisions === nextSeq. */
+  droppedDecisions: number
   debt: QueueDebt | null
   removeDebt: QueueRemoveDebt | null
   nextSeq: number
