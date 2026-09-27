@@ -260,7 +260,7 @@ describe('UserMcpService secret redirection (review round 1)', () => {
     expect(moved).toMatchObject({ ok: true, secretsCleared: true })
     // The user's move deletes the old token itself, not only withholds it
     // (r3 round-2 review a: a no-op clearServer survived every test).
-    await expect(readFile(join(dir, 'mcp-secrets', saved.id, 'beeper-authorization.bin'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(dir, 'mcp-secrets', saved.id!, 'beeper-authorization.bin'))).rejects.toMatchObject({ code: 'ENOENT' })
     const launch = await svc.resolveForLaunch({ provider: 'claude', overrides: {}, cwd: dir })
     // The token never reaches the new host: the server is dropped instead.
     expect(launch.servers).toEqual([])
