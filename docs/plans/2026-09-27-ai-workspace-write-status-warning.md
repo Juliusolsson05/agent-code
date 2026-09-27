@@ -20,3 +20,11 @@ The input is the real recorded workspace state. One real entry is pointed at a t
 - `writeFile` puts the new text on disk and returns `ok: true` with a status warning. The state file is unchanged. Red without the fix: `{ ok: false, error: 'is a directory' }`.
 - A following `create` is refused with the actionable message.
 - Mutations: dropping the warning, and misreporting the write as failed, each fail the first test.
+
+## Review a (round 1)
+- **The editor showed no warning.** It now keeps a separate `storageWarning`, set from the write result on both Save and Overwrite and cleared by the next write that has no warning. It is shown through the file list's existing alert (`error ?? storageWarning`). It cannot ride `error`, because `loadWorkspace` clears that after every save.
+- **The warning is fixed text.** `AI_WORKSPACE_STATUS_NOT_SAVED` is main's own sentence; the raw cause goes only to the log.
+- **A throwing `changed` listener no longer fails a landed write.** Each emit is guarded, so every other workspace still hears about the write.
+- **Advice matches the cause.** An occupied copy path (EISDIR/EEXIST/ENOTDIR), a missing folder (ENOENT), a permission or read-only refusal, and a full disk each get their own advice.
+- **Tests added:** the file reads back after the warning; an ordinary write carries no warning; a throwing listener still gives `ok: true`, and the listener is still called; ENOENT advice. The always-warn, unguarded-emit and wrong-advice mutations each fail.
+- **Not tested:** the editor's display of the notice is not covered at the component level (there is no AiWorkspaceEditor renderer harness). The change there is three lines, and it is stated in the body.

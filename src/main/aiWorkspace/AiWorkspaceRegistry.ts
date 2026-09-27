@@ -161,6 +161,12 @@ export interface AiWorkspaceRegistry {
   emit(event: 'changed', payload: AiWorkspaceChangeEvent): boolean
 }
 
+/** The fixed warning a write returns when the file is written but the
+ *  registry could not save its status (#1285). Exported so the editor and
+ *  tests read one sentence. */
+export const AI_WORKSPACE_STATUS_NOT_SAVED =
+  'The file was saved, but AI Workspace could not save its status. Other AI Workspace changes will fail until its storage is fixed.'
+
 export class AiWorkspaceRegistry extends EventEmitter {
   private readonly workspaces = new Map<string, AiWorkspaceRecord>()
   private loadPromise: Promise<void> | null = null
@@ -420,22 +426,35 @@ export class AiWorkspaceRegistry extends EventEmitter {
         // `ok: false` then told an agent its edit had not landed, so it
         // retried or reported a failure that never happened. The write is
         // reported as done, and the stale status is a warning.
+        //
+        // The warning is a FIXED sentence (#1416 review a): the editor shows
+        // it, and a raw filesystem message never belongs on a user-visible
+        // surface. The cause goes to the log.
         let warning: string | undefined
         try {
           await this.refreshEntriesForPath(target)
         } catch (err) {
-          warning = `The file was saved, but its AI Workspace status could not be updated: ${errorMessage(err)}`
+          warning = AI_WORKSPACE_STATUS_NOT_SAVED
           console.warn('[ai-workspace] status refresh after a write failed:', err)
         }
         // One physical file can be curated into several workspaces. Every
         // visible consumer needs the write signal; choosing an arbitrary first
         // workspace would leave the others showing stale buffer metadata.
+        //
+        // Each emit is guarded (#1416 review a): a listener that throws (the
+        // production one broadcasts to every window) must neither turn this
+        // landed write into `ok: false`, the #1285 failure on another step,
+        // nor stop the remaining workspaces from hearing about it.
         for (const workspace of this.workspaces.values()) {
           if (workspace.entries.some(entry => entry.path === target)) {
-            this.emit('changed', {
-              workspaceId: workspace.workspaceId,
-              kind: 'file-written',
-            })
+            try {
+              this.emit('changed', {
+                workspaceId: workspace.workspaceId,
+                kind: 'file-written',
+              })
+            } catch (err) {
+              console.warn('[ai-workspace] a file-written listener failed:', err)
+            }
           }
         }
         return {
@@ -625,10 +644,23 @@ export class AiWorkspaceRegistry extends EventEmitter {
     // the next save drops the unreadable rows.
     const copy = await preserveInvalidBytes(`${this.stateFile}.invalid`, text).catch(err => {
       const code = (err as NodeJS.ErrnoException).code
+      // WHY the advice depends on the code (#1416 review a): "clear what
+      // occupies the path" is only true when something occupies it. A
+      // missing directory, a permission or read-only refusal and a full disk
+      // each need a different fix, and advice for the wrong one sends the
+      // user looking for an occupant that does not exist.
+      const advice = code === 'EISDIR' || code === 'EEXIST' || code === 'ENOTDIR'
+        ? `Something already occupies the copy path next to ${this.stateFile}; move it away to continue.`
+        : code === 'ENOENT'
+          ? `The folder holding ${this.stateFile} is missing; restore it to continue.`
+          : code === 'EACCES' || code === 'EPERM' || code === 'EROFS'
+            ? `The folder holding ${this.stateFile} is not writable; fix its permissions to continue.`
+            : code === 'ENOSPC'
+              ? 'The disk is full; free some space to continue.'
+              : `Check that the folder holding ${this.stateFile} is writable to continue.`
       throw new Error(
         `AI Workspace storage needs attention: ${setAside} unreadable row(s) must be copied aside before saving, ` +
-        `and the copy next to ${this.stateFile} could not be written${code ? ` (${code})` : ''}. ` +
-        'Clear whatever occupies that copy path to continue.',
+        `and the copy could not be written${code ? ` (${code})` : ''}. ${advice}`,
       )
     })
     this.owedCopy = null

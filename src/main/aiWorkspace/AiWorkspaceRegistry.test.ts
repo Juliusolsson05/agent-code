@@ -3,7 +3,7 @@ import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { AiWorkspaceRegistry } from './AiWorkspaceRegistry.js'
+import { AI_WORKSPACE_STATUS_NOT_SAVED, AiWorkspaceRegistry } from './AiWorkspaceRegistry.js'
 
 const tempRoots: string[] = []
 
@@ -328,10 +328,48 @@ describe('a write whose status refresh cannot be saved (#1285)', () => {
     // warning rather than as the outcome.
     expect(await readFile(target, 'utf8')).toBe('v2')
     expect(result).toMatchObject({ ok: true, path: target })
-    expect((result as { warning?: string }).warning).toMatch(/saved.*status/i)
+    expect((result as { warning?: string }).warning).toBe(AI_WORKSPACE_STATUS_NOT_SAVED)
+    // The file stays fully usable: it reads back through the registry.
+    expect(await registry.readFile(target)).toMatchObject({ ok: true, text: 'v2' })
     // The stored state was not rewritten: the owed copy still blocks saves.
     expect(await readFile(statePath, 'utf8')).toBe(source)
     // A refused save says why and how to unblock it, not the raw errno text.
-    await expect(registry.create({ name: 'Blocked' })).rejects.toThrow(/needs attention.*Clear whatever occupies/s)
+    await expect(registry.create({ name: 'Blocked' })).rejects.toThrow(/needs attention.*\(EISDIR\).*already occupies the copy path/s)
+  })
+
+  it('warns on no ordinary write, and tells every workspace even when a listener throws', async () => {
+    // #1416 review a: a throwing `changed` listener (the production one
+    // broadcasts to every window) turned a landed write into `ok: false`,
+    // and stopped the second workspace hearing about it.
+    const { registry, filePath } = await registryWithAttachedFile('v1')
+    await registry.list()
+    const heard: string[] = []
+    registry.on('changed', (event: { workspaceId: string }) => {
+      heard.push(event.workspaceId)
+      throw new Error('event delivery failed')
+    })
+    const result = await registry.writeFile({ path: filePath, text: 'v2' })
+    expect(result).toMatchObject({ ok: true })
+    expect(result).not.toHaveProperty('warning')
+    expect(await readFile(filePath, 'utf8')).toBe('v2')
+    expect(heard).toEqual(['workspace-1'])
+  })
+
+  it('gives advice that matches the cause when the owed copy cannot be written', async () => {
+    // A missing state folder is not "something occupies the path".
+    const root = await mkdtemp(join(tmpdir(), 'agent-code-ai-workspace-enoent-'))
+    tempRoots.push(root)
+    const stateDir = join(root, 'state')
+    const { mkdir } = await import('fs/promises')
+    await mkdir(stateDir)
+    const statePath = join(stateDir, 'ai-workspaces.json')
+    const source = JSON.stringify({ workspaces: [null] })
+    await writeFile(statePath, source)
+    const { createHash } = await import('node:crypto')
+    await mkdir(join(stateDir, `ai-workspaces.json.invalid-${createHash('sha256').update(source).digest('hex').slice(0, 16)}.json`))
+    const registry = new AiWorkspaceRegistry(statePath)
+    await registry.list()
+    await rm(stateDir, { recursive: true })
+    await expect(registry.create({ name: 'Blocked' })).rejects.toThrow(/\(ENOENT\).*folder holding .* is missing/s)
   })
 })

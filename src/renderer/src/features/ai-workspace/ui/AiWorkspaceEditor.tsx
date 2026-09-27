@@ -75,6 +75,15 @@ export function AiWorkspaceEditor({ workspaceId, visible, onClose, toolbarAction
   const [loading, setLoading] = useState(true)
   const [saveAllPending, setSaveAllPending] = useState(false)
   const [error, setError] = useState<string | null>(() => cached?.error ?? null)
+  // WHY a separate, retained notice (#1285, #1416 review a): a write can land
+  // while the registry fails to save its status (a preservation copy it owes
+  // is blocked). The file is saved, so this is not the tab's error, but the
+  // user must learn that AI Workspace storage is blocked, since every later
+  // collection change will be refused. It cannot ride `error`: loadWorkspace,
+  // which runs after every save, clears that. It lasts until a write comes
+  // back without the warning. The text is main's fixed sentence, never a raw
+  // filesystem message.
+  const [storageWarning, setStorageWarning] = useState<string | null>(null)
   const [fileOrder, setFileOrder] = useState<string[]>(() => cached?.fileOrder ?? [])
   const [openFiles, setOpenFiles] = useState<Record<string, EditorFileBuffer>>(
     () => cached?.openFiles ?? {},
@@ -554,6 +563,7 @@ export function AiWorkspaceEditor({ workspaceId, visible, onClose, toolbarAction
           })
           return null
         }
+        if (mountedRef.current) setStorageWarning(result.warning ?? null)
         applyOpenFiles(prev => {
           const current = prev[entryId]
           if (!current || current.generation !== buffer.generation) return prev
@@ -760,6 +770,7 @@ export function AiWorkspaceEditor({ workspaceId, visible, onClose, toolbarAction
           }
         })
         if (result.ok) {
+          if (mountedRef.current) setStorageWarning(result.warning ?? null)
           await revalidateEntryAfterWrite(entryId, entry.path, buffer.generation)
         } else {
           entryReadGenerationRef.current.set(
@@ -794,7 +805,7 @@ export function AiWorkspaceEditor({ workspaceId, visible, onClose, toolbarAction
           title={workspace?.name ?? 'AI Workspace'}
           entries={workspace?.entries ?? []}
           loading={loading}
-          error={error}
+          error={error ?? storageWarning}
           activeEntryId={activeFilePath}
           onOpenEntry={entry => void openEntry(entry)}
           onRefresh={() => void refreshWorkspace()}
