@@ -271,3 +271,18 @@ it('a browser client connected while disabled needs no second discovery or reloa
     expect((await client.callTool({ name: 'browser_network', arguments: {} })).isError).toBe(true)
   } finally { await client.close(); await host.stop() }
 })
+
+// #1328 review: the TLDR/Goal stores never evict an identity a running agent
+// reports as. A revoked registration (a killed or replaced session) no longer
+// protects its identity, or closed agents would pin records forever.
+it('lists the TLDR identities of registered, unrevoked sessions only', async () => {
+  const host = new BuiltInMcpHttpHost()
+  await host.start()
+  try {
+    host.registerSession({ sessionId: 'running', tldrIdentity: 'identity-running', cwd: '/tmp/project', providerKind: 'claude', domains: ['tldr'] })
+    host.registerSession({ sessionId: 'closed', tldrIdentity: 'identity-closed', cwd: '/tmp/project', providerKind: 'codex', domains: ['goal'] })
+    expect(host.liveTldrIdentities()).toEqual(new Set(['identity-running', 'identity-closed']))
+    host.revokeSession('closed')
+    expect(host.liveTldrIdentities()).toEqual(new Set(['identity-running']))
+  } finally { await host.stop() }
+})

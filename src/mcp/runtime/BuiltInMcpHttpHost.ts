@@ -324,6 +324,17 @@ export class BuiltInMcpHttpHost {
     return [{ ...config, headers: { ...config.headers } }]
   }
 
+  /** Every TLDR/Goal identity a registered, unrevoked session reports as.
+   *  The stores must never evict one of these at their cap (#1277 review):
+   *  that agent is running and can still call goal_complete on its record. */
+  liveTldrIdentities(): Set<string> {
+    const live = new Set<string>()
+    for (const registration of this.registrations.values()) {
+      if (!registration.revoked && registration.scope.tldrIdentity) live.add(registration.scope.tldrIdentity)
+    }
+    return live
+  }
+
   sessionTldrIdentity(sessionId: string): string | undefined {
     const token = this.tokensBySession.get(sessionId)
     return token ? this.registrations.get(token)?.scope.tldrIdentity : undefined

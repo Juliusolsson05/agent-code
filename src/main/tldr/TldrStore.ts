@@ -48,6 +48,8 @@ export class TldrStore extends EventEmitter {
 
   private readonly label: string
 
+  private readonly inUse: () => ReadonlySet<string> | null
+
   /**
    * The Goal capability (#936) is a second instance rather than a second store
    * class: goals need exactly these guarantees — one serialized atomic writer,
@@ -59,12 +61,21 @@ export class TldrStore extends EventEmitter {
   constructor(
     private readonly file: string,
     private readonly now = () => new Date(),
-    options: { maxHistoryFiles?: number; historyDirectoryName?: string; label?: string } = {},
+    options: {
+      maxHistoryFiles?: number
+      historyDirectoryName?: string
+      label?: string
+      /** Identities that may never be evicted at the cap; null = unknown,
+       *  which evicts nothing. Omitted = no identity is known to be in use
+       *  (tests of unrelated behavior). See update(). */
+      inUse?: () => ReadonlySet<string> | null
+    } = {},
   ) {
     super()
     this.historyDirectory = join(dirname(file), options.historyDirectoryName ?? 'tldr-history')
     this.maxHistoryFiles = options.maxHistoryFiles ?? MAX_HISTORY_FILES
     this.label = options.label ?? 'TLDR'
+    this.inUse = options.inUse ?? (() => new Set())
   }
 
   private serialize<T>(operation: () => Promise<T>): Promise<T> {
@@ -306,9 +317,21 @@ export class TldrStore extends EventEmitter {
       // permanent. Once the file held TLDR_MAX_RECORDS identities every NEW
       // agent's tldr_update and goal_set failed forever, while old agents
       // kept working. At the owner's ~27 new identities a day that is about
-      // a year out, and it is certain. The least recently written record is
-      // the one nobody is looking at.
-      const evicted = records[identity] ? [] : leastRecentlyWritten(records, Object.keys(records).length + 1 - TLDR_MAX_RECORDS)
+      // a year out, and it is certain.
+      //
+      // WHY age alone does not choose (#1328 review, all three reviewers):
+      // a goal is set once per task, so the OLDEST goal can belong to an
+      // agent that is still running. Evicting it made that agent's
+      // goal_complete fail, and a view that had already read it kept showing
+      // it (no removal event exists), including as a tickable row in Close
+      // Completed Agents. So an identity still named by any workspace or a
+      // live session is never a candidate. Every view reads identities of
+      // workspace sessions only, so an evicted record is one no view shows.
+      // When no candidate exists, or in-use is unknown, the store refuses as
+      // before: ambiguity fails closed (steering q40).
+      const needed = records[identity] ? 0 : Object.keys(records).length + 1 - TLDR_MAX_RECORDS
+      const evicted = needed > 0 ? leastRecentlyWritten(records, needed, this.inUse()) : []
+      if (evicted.length < needed) throw new Error(`${this.label} storage is full.`)
       // A fresh record, deliberately WITHOUT any completion carried over: for
       // the Goal store this is how a new goal clears the old one's completion
       // (#1182). The agent sets a new goal exactly when it is given new work.
@@ -379,8 +402,8 @@ export class TldrStore extends EventEmitter {
     authorized: () => boolean,
     // Identities dropped in this same write (#1277). History files are left:
     // they have their own cap, and an old agent's timeline stays readable.
-    // No change event either: TldrUpdate has no removal shape, and the
-    // least recently written of TLDR_MAX_RECORDS is on nobody's screen.
+    // No change event either: TldrUpdate has no removal shape, and only
+    // identities no workspace names are evicted, so no view holds one.
     evict: readonly string[] = [],
   ): Promise<void> {
     // Writing now would drop set-aside records whose bytes are not yet
@@ -407,16 +430,19 @@ export class TldrStore extends EventEmitter {
   }
 }
 
-/** The `count` identities written longest ago. "Written" is the later of the
- *  set time and the completion time (#1277): completing a goal is a write, and
+/** Up to `count` identities, written longest ago, that nothing is using.
+ *  `inUse === null` (unknown) yields none, so the caller refuses. The
+ *  "written" time is the later of the set time and the completion time
+ *  (#1277): completing a goal is a write, and
  *  a just-completed goal is exactly what the close menu lists, so a goal set
  *  long ago but completed a minute ago must not be the first to go. Both times
  *  are validated ISO strings by the time a record is in memory. */
-function leastRecentlyWritten(records: Record<string, TldrRecord>, count: number): string[] {
-  if (count <= 0) return []
+function leastRecentlyWritten(records: Record<string, TldrRecord>, count: number, inUse: ReadonlySet<string> | null): string[] {
+  if (count <= 0 || inUse === null) return []
   const writtenAt = (record: TldrRecord) =>
     Math.max(Date.parse(record.updatedAt), record.completedAt ? Date.parse(record.completedAt) : 0)
   return Object.keys(records)
+    .filter(id => !inUse.has(id))
     .sort((a, b) => writtenAt(records[a]!) - writtenAt(records[b]!))
     .slice(0, count)
 }
