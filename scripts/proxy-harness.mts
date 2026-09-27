@@ -56,10 +56,12 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
   // port watcher's settle window. When an agent runs it inside an Agent Code
   // lane, this proxy is in the lane's process tree and receives the watcher's
   // one `GET /` (#1409). Counting it made `runCodex()` report that Codex
-  // reached the proxy when only the watcher had. Only the exact probe
-  // User-Agent is excused; any other request, including a bare `GET /`,
-  // still counts.
-  if (req.headers['user-agent'] === LANE_PORT_PROBE_USER_AGENT) {
+  // reached the proxy when only the watcher had. Only the probe's exact shape
+  // is excused: `GET /` AND its User-Agent. Anything else still counts,
+  // including a bare `GET /` and, above all, a `POST /responses` that somehow
+  // carried that User-Agent (#1452 review b), which must be counted and
+  // forwarded.
+  if (req.method === 'GET' && req.url === '/' && req.headers['user-agent'] === LANE_PORT_PROBE_USER_AGENT) {
     res.statusCode = 404
     res.end()
     console.error(`[harness] ignored the Agent Code lane port probe: ${req.method} ${req.url}`)
