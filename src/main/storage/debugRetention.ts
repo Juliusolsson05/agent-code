@@ -1,5 +1,5 @@
-import { mkdir, readFile, readdir, rm, stat, statfs } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { mkdir, readFile, readdir, rm, rmdir, stat, statfs } from 'node:fs/promises'
+import { dirname, join, resolve, sep } from 'node:path'
 
 import {
   AUTOSAVE_DEBUG_BUNDLE_DIR,
@@ -454,8 +454,30 @@ function bucketCaps(totalBudget: number): Record<DebugStorageBucket, number> {
   }
 }
 
+// WHY the legacy ledger parse is cached by file identity (#1278): nothing has
+// appended to the pre-split mixed ledger since manual and autosave bundles got
+// their own folders (debugBundleLog.ts), yet it was re-read and re-parsed on
+// every prune, every five minutes for the life of the process (18.4 MB on the
+// author's machine). Keying on mtime + size rather than caching forever keeps
+// it correct if an operator hand-edits or deletes the file: any change re-parses.
+// A missing file caches too (as an empty set), because readFile failing is
+// what loadManualLegacyBundlePaths already treats as "no manual bundles".
+let legacyLedgerCache: { key: string; paths: Set<string> } | null = null
+
+export async function cachedManualLegacyBundlePaths(
+  file: string = DEBUG_BUNDLE_LOG_FILE,
+  load: () => Promise<Set<string>> = loadManualLegacyBundlePaths,
+): Promise<Set<string>> {
+  const identity = await stat(file).then(info => `${info.mtimeMs}:${info.size}`, () => 'missing')
+  const key = `${file}\0${identity}`
+  if (legacyLedgerCache?.key === key) return legacyLedgerCache.paths
+  const paths = await load()
+  legacyLedgerCache = { key, paths }
+  return paths
+}
+
 async function collectArtifacts(): Promise<Artifact[]> {
-  const manualLegacyBundlePaths = await loadManualLegacyBundlePaths()
+  const manualLegacyBundlePaths = await cachedManualLegacyBundlePaths()
   const [feed, manualBundles, autosaveBundles, legacyBundles, proxy, performance, incidents, heapSnapshots, sessionRecordings] = await Promise.all([
     collectFiles(FEED_DEBUG_DIR, 'feed-debug', name => name.endsWith('.jsonl')),
     collectImmediateDirs(MANUAL_DEBUG_BUNDLE_DIR, 'debug-bundles-manual'),
@@ -732,16 +754,27 @@ async function removeArtifact(artifact: Artifact): Promise<number> {
 
 async function removeEmptyParents(path: string, bucket: DebugStorageBucket): Promise<void> {
   if (bucket !== 'proxy') return
+  await removeEmptyProxyParents(path, PROXY_EVENTS_DIR)
+}
+
+// WHY rmdir and not rm (#1278): this used to readdir() and then call
+// rm(dir, { recursive: false }), which ALWAYS throws EISDIR on a directory, so
+// the catch returned on the first parent and no emptied session or project
+// dir was ever removed (2,978 of them on the author's machine, each walked by
+// collectProxyRunDirs on every prune). rmdir removes a directory only while it
+// is empty, and it does so atomically: a session that creates a new run dir
+// between our check and the removal makes rmdir fail with ENOTEMPTY instead of
+// deleting its fresh run, which the old readdir-then-remove shape could not
+// promise. `root + sep` keeps a sibling like `proxy-old/` out of scope.
+export async function removeEmptyProxyParents(path: string, root: string): Promise<void> {
   let current = dirname(path)
-  while (current.startsWith(PROXY_EVENTS_DIR) && current !== PROXY_EVENTS_DIR) {
+  while (current.startsWith(root + sep)) {
     try {
-      const entries = await readdir(current)
-      if (entries.length > 0) return
-      await rm(current, { recursive: false, force: true })
-      current = dirname(current)
+      await rmdir(current)
     } catch {
       return
     }
+    current = dirname(current)
   }
 }
 

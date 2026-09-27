@@ -1,10 +1,10 @@
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { collectSessionRecordingDirs, runPrunePasses } from './debugRetention.js'
+import { cachedManualLegacyBundlePaths, collectSessionRecordingDirs, removeEmptyProxyParents, runPrunePasses } from './debugRetention.js'
 import type {
   DebugStorageArtifact,
   DebugStorageBucket,
@@ -224,5 +224,49 @@ describe('runPrunePasses', () => {
     // found it still there); never counted as freed.
     expect(calls).toEqual(['stuck', 'stuck', 'stuck'])
     expect(result).toEqual({ removed: 0, bytesFreed: 0, remainingBytes: 500 })
+  })
+})
+
+describe('removeEmptyProxyParents (#1278)', () => {
+  // Proxy runs live at proxy/<project>/<session>/<timestamp>/. Pruning removed
+  // only the leaf, and the parent sweep called rm() without `recursive` on a
+  // directory, which always throws EISDIR, so no parent was ever removed:
+  // the author's machine held 2,978 empty session/project dirs, walked on
+  // every prune. This drives the real filesystem because the in-memory prune
+  // tests never reached the sweep.
+  it('removes the emptied session and project dirs, stops at a non-empty one, and never removes the root', async () => {
+    const proxyRoot = join(root, 'proxy')
+    const lonelyRun = join(proxyRoot, 'project-a', 'session-1', '2026-09-01T00-00-00')
+    const keptRun = join(proxyRoot, 'project-b', 'session-2', '2026-09-01T00-00-00')
+    const prunedSibling = join(proxyRoot, 'project-b', 'session-3', '2026-09-01T00-00-00')
+    for (const dir of [lonelyRun, keptRun, prunedSibling]) mkdirSync(dir, { recursive: true })
+    rmSync(lonelyRun, { recursive: true })
+    rmSync(prunedSibling, { recursive: true })
+
+    await removeEmptyProxyParents(lonelyRun, proxyRoot)
+    await removeEmptyProxyParents(prunedSibling, proxyRoot)
+
+    expect(existsSync(join(proxyRoot, 'project-a'))).toBe(false)
+    expect(existsSync(join(proxyRoot, 'project-b', 'session-3'))).toBe(false)
+    expect(existsSync(keptRun)).toBe(true)
+    expect(existsSync(proxyRoot)).toBe(true)
+  })
+})
+
+describe('cachedManualLegacyBundlePaths (#1278)', () => {
+  // The legacy mixed ledger no longer grows, but it was re-parsed on every
+  // five-minute prune. It is now parsed again only when the file changes.
+  it('parses once while the ledger is unchanged and again after it changes', async () => {
+    const ledger = join(root, 'saved-debug-bundles.jsonl')
+    writeFileSync(ledger, '{"event":"saved","reason":"manual","bundlePath":"/b/1"}\n')
+    const load = vi.fn(async () => new Set(['/b/1']))
+
+    await cachedManualLegacyBundlePaths(ledger, load)
+    await cachedManualLegacyBundlePaths(ledger, load)
+    expect(load).toHaveBeenCalledTimes(1)
+
+    writeFileSync(ledger, '{"event":"saved","reason":"manual","bundlePath":"/b/1"}\n{"event":"saved","reason":"manual","bundlePath":"/b/2"}\n')
+    await cachedManualLegacyBundlePaths(ledger, load)
+    expect(load).toHaveBeenCalledTimes(2)
   })
 })
