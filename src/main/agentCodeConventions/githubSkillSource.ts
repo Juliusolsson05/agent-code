@@ -20,6 +20,7 @@ import {
   type AgentCodeInstalledSkillCandidate,
 } from '@shared/types/agentCodeInstalledSkills.js'
 import type { SkillInstallGitHubSource } from '@shared/skills/installSource.js'
+import { userFacingSkillError } from './userFacingError.js'
 
 const MAX_GIT_TEXT_BYTES = 4 * 1024 * 1024
 const PORTABLE_FRONTMATTER_FIELDS = new Set([
@@ -879,7 +880,7 @@ export function parseSkillFrontmatter(text: string): {
   } catch (error) {
     throw new GitHubSkillSourceError(
       'validation',
-      `SKILL.md contains unsafe YAML frontmatter: ${safeErrorMessage(error)}`,
+      `SKILL.md contains unsafe YAML frontmatter: ${userFacingSkillError(error)}`,
     )
   }
   if (!(frontmatter instanceof Map)) {
@@ -1144,12 +1145,9 @@ function classifyGitHubSkillSourceError(error: unknown): GitHubSkillSourceError 
   }
   return new GitHubSkillSourceError(
     'io-error',
-    error instanceof Error && error.message ? error.message : 'Could not inspect the GitHub skill source.',
+    // git's own message can carry the clone's temporary path (#1427).
+    error instanceof Error && error.message ? userFacingSkillError(error, 'github-skill-source') : 'Could not inspect the GitHub skill source.',
   )
-}
-
-function safeErrorMessage(error: unknown): string {
-  return error instanceof Error && error.message ? error.message : String(error)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1213,7 +1211,7 @@ export async function fetchBoundedGitHubBytes(url: string, maxBytes: number): Pr
     if (controller.signal.aborted) {
       throw new GitHubSkillSourceError('network', 'GitHub content acquisition timed out.')
     }
-    throw new GitHubSkillSourceError('network', safeErrorMessage(error))
+    throw new GitHubSkillSourceError('network', userFacingSkillError(error))
   } finally {
     clearTimeout(timeout)
   }

@@ -12,6 +12,7 @@ import {
 } from '@shared/types/agentCodeConventions.js'
 import { sha256Text } from './renderSkill.js'
 import type { AgentCodeConventionsTarget } from './targets.js'
+import { userFacingSkillError } from './userFacingError.js'
 
 export type FileInspection =
   | {
@@ -86,7 +87,7 @@ export class SkillPathSafety {
       }
       return this.inspectRegularFile(target.skillFile, file)
     } catch (error) {
-      return this.pathConflict(target.skillFile, safeErrorMessage(error))
+      return this.pathConflict(target.skillFile, userFacingSkillError(error))
     }
   }
 
@@ -98,7 +99,7 @@ export class SkillPathSafety {
     try {
       await this.assertNoSymlinkComponents(dirname(path))
     } catch (error) {
-      return this.pathConflict(path, safeErrorMessage(error))
+      return this.pathConflict(path, userFacingSkillError(error))
     }
     const file = await lstat(path).catch(error => {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
@@ -255,7 +256,7 @@ export class SkillPathSafety {
         fingerprint,
         bytes: stat.size,
         executable: (stat.mode & 0o111) !== 0,
-        readError: safeErrorMessage(error),
+        readError: userFacingSkillError(error),
       }
     }
   }
@@ -339,7 +340,3 @@ function sha256Bytes(value: Buffer): string {
   return createHash('sha256').update(value).digest('hex')
 }
 
-function safeErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message
-  return 'Unknown filesystem error'
-}
