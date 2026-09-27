@@ -1,5 +1,5 @@
-import { mkdir, readFile, readdir, rm, stat, statfs } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { mkdir, readFile, readdir, rm, stat, statfs, writeFile } from 'node:fs/promises'
+import { dirname, join, relative, resolve } from 'node:path'
 
 import {
   AUTOSAVE_DEBUG_BUNDLE_DIR,
@@ -200,6 +200,10 @@ function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
 export function holdDebugStoragePruneUntilRecovered(): void {
   if (bootGateUsed) return
   bootGateUsed = true
+  // The key-log baseline is captured NOW, at the start of the run, before any
+  // session of this build can write a run dir; the first prune (minutes later,
+  // behind this gate) awaits it. See keyLogBaseline (#1388 review a).
+  keyLogBaselineTask ??= keyLogBaseline()
   const fallback = setTimeout(openDebugStoragePruneGate, DEBUG_PRUNE_BOOT_FALLBACK_MS)
   unrefTimer(fallback)
   bootGate = { pendingReason: null, fallback, opening: null }
@@ -456,12 +460,15 @@ function bucketCaps(totalBudget: number): Record<DebugStorageBucket, number> {
 
 async function collectArtifacts(): Promise<Artifact[]> {
   const manualLegacyBundlePaths = await loadManualLegacyBundlePaths()
+  // Captured at run start (holdDebugStoragePruneUntilRecovered); a run that
+  // never held the gate (tests, odd call orders) captures here instead.
+  const keyLogOnlyBaseline = await (keyLogBaselineTask ??= keyLogBaseline())
   const [feed, manualBundles, autosaveBundles, legacyBundles, proxy, performance, incidents, heapSnapshots, sessionRecordings] = await Promise.all([
     collectFiles(FEED_DEBUG_DIR, 'feed-debug', name => name.endsWith('.jsonl')),
     collectImmediateDirs(MANUAL_DEBUG_BUNDLE_DIR, 'debug-bundles-manual'),
     collectImmediateDirs(AUTOSAVE_DEBUG_BUNDLE_DIR, 'debug-bundles-autosave'),
     collectLegacyDebugBundleDirs(DEBUG_BUNDLE_DIR, manualLegacyBundlePaths),
-    collectProxyRunDirs(PROXY_EVENTS_DIR),
+    collectProxyRunDirs(PROXY_EVENTS_DIR, keyLogOnlyBaseline),
     collectImmediateDirs(PERFORMANCE_RUNS_DIR, 'performance'),
     collectIncidentRunDirs(),
     collectFiles(HEAP_SNAPSHOT_DIR, 'heap-snapshots', name => name.endsWith('.heapsnapshot')),
@@ -666,7 +673,95 @@ async function loadManualLegacyBundlePaths(): Promise<Set<string>> {
  */
 const PROXY_RUN_MARKERS = new Set(['proxy-events.jsonl', 'proxy-events.1.jsonl'])
 
-export async function collectProxyRunDirs(root: string): Promise<Artifact[]> {
+/**
+ * Key-log-only run dirs are collected FORWARD ONLY (#1385, owner-approved
+ * narrowing in B6's oldest-first list): every key-log-only dir that existed
+ * when a build containing this code first started is in the BASELINE and is
+ * left exactly as it is (the 23 on the owner's machine among them): deleting
+ * existing TLS key logs is an owner decision (q91) this PR does not make.
+ * Any key-log-only dir not in the baseline was made afterwards, and is
+ * collected like any other run.
+ *
+ * WHY a captured set and not a timestamp (#1388 review a, two rounds): a date
+ * constant excluded runs made on the merge day forever; a first-prune marker
+ * was written minutes after start (the boot gate delays the first prune), so
+ * runs made in between were excluded forever; and any timestamp comparison
+ * admits a pre-upgrade run whose name sorts later after a clock step back.
+ * Membership in the set of what already existed is the exact definition and
+ * needs no clock.
+ */
+const KEY_LOG_BASELINE_FILE = join(STATE_DIR, 'debug-retention-keylog-baseline.json')
+let keyLogBaselineTask: Promise<ReadonlySet<string> | null> | null = null
+
+/**
+ * The key-log-only run dirs (paths relative to `root`) that existed when
+ * this build first started, or null when that cannot be established. Null
+ * collects NO key-log-only run: an unknown baseline must never widen
+ * collection to old key logs.
+ *
+ * Captured once and written with an exclusive create; later calls read it.
+ * Capture is STRICT: a directory it cannot list (anything but ENOENT) could
+ * hide old key logs from the set, so capture fails, nothing is written, and a
+ * later start retries.
+ */
+export async function keyLogBaseline(file = KEY_LOG_BASELINE_FILE, root = PROXY_EVENTS_DIR): Promise<ReadonlySet<string> | null> {
+  // NO birthtime filter (#1388 review b round 3): excluding dirs "born after
+  // capture started" re-introduced a clock comparison in the UNSAFE direction.
+  // After a clock step back, a pre-existing dir's birthtime can look later than
+  // the capture start, so it would be left out of the baseline and collected.
+  // The price is conservative: a run a session creates during the few
+  // milliseconds of the startup scan is baselined and kept forever (never
+  // deleted). Capture starts at run start, before any session exists.
+  const read = async (): Promise<ReadonlySet<string> | null> => {
+    try {
+      const parsed = JSON.parse(await readFile(file, 'utf8')) as unknown
+      return Array.isArray(parsed) && parsed.every(entry => typeof entry === 'string') ? new Set(parsed as string[]) : null
+    } catch {
+      return null
+    }
+  }
+  try {
+    await stat(file)
+    return await read()
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null
+  }
+  const existing: string[] = []
+  async function walk(dir: string, depth: number): Promise<void> {
+    let entries
+    try {
+      entries = await readdir(dir, { withFileTypes: true })
+    } catch (error) {
+      // No exception for a missing ROOT either (#1388 review a round 3): a
+      // proxy folder renamed away or not mounted at capture would save an
+      // empty baseline, and every old key log that reappeared would then be
+      // collected. Unknown, so no baseline; a later start retries.
+      throw error
+    }
+    const files = new Set(entries.filter(entry => entry.isFile()).map(entry => entry.name))
+    const hasEvents = [...PROXY_RUN_MARKERS].some(marker => files.has(marker))
+    if (hasEvents || files.has('sslkeylog.log')) {
+      if (!hasEvents) existing.push(relative(root, dir))
+      return
+    }
+    if (depth >= 4) return
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name === '_shared-conf') continue
+      await walk(join(dir, entry.name), depth + 1)
+    }
+  }
+  try {
+    await walk(root, 0)
+    await mkdir(dirname(file), { recursive: true })
+    await writeFile(file, JSON.stringify(existing.sort()), { flag: 'wx', mode: 0o600 })
+    return new Set(existing)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return read()
+    return null
+  }
+}
+
+export async function collectProxyRunDirs(root: string, keyLogOnlyBaseline: ReadonlySet<string> | null = null): Promise<Artifact[]> {
   const out: Artifact[] = []
   async function walk(dir: string, depth: number): Promise<void> {
     let entries
@@ -675,9 +770,24 @@ export async function collectProxyRunDirs(root: string): Promise<Artifact[]> {
     } catch {
       return
     }
-    if (entries.some(entry => entry.isFile() && PROXY_RUN_MARKERS.has(entry.name))) {
-      const artifact = await collectDirArtifact(dir, 'proxy')
-      if (artifact) out.push(artifact)
+    // A run dir is recognised by its EVIDENCE files (#1385). Keying on
+    // proxy-events.jsonl alone missed run dirs that held only
+    // session-meta.json + sslkeylog.log: walked into, never collected, never
+    // budgeted, never removed. Those are plaintext TLS session secrets; the
+    // owner's machine had 23 such dirs (5.18 MB, May-September 2026, #1380
+    // review c). A key-log-only dir is a run dir either way (never walked
+    // into), but it is COLLECTED only when it is not in the baseline.
+    // session-meta.json alone is NOT evidence of a run.
+    const files = new Set(entries.filter(entry => entry.isFile()).map(entry => entry.name))
+    // Events markers (the live file or its rotated `.1` generation, #1376)
+    // are collected as before; a key-log-only dir only when it is new.
+    const hasEvents = [...PROXY_RUN_MARKERS].some(marker => files.has(marker))
+    if (hasEvents || files.has('sslkeylog.log')) {
+      const collectable = hasEvents || (keyLogOnlyBaseline !== null && !keyLogOnlyBaseline.has(relative(root, dir)))
+      if (collectable) {
+        const artifact = await collectDirArtifact(dir, 'proxy')
+        if (artifact) out.push(artifact)
+      }
       return
     }
     if (depth >= 4) return
@@ -720,8 +830,15 @@ async function dirStats(path: string): Promise<{ bytes: number; mtimeMs: number 
         bytes += childStats.size
         mtimeMs = Math.max(mtimeMs, childStats.mtimeMs)
       }
-    } catch {
-      // Best-effort accounting; a concurrent writer/remover can race us.
+    } catch (error) {
+      // Only ENOENT is "not there": a concurrent remover won the race, and the
+      // child's bytes are gone either way. Anything else (EACCES, EIO,
+      // EMFILE) is UNKNOWN, and unknown is never empty (q109, q115): skipping
+      // the child dated the dir by what WAS readable, so a run whose newest
+      // data sat in an unreadable child looked old and the TTL pass removed
+      // it. Rethrowing makes collectDirArtifact return null, which leaves the
+      // whole dir uncollected (protected) until a later pass can read it.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
   }
   return { bytes, mtimeMs }
