@@ -135,6 +135,11 @@ type GoalLoopManagerPort = {
    *  continuation (#1033) — the same source getProcessStateSnapshot reads, so
    *  a held loop can never disagree with the level it is waiting on. */
   on(event: 'process-state', listener: (payload: { sessionId: string; active: boolean }) => void): unknown
+  /** Detach what `start` attached; `dispose` uses these (#1371 review). */
+  off(event: 'semantic-event', listener: (payload: { sessionId: string; event: unknown }) => void): unknown
+  off(event: 'removed', listener: (payload: { sessionId: string }) => void): unknown
+  off(event: 'exit', listener: (payload: { sessionId: string }) => void): unknown
+  off(event: 'process-state', listener: (payload: { sessionId: string; active: boolean }) => void): unknown
   deliverPromptToAgent: SessionManager['deliverPromptToAgent']
   /** Is the provider visibly working right now? Read at delivery time. */
   getProcessStateSnapshot: SessionManager['getProcessStateSnapshot']
@@ -258,6 +263,16 @@ export class GoalLoopService extends EventEmitter {
   private readonly progressSince = new Map<string, number>()
   /** The re-evaluation timer for each held session; see holdUntilQuiet. */
   private readonly holdPolls = new Map<string, ReturnType<typeof setTimeout>>()
+  /**
+   * Work this service started without awaiting it: persists, continuations, and zero-delay
+   * deferrals until they have run. `whenSettled` waits for this to empty (#1341).
+   */
+  private readonly inflight = new Set<Promise<unknown>>()
+  /** Every timer this service owns, with the settle hook of a zero-delay one; `dispose` clears them. */
+  private readonly timers = new Map<ReturnType<typeof setTimeout>, (() => void) | undefined>()
+  private disposed = false
+  /** Detaches the manager listeners `start` attached; see dispose. */
+  private detachManager: (() => void) | undefined
   /** Sessions whose last continuation was QUEUED by the provider rather than
    * started as a turn, and has not been seen to start yet.
    *
@@ -311,6 +326,9 @@ export class GoalLoopService extends EventEmitter {
       console.warn('[goal-loop] persisted state unreadable; starting empty:', error)
       return {}
     })
+    // Disposed while the read was in flight (#1371 review round 2, b): attaching listeners and
+    // persisting now would outlive a dispose() that has already finished.
+    if (this.disposed) return
     const now = this.now().toISOString()
     for (const [sessionId, loop] of Object.entries(persisted)) {
       // An app restart severed the observation the loop depends on; never
@@ -320,20 +338,32 @@ export class GoalLoopService extends EventEmitter {
         : loop)
     }
     const { manager } = this.deps
-    manager.on('semantic-event', ({ sessionId, event }: { sessionId: string; event: unknown }) => {
+    const onSemantic = ({ sessionId, event }: { sessionId: string; event: unknown }) => {
       this.signal(sessionId, event)
-    })
+    }
     // A quiet edge makes a held continuation land promptly instead of waiting
     // out the poll. It is an OPTIMISATION, never the mechanism: the poll re-
     // reads the level, so a provider that stops emitting edges (or never emits
     // this one) still resolves its hold.
-    manager.on('process-state', ({ sessionId, active }: { sessionId: string; active: boolean }) => {
+    const onProcessState = ({ sessionId, active }: { sessionId: string; active: boolean }) => {
       if (active || !this.heldSince.has(sessionId)) return
       this.requestContinue(sessionId)
-    })
+    }
+    const onEnded = ({ sessionId }: { sessionId: string }) => this.interrupt(sessionId)
+    manager.on('semantic-event', onSemantic)
+    manager.on('process-state', onProcessState)
     // `removed` is the reliable end (forwarder.ts); `exit` can precede it.
-    manager.on('removed', ({ sessionId }: { sessionId: string }) => this.interrupt(sessionId))
-    manager.on('exit', ({ sessionId }: { sessionId: string }) => this.interrupt(sessionId))
+    manager.on('removed', onEnded)
+    manager.on('exit', onEnded)
+    // WHY dispose detaches these (#1371 review, b and c): a `removed` arriving after dispose()
+    // resolved paused the loop and started a fresh persist, which recreated a directory the caller
+    // had already removed — the race #1341 is about, just later.
+    this.detachManager = () => {
+      manager.off('semantic-event', onSemantic)
+      manager.off('process-state', onProcessState)
+      manager.off('removed', onEnded)
+      manager.off('exit', onEnded)
+    }
     await this.persist()
   }
 
@@ -373,6 +403,8 @@ export class GoalLoopService extends EventEmitter {
     hook: 'user-prompt-submit' | 'post-tool-use' | 'stop',
     outcome?: { blocked: boolean; backgroundTasks?: readonly GoalLoopBackgroundTask[] },
   ): void {
+    // A disposed service takes no new input (#1371 review round 2): see dispose.
+    if (this.disposed) return
     this.hookSessions.add(sessionId)
     this.lastHookSessionActivity.set(sessionId, Date.now())
     if (hook !== 'stop') {
@@ -420,8 +452,7 @@ export class GoalLoopService extends EventEmitter {
     // Deferred one macrotask so the Stop hook's HTTP answer reaches the
     // provider first. Delivering inside the hook request would race the
     // provider's own turn close.
-    const timer = setTimeout(() => this.requestContinue(sessionId), 0)
-    timer.unref?.()
+    this.defer(() => this.requestContinue(sessionId), 0)
   }
 
   /**
@@ -447,6 +478,7 @@ export class GoalLoopService extends EventEmitter {
    * loop the new session started itself.
    */
   async carry(fromSessionId: string, toSessionId: string): Promise<GoalLoopState | null> {
+    this.assertNotDisposed()
     if (fromSessionId === toSessionId) return null
     const loop = this.loops.get(fromSessionId)
     if (!loop) return null
@@ -469,6 +501,7 @@ export class GoalLoopService extends EventEmitter {
   }
 
   async startLoop(sessionId: string, input: { goal: string; loopPrompt: string; maxContinuations?: number }): Promise<GoalLoopState> {
+    this.assertNotDisposed()
     const existing = this.loops.get(sessionId)
     if (existing && existing.phase !== 'ended') throw new Error('A goal loop is already active for this session. Complete or stop it first.')
     const now = this.now().toISOString()
@@ -485,6 +518,7 @@ export class GoalLoopService extends EventEmitter {
   }
 
   async complete(sessionId: string, outcome: 'done' | 'blocked', summary: string): Promise<GoalLoopState> {
+    this.assertNotDisposed()
     const loop = this.loops.get(sessionId)
     if (!loop || loop.phase === 'ended') throw new Error('No goal loop is active for this session.')
     // Nothing may be typed into a finished loop, and a live watchdog would
@@ -500,6 +534,8 @@ export class GoalLoopService extends EventEmitter {
   }
 
   control(sessionId: string, command: { action: GoalLoopControlAction; value?: number }): GoalLoopState | null {
+    // Disposed: nothing to control, and a write now would outlive dispose (#1371 review round 2).
+    if (this.disposed) return null
     const loop = this.loops.get(sessionId)
     if (!loop) return null
     const now = this.now().toISOString()
@@ -512,7 +548,7 @@ export class GoalLoopService extends EventEmitter {
       // stay visible for as long as it can still prompt the agent.
       if (loop.phase !== 'ended') return { ...loop }
       this.loops.delete(sessionId)
-      void this.persist()
+      this.track(this.persist())
       return null
     }
     // A loop that is pausing, stopping or being dismissed will not type, so a
@@ -600,7 +636,7 @@ export class GoalLoopService extends EventEmitter {
     // that is still justified simply stays.
     if (command.action === 'resume') this.requestContinue(sessionId)
     const next = this.loops.get(sessionId)!
-    void this.persist()
+    this.track(this.persist())
     return { ...next }
   }
 
@@ -666,7 +702,7 @@ export class GoalLoopService extends EventEmitter {
    * settled state. */
   private scheduleContinueCheck(sessionId: string): void {
     if (this.continueCheckTimers.has(sessionId)) return
-    const timer = setTimeout(() => {
+    const timer = this.defer(() => {
       this.continueCheckTimers.delete(sessionId)
       const tracked = this.working.get(sessionId)
       // Same two safety lines as maybeContinue's entry check, evaluated AFTER
@@ -676,7 +712,6 @@ export class GoalLoopService extends EventEmitter {
       if (tracked && (isWorking(tracked) || tracked.pendingTools.length > 0)) return
       this.requestContinue(sessionId)
     }, 0)
-    timer.unref?.()
     this.continueCheckTimers.set(sessionId, timer)
   }
 
@@ -700,7 +735,7 @@ export class GoalLoopService extends EventEmitter {
     const loop = this.loops.get(sessionId)
     if (!loop || loop.phase !== 'active') return
     this.loops.set(sessionId, { ...loop, phase: 'paused', pauseReason: 'interrupted', updatedAt: this.now().toISOString() })
-    void this.persist()
+    this.track(this.persist())
   }
 
   /** The agent is about to run (or is running) a turn the loop must see the
@@ -741,8 +776,10 @@ export class GoalLoopService extends EventEmitter {
   /** Every trigger (turn boundary, resume, backoff retry) funnels through
    * here so none of them can be lost to the re-entrancy guard. */
   private requestContinue(sessionId: string): void {
+    // A disposed service starts nothing new; whatever was already running is drained by dispose.
+    if (this.disposed) return
     if (this.continuing.has(sessionId)) this.pendingContinue.add(sessionId)
-    else void this.maybeContinue(sessionId)
+    else this.track(this.maybeContinue(sessionId))
   }
 
   /**
@@ -890,7 +927,7 @@ export class GoalLoopService extends EventEmitter {
       return
     }
     if (this.holdPolls.has(sessionId)) return
-    const timer = setTimeout(() => {
+    const timer = this.defer(() => {
       this.holdPolls.delete(sessionId)
       // The loop may have been paused, stopped or completed while we waited;
       // releasing here is what stops the poll from outliving it.
@@ -900,7 +937,6 @@ export class GoalLoopService extends EventEmitter {
       }
       this.requestContinue(sessionId)
     }, HOLD_POLL_MS)
-    timer.unref?.()
     this.holdPolls.set(sessionId, timer)
   }
 
@@ -908,7 +944,7 @@ export class GoalLoopService extends EventEmitter {
     this.heldSince.delete(sessionId)
     this.progressSince.delete(sessionId)
     const timer = this.holdPolls.get(sessionId)
-    if (timer) clearTimeout(timer)
+    if (timer) this.cancel(timer)
     this.holdPolls.delete(sessionId)
   }
 
@@ -936,10 +972,14 @@ export class GoalLoopService extends EventEmitter {
     if (!loop || loop.phase !== 'active') return
     console.warn(`[goal-loop] ${sessionId}: held on "${reason}" after its turn ended; pausing instead of typing into it`)
     this.loops.set(sessionId, { ...loop, phase: 'paused', pauseReason: 'error', updatedAt: this.now().toISOString() })
-    void this.persist()
+    this.track(this.persist())
   }
 
   private async maybeContinue(sessionId: string): Promise<void> {
+    // WHY here and not only in requestContinue (#1371 review, a/b/c): a continuation finishing its
+    // persist replays a queued one straight from its finally block, which bypassed requestContinue's
+    // check and delivered a prompt after dispose() had begun. Every path to a delivery starts here.
+    if (this.disposed) return
     const loop = this.loops.get(sessionId)
     if (!loop || loop.phase !== 'active' || this.continuing.has(sessionId)) return
     this.continuing.add(sessionId)
@@ -968,7 +1008,9 @@ export class GoalLoopService extends EventEmitter {
       }
       this.releaseHold(sessionId)
       let result = await this.deps.manager.deliverPromptToAgent(sessionId, prompt)
-      if (!result.ok && result.retrySafe) result = await this.deps.manager.deliverPromptToAgent(sessionId, prompt)
+      // Disposal may have begun while that delivery was in flight (#1371 review round 2, a/b/c):
+      // its outcome is still recorded below, but no NEW delivery starts, not even the retry.
+      if (!result.ok && result.retrySafe && !this.disposed) result = await this.deps.manager.deliverPromptToAgent(sessionId, prompt)
       // The provider took the prompt into its QUEUE instead of starting a turn
       // with it, which is what happens when the delivery lands mid-turn. It
       // will run, but not yet, and until it does nothing else may be sent:
@@ -1012,8 +1054,7 @@ export class GoalLoopService extends EventEmitter {
         // below settles, and on a slow disk a direct call would hit that
         // guard and drop the only trigger this loop has left.
         if (!pause) {
-          const retry = setTimeout(() => this.requestContinue(sessionId), DELIVERY_RETRY_DELAY_MS)
-          retry.unref?.()
+          this.defer(() => this.requestContinue(sessionId), DELIVERY_RETRY_DELAY_MS)
         }
       }
       await this.persist()
@@ -1021,8 +1062,81 @@ export class GoalLoopService extends EventEmitter {
       console.warn('[goal-loop] continuation failed unexpectedly:', error)
     } finally {
       this.continuing.delete(sessionId)
-      if (this.pendingContinue.delete(sessionId)) void this.maybeContinue(sessionId)
+      if (this.pendingContinue.delete(sessionId)) this.track(this.maybeContinue(sessionId))
     }
+  }
+
+  /**
+   * Resolves once nothing this service started is still running (#1341).
+   *
+   * WHY: persists, continuations and zero-delay deferrals were all fire-and-forget, so nothing could
+   * wait for them. Tests slept a guessed 10 ms–1.5 s and then asserted "not delivered" (a negative
+   * that passes whenever the work simply had not run yet), and `afterEach` removed a temp dir under
+   * a still-running write, logging ENOENT (13 times on main CI run 36156560842). Loops because
+   * settling work can start more: a continuation's finally re-requests a pending one.
+   *
+   * NOT included: the 1 s hold poll and the delivery-retry backoff. Those are scheduled FUTURE work
+   * (fake timers drive them in tests), and waiting for them would wait for a hold to end.
+   */
+  async whenSettled(): Promise<void> {
+    while (this.inflight.size > 0) await Promise.allSettled([...this.inflight])
+  }
+
+  /**
+   * Stop starting work, cancel every timer, and wait for what is already running (#1341).
+   * After this the service delivers nothing; a new event is ignored.
+   */
+  async dispose(): Promise<void> {
+    this.disposed = true
+    this.detachManager?.()
+    this.detachManager = undefined
+    for (const timer of [...this.timers.keys()]) this.cancel(timer)
+    this.continueCheckTimers.clear()
+    this.holdPolls.clear()
+    await this.whenSettled()
+  }
+
+  /** The public mutators refuse once disposed: their writes would outlive dispose (#1371). */
+  private assertNotDisposed(): void {
+    if (this.disposed) throw new Error('The goal loop service has shut down.')
+  }
+
+  private track(work: Promise<unknown>): void {
+    this.inflight.add(work)
+    const done = () => { this.inflight.delete(work) }
+    work.then(done, done)
+  }
+
+  /** A timer this service owns. A zero-delay one counts as in flight until it has run. */
+  private defer(run: () => void, ms: number): ReturnType<typeof setTimeout> {
+    // Nothing is scheduled once disposed (#1371 review round 2): dispose() already cancelled every
+    // timer, and one created afterwards would outlive it. The returned handle is inert.
+    if (this.disposed) {
+      const inert = setTimeout(() => {}, 0)
+      clearTimeout(inert)
+      return inert
+    }
+    let settle: (() => void) | undefined
+    if (ms === 0) this.track(new Promise<void>(resolve => { settle = resolve }))
+    const timer = setTimeout(() => {
+      this.timers.delete(timer)
+      try {
+        if (!this.disposed) run()
+      } finally {
+        settle?.()
+      }
+    }, ms)
+    timer.unref?.()
+    this.timers.set(timer, settle)
+    return timer
+  }
+
+  /** Clear a timer and release its in-flight hold, if it had one. */
+  private cancel(timer: ReturnType<typeof setTimeout>): void {
+    clearTimeout(timer)
+    const settle = this.timers.get(timer)
+    this.timers.delete(timer)
+    settle?.()
   }
 
   private async persist(): Promise<void> {

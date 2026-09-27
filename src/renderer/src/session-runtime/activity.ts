@@ -42,7 +42,10 @@ export type SessionActivity = {
  *
  * There is no "system record" case, though an earlier draft claimed one: the
  * transcript mapper drops every system/meta record before it reaches
- * `entries`, and compact boundaries carry no timestamp at all.
+ * `entries`, and Claude's compact boundaries carry no timestamp at all. (A
+ * Codex compact boundary does carry one since #1386; the tail fallback reads
+ * the newest entry of any type, so a compaction counts as transcript time,
+ * which is correct: it is a real committed record.)
  *
  * The footer's rule is the one kept, because it includes the ingest
  * watermark: `lastJsonlEntryAt` is the newest thing the transcript reader has

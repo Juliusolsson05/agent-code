@@ -10,7 +10,7 @@ import type {
   PocketMenuAction,
   PocketMenuState,
   PocketLocalAction,
-  PocketPickResult,
+  PocketPickOutcome,
   PortWatchSession,
 } from '@shared/browserPocket/types.js'
 
@@ -30,7 +30,7 @@ export const browserPocketApi = {
   takeOverPocket: (p: { pocketId: string }): Promise<void> => ipcRenderer.invoke('browser-pocket:take-over', p),
   resumePocketAgent: (p: { pocketId: string }): Promise<void> => ipcRenderer.invoke('browser-pocket:resume', p),
   pocketThumbnail: (p: { pocketId: string }): Promise<string | null> => ipcRenderer.invoke('browser-pocket:thumbnail', p),
-  pickInPocket: (p: { pocketId: string }): Promise<PocketPickResult | null> => ipcRenderer.invoke('browser-pocket:pick', p),
+  pickInPocket: (p: { pocketId: string }): Promise<PocketPickOutcome> => ipcRenderer.invoke('browser-pocket:pick', p),
   cancelPocketPick: (p: { pocketId: string }): Promise<void> => ipcRenderer.invoke('browser-pocket:cancel-pick', p),
   applyPocketEmulation: (p: { pocketId: string; emulation: { viewport?: { width: number; height: number; mobile: boolean } | null; colorScheme?: 'light' | 'dark' | null; zoom?: number } }): Promise<void> =>
     ipcRenderer.invoke('browser-pocket:emulation', p),

@@ -25,21 +25,24 @@ export type SurfaceEntry = {
    */
   Component: ComponentType
   /**
-   * Paint band. Entries are stably sorted by `layer` (default 0) before render,
-   * so within a band the array order still decides sibling/paint order exactly as
-   * before — every first-party entry omits `layer` and keeps its documented
-   * position. The field exists so a NON-first-party surface (an extension one,
-   * WS7) can be given a distinct band it cannot escape: it can never tie-break
-   * into the first-party z-50 stack and silently reorder it, which is the exact
-   * class of bug PR #505 hit. First-party entries should not set it.
+   * RENDER band, not a paint band. Entries are stably sorted by `layer`
+   * (default 0) before render, which fixes their React render order and
+   * nothing else. Corrected in #512's review: every modal is a Radix Dialog
+   * in LAYERS.dialog that portals into <body> when it OPENS, so between open
+   * dialogs the one opened last paints on top whatever its `layer`. A surface
+   * that must really sit above the first-party dialogs needs its own z layer
+   * in ui/layers.ts, and no entry has one today (EXTENSION_SURFACE_LAYER has
+   * no consumer). First-party entries should not set this.
    */
   layer?: number
 }
 
 /**
- * The band all extension-contributed surfaces sit in — above the first-party stack,
- * so an extension surface always paints over app chrome (it is user-initiated and
- * awaiting input) but cannot reorder first-party surfaces among themselves.
+ * The render band reserved for extension-contributed surfaces. It orders their
+ * React render after the first-party entries; it does NOT make them paint
+ * above an open first-party dialog (see SurfaceEntry.layer). No surface uses
+ * it yet; giving extension surfaces a real paint band means adding a layer to
+ * ui/layers.ts when the first one lands.
  */
 export const EXTENSION_SURFACE_LAYER = 100
 

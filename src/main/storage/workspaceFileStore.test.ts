@@ -70,6 +70,24 @@ describe('workspace persistence ordering', () => {
     expect(writeFile).toHaveBeenCalledOnce()
   })
 
+  // #1328 q56: the TLDR/Goal stores read "who is named" from this document
+  // while an evicting write holds the shared reporting lock. A save must not
+  // rename (or advance the document) while that lock is held.
+  it('waits for the shared reporting lock before publishing a save', async () => {
+    const { withReportingPublicationLock } = await import('@main/storage/reportingPublicationLock.js')
+    const store = await WorkspaceFileStore.open()
+    const evictionWrite = deferred()
+    const holding = withReportingPublicationLock(() => evictionWrite.promise)
+    const save = store.saveSlice('w1', slice(['parked-agent']), NO_GEOMETRY)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(rename).not.toHaveBeenCalled()
+    expect(store.windows()).toEqual([])
+    evictionWrite.resolve()
+    await Promise.all([holding, save])
+    expect(rename).toHaveBeenCalledOnce()
+    expect(store.windows()).toHaveLength(1)
+  })
+
   it('commits overlapping saves in admission order', async () => {
     const firstWriteGate = deferred()
     const tempContents = new Map<string, string>()

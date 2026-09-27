@@ -59,12 +59,20 @@ export function dictationAudioInputError(
     return 'Microphone access was denied. Allow Agent Code in your system microphone privacy settings, then try again.'
   }
   if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+    // The label is the user's own device name from Settings; capped so the
+    // sentence stays bounded whatever a driver reports (#1340 review, q39).
+    const label = (selection?.label || 'saved audio input').slice(0, 80)
     return selection && selection.deviceId !== 'default'
-      ? `The selected microphone (${selection.label || 'saved audio input'}) is unavailable. Reconnect it or choose another in Settings → Dictation → Audio Input Device.`
+      ? `The selected microphone (${label}) is unavailable. Reconnect it or choose another in Settings → Dictation → Audio Input Device.`
       : 'No microphone is available. Connect an audio input or choose another in Settings → Dictation → Audio Input Device.'
   }
   if (name === 'NotReadableError' || name === 'AbortError') {
     return 'Could not open the microphone. Check its connection or choose another in Settings → Dictation → Audio Input Device.'
   }
-  return error instanceof Error ? error.message : 'Could not start microphone capture.'
+  // WHY never the error's own text (#1340 review A1, q22/q39): an error name
+  // this function does not recognise carries whatever message the browser,
+  // a driver or an extension put there, and this sentence reaches the user
+  // (toast and terminal overlay). The raw text stays in the debug journal
+  // (`start:get-user-media:error`), which is where diagnosis happens.
+  return 'Could not start microphone capture. Check the input device in Settings → Dictation → Audio Input Device.'
 }

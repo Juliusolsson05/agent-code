@@ -9,6 +9,7 @@ vi.mock('@main/storage/paths.js', () => ({ STATE_DIR: scratch }))
 
 const {
   loadWorktreeActivityIndex,
+  saveWorktreeActivityIndex,
   WORKTREE_ACTIVITY_INDEX_VERSION,
 } = await import('./indexStore.js')
 
@@ -61,5 +62,12 @@ describe('worktree activity index persistence', () => {
     } finally {
       parseSpy.mockRestore()
     }
+  })
+
+  // #767 / review of #1349: the caller's updatedAt is the content generation it keys its summary
+  // cache on; the store used to stamp its own Date.now() over it.
+  it('persists the caller\'s updatedAt instead of stamping its own', async () => {
+    await saveWorktreeActivityIndex({ version: WORKTREE_ACTIVITY_INDEX_VERSION, updatedAt: 123, transcripts: {} })
+    expect((JSON.parse(await readFile(indexFile, 'utf8')) as { updatedAt: number }).updatedAt).toBe(123)
   })
 })

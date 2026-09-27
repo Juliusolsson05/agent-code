@@ -8,7 +8,7 @@
 // Because the component is gated on truthy `message`, React
 // unmounts+remounts the node when the message flips from null →
 // value → null, which restarts the animation cleanly.
-import { PANE_DIALOG_LAYERS } from '@renderer/components/ui/pane-dialog'
+import { PANE_DIALOG_LAYERS, PANE_FEEDBACK_ATTRIBUTE } from '@renderer/components/ui/pane-dialog'
 import { cn } from '@renderer/lib/utils'
 
 export function PaneToast({ message }: { message: string | null }) {
@@ -16,12 +16,18 @@ export function PaneToast({ message }: { message: string | null }) {
   // together with its text is not announced by screen readers — the region
   // must exist before its content changes. When there is no message it
   // collapses to sr-only, so the pane gains no height.
-  if (!message) return <div role="status" aria-live="polite" className="sr-only" />
+  //
+  // The feedback attribute keeps this region OUT of an open pane prompt's
+  // inert pass (Claude review of #1221, reviewer B F2): inert content leaves
+  // the accessibility tree, which silenced the announcement, and blocks the
+  // pointer, which killed the clipped text's hover title.
+  const feedback = { [PANE_FEEDBACK_ATTRIBUTE]: '' }
+  if (!message) return <div role="status" aria-live="polite" className="sr-only" {...feedback} />
   return (
     // `relative` + the feedback layer: readable ABOVE a pane-scoped condition
     // dialog's scrim (#713; see PANE_DIALOG_LAYERS). It is harmless when no
     // dialog is up, since nothing else in the pane is stacked.
-    <div role="status" aria-live="polite" className={cn('relative flex-shrink-0 flex justify-center px-3 py-1.5 border-t border-border bg-surface', PANE_DIALOG_LAYERS.feedback)}>
+    <div {...feedback} role="status" aria-live="polite" className={cn('relative flex-shrink-0 flex justify-center px-3 py-1.5 border-t border-border bg-surface', PANE_DIALOG_LAYERS.feedback)}>
       {/* WHY this deliberately borrows the modest chrome radius even though
           the status itself is not interactive: PaneToast is embedded between
           bordered pane regions, with no shadow or scrim. `rounded-float`

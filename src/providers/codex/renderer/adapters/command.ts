@@ -7,6 +7,14 @@ import {
 import type { CommandRenderModel } from '@providers/shared/renderer/protocols/command/model'
 import { analyzeCommandOutput } from '@providers/shared/renderer/protocols/command/formatters'
 import { toolResultContentText } from '@providers/shared/renderer/rows/toolResultContent'
+// The lexical grammar of Codex `exec` scripts lives in shared code since
+// #1362, because the main-process transcript reader needs the same answer to
+// "which command did this script run". Presentation rules stay here.
+import {
+  matchingCallEnd,
+  parseExecCommandArgument,
+  splitSimpleTopLevel,
+} from '@shared/codex/execScript'
 
 // Codex wire → CommandRenderModel (PR #555 Phase 6). Codex-PRIVATE. Covers
 // classic exec_command AND the modern unified-exec script wrapper's plain-
@@ -439,147 +447,6 @@ function numberedFanOutSections(output: string, count: number): string[] | null 
   return sections
 }
 
-/** Locate the closing parenthesis without executing or fully parsing generated
- * JavaScript. Backtick templates are deliberately rejected: `${...}` would
- * require a JavaScript expression parser before we could prove the call
- * boundary or the resulting command bytes. */
-function matchingCallEnd(source: string, openAt: number): number | null {
-  let depth = 1
-  let quote: '"' | "'" | null = null
-  for (let i = openAt + 1; i < source.length; i += 1) {
-    const char = source[i]
-    if (quote) {
-      if (char === '\\') {
-        i += 1
-        continue
-      }
-      if (char === quote) quote = null
-      continue
-    }
-    if (char === '`') return null
-    if (char === '"' || char === "'") {
-      quote = char
-      continue
-    }
-    if (char === '/' && source[i + 1] === '/') {
-      const newline = source.indexOf('\n', i + 2)
-      if (newline < 0) return null
-      i = newline
-      continue
-    }
-    if (char === '/' && source[i + 1] === '*') {
-      const close = source.indexOf('*/', i + 2)
-      if (close < 0) return null
-      i = close + 1
-      continue
-    }
-    if (char === '(') depth += 1
-    if (char === ')') {
-      depth -= 1
-      if (depth === 0) return i
-    }
-  }
-  return null
-}
-
-function parseExecCommandArgument(argument: string): Omit<TransparentExecInvocation, 'presentation'> | null {
-  const direct = decodeDoubleQuotedLiteral(argument)
-  if (direct !== null) {
-    return {
-      command: direct,
-      workdir: null,
-      yieldTimeMs: null,
-      maxOutputTokens: null,
-    }
-  }
-  if (!argument.startsWith('{') || !argument.endsWith('}')) return null
-  const fields = simpleObjectFields(argument.slice(1, -1))
-  if (!fields) return null
-  const command = decodeDoubleQuotedLiteral(fields.get('cmd') ?? fields.get('command') ?? '')
-  if (command === null || !/\S/.test(command)) return null
-  const workdirValue = fields.get('workdir')
-  const workdir = workdirValue === undefined
-    ? null
-    : decodeDoubleQuotedLiteral(workdirValue)
-  if (workdirValue !== undefined && workdir === null) return null
-  return {
-    command,
-    workdir,
-    yieldTimeMs: finiteNumber(fields.get('yield_time_ms') ?? fields.get('yield_time-ms')),
-    maxOutputTokens: finiteNumber(fields.get('max_output_tokens') ?? fields.get('max-output-tokens')),
-  }
-}
-
-function simpleObjectFields(body: string): Map<string, string> | null {
-  const fields = new Map<string, string>()
-  const segments = splitSimpleTopLevel(body, ',')
-  if (!segments) return null
-  for (const segment of segments) {
-    if (!segment.trim()) continue
-    const pair = splitSimpleTopLevel(segment, ':')
-    if (!pair || pair.length !== 2) return null
-    const rawKey = pair[0].trim()
-    const quotedKey = decodeDoubleQuotedLiteral(rawKey)
-    const key = quotedKey ?? (/^[A-Za-z_$][\w$-]*$/.test(rawKey) ? rawKey : null)
-    if (!key || fields.has(key)) return null
-    fields.set(key, pair[1].trim())
-  }
-  return fields
-}
-
-function splitSimpleTopLevel(source: string, separator: ',' | ':'): string[] | null {
-  const out: string[] = []
-  let start = 0
-  let quote: '"' | "'" | null = null
-  let round = 0
-  let square = 0
-  let curly = 0
-  for (let i = 0; i < source.length; i += 1) {
-    const char = source[i]
-    if (quote) {
-      if (char === '\\') i += 1
-      else if (char === quote) quote = null
-      continue
-    }
-    if (char === '`') return null
-    if (char === '"' || char === "'") {
-      quote = char
-      continue
-    }
-    if (char === '(') round += 1
-    else if (char === ')') round -= 1
-    else if (char === '[') square += 1
-    else if (char === ']') square -= 1
-    else if (char === '{') curly += 1
-    else if (char === '}') curly -= 1
-    if (round < 0 || square < 0 || curly < 0) return null
-    if (char === separator && round === 0 && square === 0 && curly === 0) {
-      out.push(source.slice(start, i))
-      start = i + 1
-    }
-  }
-  if (quote || round !== 0 || square !== 0 || curly !== 0) return null
-  out.push(source.slice(start))
-  return out
-}
-
-function decodeDoubleQuotedLiteral(value: string): string | null {
-  const trimmed = value.trim()
-  if (!trimmed.startsWith('"') || !trimmed.endsWith('"')) return null
-  try {
-    const parsed: unknown = JSON.parse(trimmed)
-    return typeof parsed === 'string' ? parsed : null
-  } catch {
-    return null
-  }
-}
-
-function finiteNumber(value: string | undefined): number | null {
-  if (value === undefined) return null
-  const number = Number(value)
-  return Number.isFinite(number) ? number : null
-}
-
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -708,13 +575,24 @@ function commandResultEvidence(
       output: materialized,
       exitCode: nativeExit,
       failed,
-      // Native exec_command_end results always carry exit-derived evidence:
-      // rollout.ts computes is_error from `exit_code !== 0 || status ===
-      // 'failed'` and stamps codex.exitCode. is_error === false is therefore a
-      // proven success on THIS transport — unlike code-mode
-      // custom_tool_call_output, whose is_error never reflects the inner
-      // command.
-      exitProven: true,
+      // Native exec_command_end results carry exit-derived evidence:
+      // rollout.ts computes is_error from the exit code on both terminal
+      // carriers (the exec_command_end event, and the wrapped
+      // function_call_output with a "Process exited with code N" header) and
+      // stamps codex.exitCode. is_error === false is therefore a proven
+      // success on THIS transport — unlike code-mode custom_tool_call_output,
+      // whose is_error never reflects the inner command.
+      //
+      // EXCEPT a still-running chunk (#1395 review a, P1). A wrapper whose
+      // header says "Process running with session ID N" is partial: the
+      // command goes on in that session, and its exit arrives on a later
+      // write_stdin result with a different call_id, which this card cannot
+      // see. rollout.ts marks it `exec_command_running`. Claiming success for
+      // it painted long-running and later-failing commands green (9,896 such
+      // chunks in the local corpus); its honest state is "unknown". The same
+      // holds for a wrapper whose header could not be parsed
+      // (`exec_command_unparsed`, #1395 review b).
+      exitProven: codex?.kind === 'exec_command_running' || codex?.kind === 'exec_command_unparsed' ? failed : true,
       running: false,
       owned: true,
     }

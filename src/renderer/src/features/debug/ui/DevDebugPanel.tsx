@@ -8,6 +8,8 @@ import type {
 } from '@renderer/features/debug/devModules/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
+import { DebugPanelHeader } from './DebugPanelHeader'
+import { SidePanel } from '@renderer/components/ui/side-panel'
 
 const STORAGE_KEY = 'agent-code:dev-debug:enabled-modules'
 
@@ -79,27 +81,8 @@ export function DevDebugPanel({ sessionId, runtime, kind, workspace, onClose }: 
   }
 
   return (
-    <div className="
-      h-full w-[620px] flex-shrink-0
-      border-l border-border bg-surface
-      flex flex-col overflow-hidden
-      text-[10px] font-code
-    ">
-      <div className="
-        flex items-center justify-between
-        px-3 py-2 border-b border-border
-        text-[9px] text-danger uppercase tracking-wider
-        select-none flex-shrink-0
-      ">
-        <span>dev debug</span>
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-muted hover:text-ink text-[14px] leading-none"
-        >
-          ×
-        </button>
-      </div>
+    <SidePanel label="Dev debug" className="w-[620px] text-[10px] font-code">
+      <DebugPanelHeader title="dev debug" closeLabel="Close dev debug" onClose={onClose} />
 
       <div className="border-b border-border bg-surface px-3 py-2">
         <div className="flex items-center justify-between gap-3">
@@ -198,7 +181,7 @@ export function DevDebugPanel({ sessionId, runtime, kind, workspace, onClose }: 
           ))
         )}
       </div>
-    </div>
+    </SidePanel>
   )
 }
 

@@ -8,7 +8,7 @@ import { pid, versions } from 'node:process'
 import { BrowserWindow } from 'electron'
 
 import { INCIDENT_RUNS_DIR, STATE_DIR } from '@main/storage/paths.js'
-import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
+import { scheduleDebugStoragePrune, holdDebugStoragePruneUntilRecovered } from '@main/storage/debugRetention.js'
 import type { StateProcessLock } from '@main/storage/processLock.js'
 import { createIncidentId, getAppRunId } from '@main/incident/appRunIds.js'
 import type { BuildInfo } from '@main/buildInfo.js'
@@ -124,6 +124,12 @@ export class AppRunJournal {
   async start(): Promise<void> {
     if (this.started) return
     this.started = true
+    // The run's first prune waits until the workspace has recovered (#775).
+    // Closed FIRST, before any I/O here can fail (#1351 review a/b): a run
+    // whose incident directory is unwritable degrades to no journal, but the
+    // other retention buckets may still be writable, and `startup` (index.ts)
+    // would otherwise prune immediately during recovery.
+    holdDebugStoragePruneUntilRecovered()
     try {
       await mkdir(this.runDir, { recursive: true })
       await writeFile(join(this.runDir, 'manifest.json'), `${JSON.stringify(this.manifest, null, 2)}\n`, 'utf8')
@@ -199,6 +205,7 @@ export class AppRunJournal {
       },
     })
     await this.writeHeartbeat()
+    // Held by the gate closed at the top of start() (#775).
     scheduleDebugStoragePrune('incident-run-start')
   }
 
