@@ -358,14 +358,16 @@ export class AgentActivityStore {
     return key => groups.get(key) ?? key
   }
 
-  /** Intervals that overlap [from, to). */
-  async readIntervals(from: number, to: number): Promise<RecordedInterval[]> {
+  /** Intervals that overlap [from, to). `group` is the alias grouping to key
+   *  them by; a caller that also keys other intervals (a summary's open
+   *  ones) passes the one snapshot it uses for those, see agentKeyGrouping. */
+  async readIntervals(from: number, to: number, group?: (key: string) => string): Promise<RecordedInterval[]> {
     await this.tail
     // One extra month before `from`: an interval is filed under its START month.
     const firstMonth = monthKey(Date.UTC(new Date(from).getUTCFullYear(), new Date(from).getUTCMonth() - 1, 1))
     const lastMonth = monthKey(to)
     const out: RecordedInterval[] = []
-    const group = await this.agentKeyGrouping()
+    const groupKey = group ?? await this.agentKeyGrouping()
     for (const name of await this.monthFiles()) {
       const month = name.slice(0, 7)
       if (month < firstMonth || month > lastMonth) continue
@@ -373,7 +375,7 @@ export class AgentActivityStore {
       for (const line of parseJsonLines(await readFile(join(this.dir, name), 'utf8'))) {
         if (line.t === 'c' && isNumber(line.c)) {
           const context = parseContext(line)
-          if (context) contexts.set(line.c, { ...context, agentKey: group(context.agentKey) })
+          if (context) contexts.set(line.c, { ...context, agentKey: groupKey(context.agentKey) })
         } else if (line.t === 'i' && isNumber(line.c) && isNumber(line.s) && isNumber(line.e)) {
           const context = contexts.get(line.c)
           if (context && line.e > from && line.s < to) out.push({ context, startedAt: line.s, endedAt: line.e })

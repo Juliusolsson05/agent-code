@@ -33,3 +33,4 @@
 - **A failed alias write** was already fixed (steering q63, `f87bc413`).
 - Tests for each are red on `f87bc413`.
 - **b (round 3): the summary's still-open intervals kept raw keys** while closed ones were grouped, so a working agent showed twice until its turn closed. `AgentActivityStore.agentKeyGrouping()` is now the one mapping, used by `readIntervals` and by `summary` for open intervals. Test added; it is red without the open-interval grouping.
+- **b (round 4): the closed and open intervals were grouped from two alias snapshots,** so an alias saved mid-summary split one agent. `summary` now takes one `agentKeyGrouping()` snapshot and passes it to `readIntervals`. Test: an alias appended right after the closed intervals are read; red on `a65245ef`.

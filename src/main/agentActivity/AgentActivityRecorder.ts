@@ -161,11 +161,13 @@ export class AgentActivityRecorder {
       ? earliestOpen
       : earliestOpen === null ? firstClosed : Math.min(firstClosed, earliestOpen)
     const { from, to } = rangeBounds(range, now, recordingSince)
-    const closed = await this.deps.store.readIntervals(from, to)
-    // Open intervals go through the same alias groups as the closed ones
-    // readIntervals returns, or one working agent counts twice until its turn
-    // closes (#1342 verification b, round 3).
+    // ONE alias snapshot keys both the closed intervals and the open ones.
+    // Round 3 (#1342 verification b): the open ones were not grouped at all.
+    // Round 4: grouping them with a second snapshot taken after the reads let
+    // an alias saved in between (an autosave landing mid-summary) give the two
+    // sets different representatives, so one working agent showed twice.
     const group = await this.deps.store.agentKeyGrouping()
+    const closed = await this.deps.store.readIntervals(from, to, group)
     return summarizeAgentActivity({
       // Agents working right now count up to this moment.
       intervals: [...closed, ...open.map(interval => ({
