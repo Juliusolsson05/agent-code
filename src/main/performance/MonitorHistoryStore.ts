@@ -8,7 +8,7 @@ import type { MonitorIncident } from '@shared/performance/monitorIncidents.js'
 import { parseMonitorIncident } from '@shared/performance/parseMonitorIncident.js'
 import { parseMonitorHistoryPoint } from '@shared/performance/parseMonitorHistory.js'
 import { parseMonitorSnapshot } from '@shared/performance/parseMonitorSnapshot.js'
-import { MONITOR_POLICY } from '@shared/performance/monitorPolicy.js'
+import { MAX_MONITOR_OPERATION_PAIRS, MONITOR_POLICY } from '@shared/performance/monitorPolicy.js'
 import type {
   MonitorHistoryPage, MonitorHistoryPoint, MonitorHistoryResolution,
   MonitorHistoryStatus, MonitorReportPreview, MonitorReportResult,
@@ -121,7 +121,7 @@ export class MonitorHistoryStore {
     // fingerprint; stringifying up to fifty full evidence sets here every
     // second cost ~1 MiB of JSON per second of helper CPU for no new data.
     if (incidents) this.pendingIncidents = incidents.slice(-INCIDENT_LIMIT)
-    const operationJson = JSON.stringify(snapshot.operations.slice(0, 100))
+    const operationJson = JSON.stringify(snapshot.operations.slice(0, MAX_MONITOR_OPERATION_PAIRS))
     if (operationJson !== this.operationFingerprint) {
       this.operationFingerprint = operationJson
       this.pendingOperations = operationJson

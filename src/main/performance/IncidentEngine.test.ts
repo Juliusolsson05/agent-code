@@ -133,4 +133,23 @@ describe('incident evidence and exclusion rules', () => {
     engine.loss(901, 0, 2000)
     expect(engine.summaries()[0]!.truncated).toBe(true)
   })
+
+  // #1352 reviews a, b, c: the three catalog thresholds are the point of the
+  // PR, and moving any of them left every test green. Each gets a sample just
+  // above (a named slow-operation incident) and just below (none). The
+  // "above" sample sits exactly AT the threshold (the rule is >=), so moving
+  // a threshold up by even 1 ms fails (#1352 verification b).
+  it.each([
+    ['conversations.extract', 250],
+    ['conversations.search', 1000],
+    ['conversations.discover', 1000],
+  ] as const)('raises a slow-operation incident for %s from %i ms', (name, threshold) => {
+    const above = new IncidentEngine()
+    above.accept([{ kind: 'operation', at: 1000, windowId: null, sample: { kind: 'operation', name, durationMs: threshold, outcome: 'success' } }], 1000, 1000)
+    expect(above.summaries().map(row => [row.rule, row.operation])).toEqual([['slow-operation', name]])
+    const below = new IncidentEngine()
+    below.accept([{ kind: 'operation', at: 1000, windowId: null, sample: { kind: 'operation', name, durationMs: threshold - 1, outcome: 'success' } }], 1000, 1000)
+    expect(below.summaries()).toEqual([])
+  })
 })
+

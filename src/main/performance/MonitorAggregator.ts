@@ -1,6 +1,6 @@
 import { BoundedQueue } from '@shared/performance/boundedQueue.js'
 import { LatencyHistogram } from '@shared/performance/latencyHistogram.js'
-import { MONITOR_POLICY } from '@shared/performance/monitorPolicy.js'
+import { MAX_MONITOR_OPERATION_PAIRS, MONITOR_POLICY } from '@shared/performance/monitorPolicy.js'
 import type { MonitorEnvelope, MonitorMainSample, MonitorWindowSample, MonitorOperationSummary, MonitorWorkerSnapshot } from '@shared/performance/monitorSnapshot.js'
 
 /** Worker-owned evidence. Every cardinality is bounded independently of run length. */
@@ -30,7 +30,7 @@ export class MonitorAggregator {
           const { name, outcome, durationMs } = record.sample
           const key = `${name}:${outcome}`
           let entry = this.operations.get(key)
-          if (!entry && this.operations.size < 100) {
+          if (!entry && this.operations.size < MAX_MONITOR_OPERATION_PAIRS) {
             entry = { summary: { name, outcome }, histogram: new LatencyHistogram() }
             this.operations.set(key, entry)
           }
