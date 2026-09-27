@@ -326,3 +326,31 @@ describe('UserMcpService review round 2', () => {
     expect(await svc.save(beeper({ secrets: { 'beeper-authorization': '${GITHUB_TOKEN}' } }))).toMatchObject({ ok: false })
   })
 })
+
+// #1304: mutate() rolled MEMORY back on a failure, but persist() had already
+// written the new document. A failed secret write after a save, or a failed
+// clear after a delete, left disk and memory disagreeing: the server came back
+// after a restart (without its secret), or the next mutation wrote a deleted
+// server back.
+describe('a secret step that fails after the document was written (#1304)', () => {
+  type Internals = { secrets: { set: (...args: unknown[]) => Promise<void>; clearServer: (...args: unknown[]) => Promise<void> } }
+
+  it('a failed secret write on save leaves the server on neither disk nor memory', async () => {
+    const live = service()
+    ;(live as unknown as Internals).secrets.set = async () => { throw new Error('secure storage unavailable') }
+    const result = await live.save(beeper())
+    expect(result.ok).toBe(false)
+    expect((await live.snapshot()).servers).toHaveLength(0)
+    expect((await service().snapshot()).servers).toHaveLength(0)
+  })
+
+  it('a failed secret clear on delete keeps the server on both disk and memory', async () => {
+    const live = service()
+    expect((await live.save(beeper())).ok).toBe(true)
+    const id = (await live.snapshot()).servers[0]!.id
+    ;(live as unknown as Internals).secrets.clearServer = async () => { throw new Error('EACCES') }
+    expect((await live.delete(id)).ok).toBe(false)
+    expect((await live.snapshot()).servers.map(server => server.id)).toEqual([id])
+    expect((await service().snapshot()).servers.map(server => server.id)).toEqual([id])
+  })
+})

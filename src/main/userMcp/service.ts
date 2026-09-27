@@ -413,6 +413,7 @@ export class UserMcpService {
         this.storeProblem = loaded.problem
         this.readFailed = false
       }
+      this.persistedInMutation = false
       try {
         const outcome = await operation()
         if (!outcome.ok) return outcome
@@ -430,7 +431,25 @@ export class UserMcpService {
         // disk, or the snapshot shows a server that a restart will lose and a
         // retry is refused as a duplicate. (Secrets written before the failure
         // are orphaned blobs at worst; the next save of that server prunes them.)
-        this.document = before
+        //
+        // #1304: operations persist the document BEFORE their secret step
+        // (round 2 of that review, so a failed persist cannot lose a token).
+        // A secret step that throws after that point used to roll back only
+        // memory, leaving disk ahead of it: a saved server came back after a
+        // restart without its secret, and a deleted one was written back by
+        // the next mutation. Roll the FILE back too. If that write fails as
+        // well, disk still holds the new document, so memory keeps it: the
+        // two must agree either way.
+        if (this.persistedInMutation) {
+          try {
+            await saveUserMcpDocument(this.file, before)
+            this.document = before
+          } catch {
+            // Disk holds the persisted document; memory already matches it.
+          }
+        } else {
+          this.document = before
+        }
         return { ok: false, error: error instanceof Error ? error.message : String(error) }
       }
     })
@@ -438,8 +457,12 @@ export class UserMcpService {
     return run
   }
 
+  /** Set by persist() during the current mutate() operation (#1304). */
+  private persistedInMutation = false
+
   private async persist(): Promise<void> {
     await saveUserMcpDocument(this.file, this.document)
+    this.persistedInMutation = true
     // A successful write supersedes whatever made the old file unreadable.
     this.storeProblem = undefined
   }
