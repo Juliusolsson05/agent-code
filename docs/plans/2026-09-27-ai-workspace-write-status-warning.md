@@ -28,3 +28,11 @@ The input is the real recorded workspace state. One real entry is pointed at a t
 - **Advice matches the cause.** An occupied copy path (EISDIR/EEXIST/ENOTDIR), a missing folder (ENOENT), a permission or read-only refusal, and a full disk each get their own advice.
 - **Tests added:** the file reads back after the warning; an ordinary write carries no warning; a throwing listener still gives `ok: true`, and the listener is still called; ENOENT advice. The always-warn, unguarded-emit and wrong-advice mutations each fail.
 - **Not tested:** the editor's display of the notice is not covered at the component level (there is no AiWorkspaceEditor renderer harness). The change there is three lines, and it is stated in the body.
+
+## Review b (round 1)
+- **The notice was lost on a workspace switch, and never shown if the switch happened mid-write.** The editor held it only in React state. It is now durable in main: `get` returns a runtime-only `storageWarning` (`AI_WORKSPACE_STORAGE_BLOCKED`) while a copy is owed and its last attempt failed. The flag is set when the copy fails and cleared when it succeeds, and it is never persisted. `loadWorkspace` sets the editor's notice from it on every load, so a remount shows it again. The write-result warning still sets it immediately.
+- **Wrong advice for ENOTDIR and EROFS.** ENOTDIR now gets the generic advice, since it means a component of the folder path is a file. EROFS gets its own read-only-volume advice.
+- **Surviving mutations, now killed:**
+  - appending the raw error text to the refusal (asserted absent);
+  - stopping the fan-out after the first workspace (two-workspace test);
+  - dropping `get`'s notice.

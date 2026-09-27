@@ -37,6 +37,11 @@ export type AiWorkspaceRecord = {
   createdAt: string
   updatedAt: string
   entries: AiWorkspaceFileEntry[]
+  /** Runtime only, never persisted (#1285, #1416 review b): set by `get` while
+   *  AI Workspace cannot save, because a preservation copy it owes cannot be
+   *  written. Every load sees it, so a remounted editor (or an agent) learns
+   *  that changes will be refused, not only the view that saw a failed write. */
+  storageWarning?: string
 }
 
 export type AiWorkspaceSummary = {

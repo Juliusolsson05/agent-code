@@ -3,7 +3,7 @@ import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { AI_WORKSPACE_STATUS_NOT_SAVED, AiWorkspaceRegistry } from './AiWorkspaceRegistry.js'
+import { AI_WORKSPACE_STATUS_NOT_SAVED, AI_WORKSPACE_STORAGE_BLOCKED, AiWorkspaceRegistry } from './AiWorkspaceRegistry.js'
 
 const tempRoots: string[] = []
 
@@ -334,7 +334,21 @@ describe('a write whose status refresh cannot be saved (#1285)', () => {
     // The stored state was not rewritten: the owed copy still blocks saves.
     expect(await readFile(statePath, 'utf8')).toBe(source)
     // A refused save says why and how to unblock it, not the raw errno text.
-    await expect(registry.create({ name: 'Blocked' })).rejects.toThrow(/needs attention.*\(EISDIR\).*already occupies the copy path/s)
+    const refusal = await registry.create({ name: 'Blocked' }).then(() => null, (err: Error) => err.message)
+    expect(refusal).toMatch(/needs attention.*\(EISDIR\).*already occupies the copy path/s)
+    // Only the code, never the raw filesystem message.
+    expect(refusal).not.toMatch(/illegal operation|is a directory/i)
+
+    // #1416 review b: every LOAD reports the blocked storage, so an editor
+    // that remounts (a workspace switch) still shows it.
+    const workspaceId = state.workspaces[0]!.workspaceId as string
+    expect((await registry.get(workspaceId))?.storageWarning).toBe(AI_WORKSPACE_STORAGE_BLOCKED)
+    // Unblocked: the next save writes the copy and the notice clears.
+    await rm(join(root, `ai-workspaces.json.invalid-${createHash('sha256').update(source).digest('hex').slice(0, 16)}.json`), { recursive: true })
+    await registry.create({ name: 'Now' })
+    expect((await registry.get(workspaceId))?.storageWarning).toBeUndefined()
+    // It was never persisted.
+    expect(await readFile(statePath, 'utf8')).not.toContain('storageWarning')
   })
 
   it('warns on no ordinary write, and tells every workspace even when a listener throws', async () => {
@@ -353,6 +367,32 @@ describe('a write whose status refresh cannot be saved (#1285)', () => {
     expect(result).not.toHaveProperty('warning')
     expect(await readFile(filePath, 'utf8')).toBe('v2')
     expect(heard).toEqual(['workspace-1'])
+  })
+
+  it('tells every workspace holding the file, even when the first listener call throws', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-code-ai-workspace-fanout-'))
+    tempRoots.push(root)
+    const filePath = join(root, 'shared.txt')
+    await writeFile(filePath, 'v1')
+    const entry = (entryId: string) => ({
+      entryId, path: filePath, projectRoot: root, title: 'shared.txt', attachedAt: '2026-01-01T00:00:00.000Z',
+      status: { exists: true, readable: true, staleReason: null, size: 2, mtimeMs: null },
+    })
+    const workspace = (workspaceId: string) => ({
+      workspaceId, name: workspaceId, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', entries: [entry(`${workspaceId}-e`)],
+    })
+    const statePath = join(root, 'ai-workspaces.json')
+    await writeFile(statePath, JSON.stringify({ workspaces: [workspace('ws-a'), workspace('ws-b')] }))
+    const registry = new AiWorkspaceRegistry(statePath)
+    await registry.list()
+    const heard: string[] = []
+    registry.on('changed', (event: { workspaceId: string }) => {
+      heard.push(event.workspaceId)
+      throw new Error('event delivery failed')
+    })
+    const result = await registry.writeFile({ path: await realpath(filePath), text: 'v2' })
+    expect(result).toMatchObject({ ok: true })
+    expect(heard.sort()).toEqual(['ws-a', 'ws-b'])
   })
 
   it('gives advice that matches the cause when the owed copy cannot be written', async () => {

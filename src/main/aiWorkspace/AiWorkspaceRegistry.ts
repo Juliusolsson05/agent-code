@@ -167,11 +167,19 @@ export interface AiWorkspaceRegistry {
 export const AI_WORKSPACE_STATUS_NOT_SAVED =
   'The file was saved, but AI Workspace could not save its status. Other AI Workspace changes will fail until its storage is fixed.'
 
+/** The fixed notice `get` carries while saves are blocked by an owed copy. */
+export const AI_WORKSPACE_STORAGE_BLOCKED =
+  'AI Workspace cannot save changes until its storage is fixed: rows it could not read must be copied aside first, and that copy cannot be written.'
+
 export class AiWorkspaceRegistry extends EventEmitter {
   private readonly workspaces = new Map<string, AiWorkspaceRecord>()
   private loadPromise: Promise<void> | null = null
   /** The loaded file while set-aside rows are not yet preserved; see load(). */
   private owedCopy: { text: string; setAside: number } | null = null
+  // True after the owed copy last FAILED to be written, false once it is
+  // written. `get` reports it (see AI_WORKSPACE_STORAGE_BLOCKED): a save is
+  // refused exactly while a copy is owed and cannot be made.
+  private copyBlocked = false
   private saveQueue: Promise<void> = Promise.resolve()
   private readonly knownFilePaths = new Set<string>()
   private readonly gitContextCache = new Map<
@@ -268,7 +276,9 @@ export class AiWorkspaceRegistry extends EventEmitter {
     await this.ensureLoaded()
     const workspace = this.workspaces.get(workspaceId)
     if (!workspace) return null
-    return await this.refreshWorkspace(workspaceId)
+    const record = await this.refreshWorkspace(workspaceId)
+    // A copy, so the runtime-only field never reaches the persisted record.
+    return this.owedCopy && this.copyBlocked ? { ...record, storageWarning: AI_WORKSPACE_STORAGE_BLOCKED } : record
   }
 
   async attachFile(params: AiWorkspaceAttachFileParams): Promise<AiWorkspaceFileEntry> {
@@ -643,27 +653,34 @@ export class AiWorkspaceRegistry extends EventEmitter {
     // how to unblock it. Saves stay refused until the copy exists, because
     // the next save drops the unreadable rows.
     const copy = await preserveInvalidBytes(`${this.stateFile}.invalid`, text).catch(err => {
+      this.copyBlocked = true
       const code = (err as NodeJS.ErrnoException).code
       // WHY the advice depends on the code (#1416 review a): "clear what
       // occupies the path" is only true when something occupies it. A
       // missing directory, a permission or read-only refusal and a full disk
       // each need a different fix, and advice for the wrong one sends the
       // user looking for an occupant that does not exist.
-      const advice = code === 'EISDIR' || code === 'EEXIST' || code === 'ENOTDIR'
+      // ENOTDIR is NOT an occupant (#1416 review b): it means a component of
+      // the folder path is a file, so it falls to the generic advice. A
+      // read-only volume cannot be fixed by permissions.
+      const advice = code === 'EISDIR' || code === 'EEXIST'
         ? `Something already occupies the copy path next to ${this.stateFile}; move it away to continue.`
         : code === 'ENOENT'
           ? `The folder holding ${this.stateFile} is missing; restore it to continue.`
-          : code === 'EACCES' || code === 'EPERM' || code === 'EROFS'
+          : code === 'EACCES' || code === 'EPERM'
             ? `The folder holding ${this.stateFile} is not writable; fix its permissions to continue.`
-            : code === 'ENOSPC'
-              ? 'The disk is full; free some space to continue.'
-              : `Check that the folder holding ${this.stateFile} is writable to continue.`
+            : code === 'EROFS'
+              ? `The folder holding ${this.stateFile} is on a read-only volume; AI Workspace cannot save there.`
+              : code === 'ENOSPC'
+                ? 'The disk is full; free some space to continue.'
+                : `Check that the folder holding ${this.stateFile} exists and is writable to continue.`
       throw new Error(
         `AI Workspace storage needs attention: ${setAside} unreadable row(s) must be copied aside before saving, ` +
         `and the copy could not be written${code ? ` (${code})` : ''}. ${advice}`,
       )
     })
     this.owedCopy = null
+    this.copyBlocked = false
     console.warn(`[ai-workspace] set aside ${setAside} malformed row(s); original preserved at ${copy}`)
   }
 
