@@ -226,3 +226,25 @@ describe('AgentCodeCustomSkillsRow', () => {
     expect(screen.getByRole('group', { name: 'Custom skill review-code' })).toBeTruthy()
   })
 })
+
+// #1250 row 14: Reveal State File dropped main's { ok: false, message }.
+describe('AgentCodeCustomSkillsRow recovery actions', () => {
+  it('says why the state file could not be revealed', async () => {
+    const recovering: AgentCodeCustomSkillsSnapshot = {
+      ...savedSnapshot(),
+      recovery: { message: 'The custom skills state file could not be read.', stateFilePath: '/state/custom.json' },
+    }
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        auditAgentCodeCustomSkills: vi.fn().mockResolvedValue(recovering),
+        revealAgentCodeCustomSkillsRecoveryFile: vi.fn().mockResolvedValue({ ok: false, message: 'No managed skill recovery file exists.' }),
+      },
+    })
+    render(<AgentCodeCustomSkillsRow />)
+    await screen.findByText(/skill/)
+    fireEvent.click(screen.getByRole('button', { name: 'Manage Custom Skills…' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Reveal State File' }))
+    expect(await screen.findByText('No managed skill recovery file exists.')).toBeTruthy()
+  })
+})

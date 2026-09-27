@@ -1,4 +1,5 @@
 import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
+import { RECOVERY_RESET_FAILED, revealRecoveryFile } from '@renderer/features/settings/lib/recoveryStateActions'
 import { Alert } from '@renderer/components/ui/alert'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
@@ -197,7 +198,7 @@ export function AgentCodeConventionsRow() {
         <div className="rounded-slab flex flex-col gap-2 border border-danger px-2 py-2 text-[10px] text-danger">
           <span>{snapshot.recovery.message}</span>
           <div className="flex gap-2">
-            <Button type="button" variant="destructive-outline" size="xs" onClick={() => void window.api.revealAgentCodeConventionsRecoveryFile()}>
+            <Button type="button" variant="destructive-outline" size="xs" onClick={() => void revealRecoveryFile(window.api.revealAgentCodeConventionsRecoveryFile, setError)}>
               Reveal State File
             </Button>
             <Button
@@ -210,7 +211,7 @@ export function AgentCodeConventionsRow() {
                   confirmLabel: 'Reset State',
                   tone: 'danger',
                 }))) return
-                void window.api.resetAgentCodeConventionsRecovery().then(applyResult)
+                void window.api.resetAgentCodeConventionsRecovery().then(applyResult, () => setError(RECOVERY_RESET_FAILED))
               }}
             >
               Reset State

@@ -1,4 +1,5 @@
 import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
+import { RECOVERY_RESET_FAILED, revealRecoveryFile } from '@renderer/features/settings/lib/recoveryStateActions'
 import { Input } from '@renderer/components/ui/input'
 import { Alert } from '@renderer/components/ui/alert'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -517,7 +518,7 @@ function AgentCodeCustomSkillsModal({
             <div className="rounded-slab flex flex-col gap-2 border border-danger p-2 text-[10px] text-danger">
               <span>{current.recovery.message}</span>
               <div className="flex gap-2">
-                <Button type="button" variant="destructive-outline" size="xs" onClick={() => void window.api.revealAgentCodeCustomSkillsRecoveryFile()}>Reveal State File</Button>
+                <Button type="button" variant="destructive-outline" size="xs" onClick={() => void revealRecoveryFile(window.api.revealAgentCodeCustomSkillsRecoveryFile, setError)}>Reveal State File</Button>
                 <Button type="button" variant="destructive-outline" size="xs" onClick={async () => {
                   if (!(await requestConfirm({
                     title: 'Reset all unreadable Agent Code-managed skill state?',
@@ -525,7 +526,7 @@ function AgentCodeCustomSkillsModal({
                     confirmLabel: 'Reset State',
                     tone: 'danger',
                   }))) return
-                  void window.api.resetAgentCodeCustomSkillsRecovery().then(applyResult)
+                  void window.api.resetAgentCodeCustomSkillsRecovery().then(applyResult, () => setError(RECOVERY_RESET_FAILED))
                 }}>Reset State</Button>
               </div>
             </div>

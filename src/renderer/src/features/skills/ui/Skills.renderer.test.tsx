@@ -123,6 +123,20 @@ afterEach(() => {
 })
 
 describe('Settings → Skills grid (#1161)', () => {
+  // #1250 row 14: Reveal State File dropped main's { ok: false, message }.
+  it('says why the managed skill state file could not be revealed', async () => {
+    const recovering = { ...installed, recovery: { message: 'The managed skill state file could not be read.', stateFilePath: '/state/skills.json' } }
+    api.auditAgentCodeInstalledSkills.mockResolvedValue(recovering)
+    api.getAgentCodeInstalledSkills.mockResolvedValue(recovering)
+    useSkillsStore.setState({ installed: recovering })
+    Object.assign(window, { api: { ...window.api, revealAgentCodeInstalledSkillsRecoveryFile: vi.fn(async () => ({ ok: false, message: 'No managed skill recovery file exists.' })) } })
+    render(<SkillsGrid settings={DEFAULT_SETTINGS} onChange={vi.fn()} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Reveal State File' }))
+    expect(await screen.findByText('No managed skill recovery file exists.')).toBeTruthy()
+    api.auditAgentCodeInstalledSkills.mockResolvedValue(installed)
+    api.getAgentCodeInstalledSkills.mockResolvedValue(installed)
+  })
+
   it('shows columns for enabled providers that support skills, never Grok', async () => {
     render(<SkillsGrid settings={DEFAULT_SETTINGS} onChange={vi.fn()} />)
     await waitFor(() => expect(api.auditAgentCodeInstalledSkills).toHaveBeenCalled())
