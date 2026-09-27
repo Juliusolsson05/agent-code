@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -40,6 +40,13 @@ function service(): UserMcpService {
       claudeManagedPolicy: async () => managed,
     },
   })
+}
+
+// The token a LAUNCH would hand this server (q113: secrets are read bound to
+// the server's current destination, so this is the observable pairing).
+async function launchedToken(svc: UserMcpService, id: string): Promise<string | null> {
+  const resolution = await svc.resolveForLaunch({ provider: 'claude', overrides: {}, cwd: dir })
+  return resolution.servers.find(server => server.id === id)?.secrets['beeper-authorization'] ?? null
 }
 
 const beeper = (overrides: Partial<UserMcpSaveInput> = {}): UserMcpSaveInput => ({
@@ -383,7 +390,7 @@ describe('a secret step that fails midway keeps the previous secret (#1304, q108
     const [server] = (await restarted.snapshot()).servers
     expect(server?.id).toBe(id)
     expect(JSON.stringify(server)).toContain('localhost:23373')
-    expect(await storeOf(restarted).get(id, 'beeper-authorization')).toBe(TOKEN)
+    expect(await launchedToken(restarted, id)).toBe(TOKEN)
   })
 
   it('a delete whose clear fails after removing some blobs keeps the server AND its token', async () => {
@@ -396,7 +403,7 @@ describe('a secret step that fails midway keeps the previous secret (#1304, q108
     expect((await live.delete(id)).ok).toBe(false)
     const restarted = service()
     expect((await restarted.snapshot()).servers.map(server => server.id)).toEqual([id])
-    expect(await storeOf(restarted).get(id, 'beeper-authorization')).toBe(TOKEN)
+    expect(await launchedToken(restarted, id)).toBe(TOKEN)
   })
 })
 
@@ -517,6 +524,111 @@ describe('destination/secret pairing never mixes (#1304, q110)', () => {
     live.onChange(() => { throw new Error('broadcast failed') })
     const result = await live.save(beeper({ id, secrets: { 'beeper-authorization': 'bpr_live_new_token_3333' } } as Partial<UserMcpSaveInput>))
     expect(result.ok).toBe(true)
-    expect(await storeOf(service()).get(id, 'beeper-authorization')).toBe('bpr_live_new_token_3333')
+    expect(await launchedToken(service(), id)).toBe('bpr_live_new_token_3333')
+  })
+})
+
+
+// q113 (SECURITY, #1420 fresh review a): ORDER alone cannot hold the pairing
+// across a crash or a failed restore. A/T -> B/U with a failing prune rolled
+// the document back to A before U was removed, and a restart (or a failed
+// restore) then launched A with U. Each secret record is now bound to the
+// destination it was saved for, and a launch refuses a secret whose binding
+// does not match the document's current destination: fail closed, in both
+// directions, whatever state a crash or a failed restore leaves.
+describe('secrets are bound to their destination (#1304, q113)', () => {
+  type Store = Record<string, (...args: unknown[]) => Promise<unknown>>
+  const storeOf = (svc: UserMcpService) => (svc as unknown as { secrets: Store }).secrets
+  const OLD_URL = 'http://localhost:23373/v0/mcp'
+  const NEW_URL = 'https://evil.example/mcp'
+  const U = 'bpr_live_new_token_9999'
+  const deferred = () => { let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve }); return { gate, release } }
+  const at = (url: string) => ({ type: 'http', url, headers: { Authorization: 'Bearer ${input:beeper-authorization}' } })
+  async function pairing(svc: UserMcpService) {
+    const resolution = await svc.resolveForLaunch({ provider: 'claude', overrides: {}, cwd: dir })
+    return resolution.servers.map(server => [server.entry.type === 'http' ? (server.entry as { url: string }).url : '', server.secrets['beeper-authorization'] ?? null])
+  }
+  const wrongPair = (pairs: Array<Array<string | null>>) =>
+    pairs.some(([url, token]) => (url === OLD_URL && token === U) || (url === NEW_URL && token === TOKEN))
+
+  async function seeded() {
+    const live = service()
+    expect((await live.save(beeper())).ok).toBe(true)
+    return { live, id: (await live.snapshot()).servers[0]!.id }
+  }
+
+  it('a restart between the document rollback and the secret restore never launches the old address with the new token', async () => {
+    const { live, id } = await seeded()
+    const store = storeOf(live)
+    store.prune = async () => { throw new Error('prune failed') }
+    const realRestore = store.restoreServer!.bind(store)
+    const hold = deferred()
+    let reached!: () => void
+    const atRestore = new Promise<void>(resolve => { reached = resolve })
+    store.restoreServer = async (...args) => { reached(); await hold.gate; return realRestore(...args) }
+    const saving = live.save(beeper({ id, entry: at(NEW_URL), secrets: { 'beeper-authorization': U } } as Partial<UserMcpSaveInput>))
+    await atRestore
+    expect(wrongPair(await pairing(service()))).toBe(false)
+    hold.release()
+    expect((await saving).ok).toBe(false)
+    expect(wrongPair(await pairing(service()))).toBe(false)
+  })
+
+  it('a failed secret restore never leaves the old address with the new token', async () => {
+    const { live, id } = await seeded()
+    const store = storeOf(live)
+    store.prune = async () => { throw new Error('prune failed') }
+    store.restoreServer = async () => { throw new Error('restore failed') }
+    expect((await live.save(beeper({ id, entry: at(NEW_URL), secrets: { 'beeper-authorization': U } } as Partial<UserMcpSaveInput>))).ok).toBe(false)
+    expect(wrongPair(await pairing(live))).toBe(false)
+    expect(wrongPair(await pairing(service()))).toBe(false)
+  })
+
+  it('a token written for one destination is refused for another, read from disk after a restart', async () => {
+    const { live, id } = await seeded()
+    // Hand-craft the worst durable state: the document names the NEW address
+    // while the blob still holds the token saved for the OLD one.
+    const snapshotOld = await storeOf(live).snapshotServer!(id) as Map<string, Buffer>
+    expect((await live.save(beeper({ id, entry: at(NEW_URL), secrets: {} } as Partial<UserMcpSaveInput>))).ok).toBe(true)
+    await storeOf(live).restoreServer!(id, snapshotOld)
+    const restarted = service()
+    expect(await launchedToken(restarted, id)).toBeNull()
+    expect(wrongPair(await pairing(restarted))).toBe(false)
+  })
+
+  it('upgrades a secret written before binding to the destination its document names', async () => {
+    const live = service()
+    expect((await live.save(beeper({ secrets: {} } as Partial<UserMcpSaveInput>))).ok).toBe(true)
+    const id = (await live.snapshot()).servers[0]!.id
+    await mkdir(join(dir, 'mcp-secrets', id), { recursive: true })
+    await writeFile(join(dir, 'mcp-secrets', id, 'beeper-authorization.bin'), codec.encrypt(TOKEN))
+    expect(await launchedToken(service(), id)).toBe(TOKEN)
+  })
+
+  it('restores ciphertext with owner-only permissions', async () => {
+    const { live, id } = await seeded()
+    const store = storeOf(live)
+    const snapshot = await store.snapshotServer!(id) as Map<string, Buffer>
+    await store.restoreServer!(id, snapshot)
+    expect((await stat(join(dir, 'mcp-secrets', id, 'beeper-authorization.bin'))).mode & 0o777).toBe(0o600)
+  })
+
+  it('a launch requested while a save is running waits for that save', async () => {
+    const { live, id } = await seeded()
+    const store = storeOf(live)
+    const realClear = store.clearServer!.bind(store)
+    const hold = deferred()
+    let reached!: () => void
+    const atClear = new Promise<void>(resolve => { reached = resolve })
+    store.clearServer = async (...args) => { reached(); await hold.gate; return realClear(...args) }
+    const saving = live.save(beeper({ id, entry: at(NEW_URL), secrets: { 'beeper-authorization': U } } as Partial<UserMcpSaveInput>))
+    await atClear
+    let launched = false
+    const launching = pairing(live).then(result => { launched = true; return result })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(launched).toBe(false)
+    hold.release()
+    await saving
+    expect(await launching).toEqual([[NEW_URL, U]])
   })
 })

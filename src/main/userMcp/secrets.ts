@@ -26,6 +26,44 @@ import type { UserMcpSecretState } from '@shared/userMcp/types.js'
  * ids and input ids are both validated to `[A-Za-z0-9_-]`, so they are safe
  * path segments by construction.
  */
+/**
+ * Every record is BOUND to the destination it was saved for (#1304, q113).
+ *
+ * The plaintext that gets encrypted is `BOUND_PREFIX + JSON({ d, v })`: `d` is
+ * the server's destination identity (`userMcpDestination` of its entry) at the
+ * moment the secret was saved, `v` the secret. A read supplies the server's
+ * CURRENT destination and gets the value only if `d` matches; anything else
+ * reads as "not set", so launch refuses to attach the server.
+ *
+ * WHY at read time and not by write order: a destination change is several
+ * writes (the document, then each blob), and a crash or a failed rollback or
+ * restore can stop between any two. Two reviews found such a window in each
+ * direction: the NEW address with the OLD token, then the OLD address with
+ * the NEW token. Any ordering leaves one open. A binding check at every read
+ * holds whatever state is left on disk: a token only ever reaches the
+ * destination it was entered for.
+ *
+ * Records written before binding existed (plain value, no prefix) are
+ * upgraded once at load by `bindLegacy`, to the destination their document
+ * names at that moment. That pairing is exactly what the old code launched
+ * with. Until upgraded, an unbound record reads as not set (fail closed).
+ */
+const BOUND_PREFIX = 'agent-code/user-mcp-secret/v1:'
+
+function bindValue(destination: string, value: string): string {
+  return BOUND_PREFIX + JSON.stringify({ d: destination, v: value })
+}
+
+function unbindValue(plaintext: string): { destination: string; value: string } | null {
+  if (!plaintext.startsWith(BOUND_PREFIX)) return null
+  try {
+    const record = JSON.parse(plaintext.slice(BOUND_PREFIX.length)) as { d?: unknown; v?: unknown }
+    return typeof record.d === 'string' && typeof record.v === 'string' ? { destination: record.d, value: record.v } : null
+  } catch {
+    return null
+  }
+}
+
 export class UserMcpSecretStore {
   constructor(
     private readonly dir: string,
@@ -40,7 +78,29 @@ export class UserMcpSecretStore {
     }
   }
 
-  async get(serverId: string, inputId: string): Promise<string | null> {
+  /** The secret, only if it was saved for `destination` (see BOUND_PREFIX). */
+  async get(serverId: string, inputId: string, destination: string): Promise<string | null> {
+    const plaintext = await this.decrypted(serverId, inputId)
+    if (plaintext === null) return null
+    const record = unbindValue(plaintext)
+    if (!record || record.destination !== destination || record.value === '') return null
+    return record.value
+  }
+
+  /**
+   * Upgrade records written before binding to `destination` (once, at load).
+   * Only unbound records are touched; a bound record is never re-bound, so
+   * this cannot move a token to another destination.
+   */
+  async bindLegacy(serverId: string, inputIds: readonly string[], destination: string): Promise<void> {
+    for (const inputId of inputIds) {
+      const plaintext = await this.decrypted(serverId, inputId)
+      if (plaintext === null || plaintext === '' || unbindValue(plaintext) !== null) continue
+      await this.write(serverId, inputId, bindValue(destination, plaintext))
+    }
+  }
+
+  private async decrypted(serverId: string, inputId: string): Promise<string | null> {
     if (!this.available()) return null
     let ciphertext: Buffer
     try {
@@ -49,19 +109,23 @@ export class UserMcpSecretStore {
       return null
     }
     try {
-      const value = this.codec.decrypt(ciphertext)
-      return value === '' ? null : value
+      return this.codec.decrypt(ciphertext)
     } catch {
       // Left in place on purpose: if the keyring comes back, so does the value.
       return null
     }
   }
 
-  async set(serverId: string, inputId: string, value: string): Promise<void> {
+  /** Save `value` bound to `destination`, the destination it is for. */
+  async set(serverId: string, inputId: string, value: string, destination: string): Promise<void> {
     if (value === '') {
       await this.clear(serverId, inputId)
       return
     }
+    await this.write(serverId, inputId, bindValue(destination, value))
+  }
+
+  private async write(serverId: string, inputId: string, plaintext: string): Promise<void> {
     if (!this.available()) {
       throw new Error('Secure storage is not available on this system, so the secret cannot be saved.')
     }
@@ -69,7 +133,7 @@ export class UserMcpSecretStore {
     await mkdir(directory, { recursive: true, mode: 0o700 })
     const target = this.path(serverId, inputId)
     const temporary = `${target}.${process.pid}.${Date.now()}.tmp`
-    await writeFile(temporary, this.codec.encrypt(value), { mode: 0o600 })
+    await writeFile(temporary, this.codec.encrypt(plaintext), { mode: 0o600 })
     await rename(temporary, target)
   }
 
@@ -131,9 +195,9 @@ export class UserMcpSecretStore {
   }
 
   /** Presence and a last-4 hint only. The renderer never receives a value. */
-  async state(serverId: string, inputIds: readonly string[]): Promise<Record<string, UserMcpSecretState>> {
+  async state(serverId: string, inputIds: readonly string[], destination: string): Promise<Record<string, UserMcpSecretState>> {
     const entries = await Promise.all(inputIds.map(async id => {
-      const value = await this.get(serverId, id)
+      const value = await this.get(serverId, id, destination)
       // No hint for short values: the last four characters of a six-character
       // PIN are most of the secret.
       const state: UserMcpSecretState = value === null

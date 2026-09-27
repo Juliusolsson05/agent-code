@@ -113,6 +113,14 @@ export class UserMcpService {
       this.document = loaded.document
       this.storeProblem = loaded.problem
       this.readFailed = loaded.readFailed === true
+      // One-time upgrade of records saved before destination binding (q113),
+      // bound to the destination the loaded document names. Best effort: a
+      // record that cannot be upgraded stays unbound and reads as not set.
+      if (!this.readFailed) {
+        for (const server of this.document.servers) {
+          await this.secrets.bindLegacy(server.id, server.inputs.map(input => input.id), userMcpDestination(server.entry)).catch(() => {})
+        }
+      }
     })()
     return this.initialized
   }
@@ -227,7 +235,7 @@ export class UserMcpService {
       await this.persist()
       for (const [inputId, value] of Object.entries(input.secrets ?? {})) {
         if (server.inputs.some(candidate => candidate.id === inputId)) {
-          await this.secrets.set(server.id, inputId, value)
+          await this.secrets.set(server.id, inputId, value, userMcpDestination(server.entry))
         }
       }
       await this.secrets.prune(server.id, server.inputs.map(candidate => candidate.id))
@@ -280,7 +288,7 @@ export class UserMcpService {
       const server = this.document.servers.find(candidate => candidate.id === id)
       if (!server) return { ok: false, error: 'That server no longer exists.' }
       if (!server.inputs.some(input => input.id === inputId)) return { ok: false, error: `No secret named "${inputId}".` }
-      await this.secrets.set(id, inputId, value)
+      await this.secrets.set(id, inputId, value, userMcpDestination(server.entry))
       return { ok: true }
     })
   }
@@ -391,7 +399,8 @@ export class UserMcpService {
       const secrets: Record<string, string> = {}
       let missing: string | null = null
       for (const inputId of referencedInputIds(server.entry)) {
-        const value = await this.secrets.get(server.id, inputId)
+        // Bound read (q113): only a secret saved for this destination.
+        const value = await this.secrets.get(server.id, inputId, userMcpDestination(server.entry))
         if (value === null) {
           missing = inputId
           break
@@ -557,7 +566,7 @@ export class UserMcpService {
   ): Promise<UserMcpServerView> {
     const transport = transportOf(server.entry)
     const others = this.document.servers.filter(other => other.id !== server.id)
-    const secrets = await this.secrets.state(server.id, server.inputs.map(input => input.id))
+    const secrets = await this.secrets.state(server.id, server.inputs.map(input => input.id), userMcpDestination(server.entry))
     const problems = validateServer(server, others)
     for (const inputId of referencedInputIds(server.entry)) {
       if (secrets[inputId] && !secrets[inputId]!.set) {
