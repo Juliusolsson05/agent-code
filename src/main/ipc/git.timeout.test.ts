@@ -15,7 +15,7 @@ vi.mock('electron', () => ({
 }))
 vi.mock('@main/setup/toolchain.js', () => ({ getToolPath: () => 'git' }))
 
-type Answer = string | 'TIMEOUT'
+type Answer = string | 'TIMEOUT' | 'EXIT128'
 const git = vi.hoisted(() => ({ answer: (_cwd: string, _args: string[]): string => '', calls: [] as string[][] }))
 vi.mock('child_process', () => ({
   execFile: (_file: string, args: string[], options: { cwd: string }, callback: (error: unknown, value?: { stdout: string; stderr: string }) => void) => {
@@ -23,6 +23,9 @@ vi.mock('child_process', () => ({
     const answer = git.answer(options.cwd, args) as Answer
     if (answer === 'TIMEOUT') {
       setTimeout(() => callback(Object.assign(new Error('Command failed: git (timed out)'), { killed: true, signal: 'SIGTERM', code: null })), 0)
+    } else if (answer === 'EXIT128') {
+      // An ordinary git failure, as Node reports it: a non-zero exit, not killed.
+      setTimeout(() => callback(Object.assign(new Error('fatal: not a git repository'), { killed: false, signal: null, code: 128 })), 0)
     } else {
       setTimeout(() => callback(null, { stdout: answer, stderr: '' }), 0)
     }
@@ -91,6 +94,22 @@ describe('a git timeout in the Worktrees panel', () => {
     expect(await invoke('git:worktree-status', '/slow')).toEqual({ ok: false, gitMissing: false, timedOut: true })
     repo(() => undefined)
     expect(await invoke('git:worktrees', '/slow')).toMatchObject({ ok: true })
+  })
+})
+
+// #1429 review c: the timeout must be told apart from OTHER failures, or
+// every non-repository would read "git took too long", forever.
+describe('an ordinary git failure is not a timeout', () => {
+  it('keeps "not a repository" for a plain non-repository', async () => {
+    repo((_cwd, args) => (args[0] === 'rev-parse' || args[0] === 'worktree' ? 'EXIT128' : undefined))
+    expect(await invoke('git:status', '/plain')).toEqual({ ok: false, gitMissing: false, timedOut: false })
+    expect(await invoke('git:worktrees', '/plain')).toEqual({ ok: false, gitMissing: false, timedOut: false })
+  })
+
+  it('keeps a main row as main when its status timed out', async () => {
+    repo((cwd, args) => (cwd === '/repo' && args[0] === 'status' ? 'TIMEOUT' : undefined))
+    const result = await invoke('git:worktree-status', '/repo')
+    expect(row(result, '/repo')).toMatchObject({ statusTimedOut: true, category: 'main' })
   })
 })
 

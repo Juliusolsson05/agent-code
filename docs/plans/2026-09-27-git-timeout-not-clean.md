@@ -44,3 +44,9 @@ After this change, a timeout is recorded and said, and it never makes a worktree
 ## Review round 1 (a, b: FIX-BEFORE-MERGE)
 - **a1 / b1: `worktrees.read` (the control surface) dropped the timeout**, so an agent read a slow repo as "not a repository". It now reports `gitTimedOut`, and its description says so. Test through `execute` (which validates the output schema), with the real `loadWorktreeDump`. It fails on the previous head and kills b's surviving mutation (`gitTimedOut: false` in `loadWorktreeDump`).
 - **b2 / b3: other consumers of the plain list** (the conversation-picker family, worktree activity, the agent-activity repo root, renderer history context) still read a timed-out list as empty. Each self-heals on the next call, and none is part of the Worktrees panel and GitBar surfaces this row covers. Split into #1430, which names each consumer and the fix direction.
+- **c (test gaps; its reviewed head predates the control fix):**
+  - an ordinary git failure (exit 128, not killed) is pinned as NOT a timeout, for `git:status` and `git:worktrees` (it kills "every failure is a timeout");
+  - a timed-out `main` row keeps `main` (it kills the unconditional `review`);
+  - the `gitTimedOut` producer path is covered by the control test through the real `loadWorktreeDump`;
+  - the defensive `!timedOut` in the list cache rule is commented as such.
+  - The no-cache-on-timeout load cost is the intended trade.

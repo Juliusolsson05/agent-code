@@ -267,6 +267,8 @@ async function listWorktreesForCwdDetailed(cwd: string): Promise<{ worktrees: Wo
     .then(({ value: out, timedOut }) => {
       entry.timedOut = timedOut
       const worktrees = out.trim() ? parseWorktreePorcelain(out) : []
+      // `!timedOut` is defensive only: a timed-out list is '' and so already
+      // empty (#1429 review c). It keeps the rule readable if that changes.
       cacheableResult = worktrees.length > 0 && !timedOut
       if (cacheableResult) {
         // WHY alias every returned worktree path to the same probe: during
