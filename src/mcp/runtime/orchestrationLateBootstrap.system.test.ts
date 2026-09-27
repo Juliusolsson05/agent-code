@@ -18,10 +18,15 @@ const renderer = {
   heldCreate: null as null | Record<string, unknown>,
   // Whether a window still owns the parent (the lease the bridge checks).
   parentAttached: true,
+  // A replaced pane's id has no window any more (its lease went with it).
+  retired: new Set<string>(),
+  // The renderer refuses to persist the bootstrap mark.
+  failMark: false,
 }
 
 vi.mock('@main/window/windowRegistry.js', () => ({
-  windowForSession: () => (renderer.parentAttached ? 'test-window' : null),
+  windowForSession: (sessionId: string) =>
+    renderer.retired.has(sessionId) || (!renderer.parentAttached && sessionId === 'parent-1') ? null : 'test-window',
   sendToWindow: (_windowId: string, _channel: string, request: Record<string, unknown>) => {
     renderer.requests.push(request)
     if (request.type === 'create-agent') {
@@ -43,6 +48,10 @@ vi.mock('@main/window/windowRegistry.js', () => ({
         bridge.resolve({
           requestId: request.requestId as string, ok: true, type: 'ensure-agent-live', agent: agent(request.sessionId as string),
         } as never)
+        return
+      }
+      if (request.type === 'mark-bootstrap-prompt-delivered' && renderer.failMark) {
+        bridge.resolve({ requestId: request.requestId as string, ok: false, type: 'mark-bootstrap-prompt-delivered', message: 'workspace store is read-only' } as never)
         return
       }
       if (request.type === 'mark-bootstrap-prompt-delivered') {
@@ -75,6 +84,8 @@ beforeEach(() => {
   renderer.requests.length = 0
   renderer.heldCreate = null
   renderer.parentAttached = true
+  renderer.retired.clear()
+  renderer.failMark = false
   bridge = new OrchestrationBridge()
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
 })
@@ -309,6 +320,99 @@ describe('create_agent whose child starts after the 30 s deadline (#1370)', () =
       expect(journal.recordIncident).toHaveBeenCalledWith(expect.objectContaining({ reason: 'create_agent_late_bootstrap_parent_gone' }))
     } finally {
       await run.close()
+    }
+  })
+
+  // q85 / #1369 integration: the parent is REPLACED while the create is still
+  // outstanding (a reload during a 43 s start). The late delivery must still
+  // reach the child, and its bootstrap mark, which the handler addresses with
+  // the retired parent id it captured, must reach the successor's window.
+  it('delivers and marks the late bootstrap after the parent was replaced', async () => {
+    const deliverPromptToAgent = vi.fn(async () => ({ ok: true }))
+    const sessionManager = {
+      deliverPromptToAgent,
+      canWaitForPromptReadiness: vi.fn(() => true),
+      deliverPromptWhenReady: vi.fn(async () => ({ ok: true })),
+      getSessionKind: vi.fn(() => 'claude'),
+    }
+    const server = createBuiltInMcpServer(
+      { sessionId: 'parent-1', cwd: '/tmp/project', domains: ['orchestration'] },
+      { orchestrationBridge: bridge as never, sessionManager: sessionManager as never },
+    )
+    const client = new Client({ name: 'late-bootstrap-swap-test', version: '0.0.0' })
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    try {
+      await server.connect(serverTransport)
+      await client.connect(clientTransport)
+      const call = client.callTool({ name: 'orchestration_create_agent', arguments: { kind: 'claude', prompt: 'review the PR' } })
+      await vi.waitFor(() => expect(renderer.heldCreate).not.toBeNull())
+      await vi.advanceTimersByTimeAsync(30_000)
+      await call
+
+      // The parent pane is replaced: the renderer commits it and tells main.
+      renderer.retired.add('parent-1')
+      bridge.carryParent('parent-1', 'parent-2')
+      bridge.resolve({
+        requestId: renderer.heldCreate!.requestId as string, ok: true, type: 'create-agent',
+        agent: { ...agent('child-late'), orchestrationParentId: 'parent-2', orchestrationRootId: 'parent-2' },
+      } as never)
+      await vi.waitFor(() => expect(deliverPromptToAgent).toHaveBeenCalledTimes(1))
+      await vi.waitFor(() => expect(renderer.requests.map(request => request.type)).toContain('mark-bootstrap-prompt-delivered'))
+      const mark = renderer.requests.find(request => request.type === 'mark-bootstrap-prompt-delivered')!
+      expect(mark.parentSessionId).toBe('parent-2')
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  // q85: the late path's persistence warning. A punctual create returns it in
+  // the tool reply; a late create's reply is gone (its caller got "outcome
+  // unknown"), so the incident journal is its only reader.
+  it.each([
+    ['late', true],
+    ['punctual', false],
+  ] as const)('reports a failed bootstrap mark on the %s path', async (_name, late) => {
+    renderer.failMark = true
+    const recordIncident = vi.fn()
+    const deliverPromptToAgent = vi.fn(async () => ({ ok: true }))
+    const sessionManager = {
+      deliverPromptToAgent,
+      canWaitForPromptReadiness: vi.fn(() => true),
+      deliverPromptWhenReady: vi.fn(async () => ({ ok: true })),
+      getSessionKind: vi.fn(() => 'claude'),
+    }
+    const server = createBuiltInMcpServer(
+      { sessionId: 'parent-1', cwd: '/tmp/project', domains: ['orchestration'] },
+      { orchestrationBridge: bridge as never, sessionManager: sessionManager as never, appRunJournal: { recordIncident } as never },
+    )
+    const client = new Client({ name: 'late-bootstrap-mark-test', version: '0.0.0' })
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    try {
+      await server.connect(serverTransport)
+      await client.connect(clientTransport)
+      const call = client.callTool({ name: 'orchestration_create_agent', arguments: { kind: 'claude', prompt: 'review the PR' } })
+      await vi.waitFor(() => expect(renderer.heldCreate).not.toBeNull())
+      if (late) await vi.advanceTimersByTimeAsync(30_000)
+      const answer = () => bridge.resolve({ requestId: renderer.heldCreate!.requestId as string, ok: true, type: 'create-agent', agent: agent('child-mark') } as never)
+      if (!late) answer()
+      const text = ((await call).content as Array<{ text: string }>)[0]!.text
+      if (late) answer()
+      await vi.waitFor(() => expect(renderer.requests.map(request => request.type)).toContain('mark-bootstrap-prompt-delivered'))
+      const marked = () => recordIncident.mock.calls.map(([incident]) => incident as { kind: string; context: Record<string, unknown> })
+        .filter(incident => incident.kind === 'orchestration.bootstrap_mark_failed')
+      if (late) {
+        await vi.waitFor(() => expect(marked()).toHaveLength(1))
+        expect(marked()[0]!.context).toMatchObject({ sessionId: 'child-mark', message: 'workspace store is read-only' })
+      } else {
+        // The caller reads the warning; no duplicate incident.
+        expect(text).toContain('workspace store is read-only')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(marked()).toHaveLength(0)
+      }
+    } finally {
+      await client.close()
+      await server.close()
     }
   })
 })

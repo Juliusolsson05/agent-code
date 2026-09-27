@@ -56,3 +56,14 @@ The parent is left with an idle child that never received its brief. It was told
 | **c, major:** the renderer files the child before its create answer reaches main, so the parent can send first; adoption reset the child's record to zero and the late bootstrap sent a second brief | valid | Adoption keeps an existing delivery record. A system test sends through the real `orchestration_send_prompt` before the late answer: one delivery in all. Red at `ed86637b`. |
 | **c, minor:** a reservation collision (the parent's send in flight) ended the late loop | valid | A `reservation` / `delivery-in-flight` result on the late path retries, re-checking the landed count and the parent first. Red at `ed86637b`. |
 | **b, minor:** the stop test called `notePromptSubmitted` directly, so removing it from `send_prompt` survived | valid | The test sends through the real `orchestration_send_prompt` during a retry delay; the bookkeeping mutant is red. |
+
+## After #1369 merged (q85 / q86)
+
+- **Main merged into this branch** (`36830732`), because W2's patch builds on #1369. The one conflict was in `adoptLateResponse`: this PR's record-preserving set is kept, alongside #1369's `noteCreatedChild`, which files the child under the parent's LIVE id.
+- **W2's patch applied** (`temp/q85/1375-late-warning.patch`):
+  - a new incident kind `orchestration.bootstrap_mark_failed`, recorded on the late path only;
+  - the punctual path keeps its reply warning;
+  - the combined case: a late create whose parent is REPLACED during the late window.
+
+  Its `deliverBootstrap(…, late)` signature matched this PR's, so the ours side was kept for the signature, and W2's journal branch and tests were merged in.
+- **`isParentAttached` resolves through #1369's alias chain** (`currentParentId`): a parent replaced during the late window is carried to its successor, and the brief follows it. Only a parent with no live successor counts as gone. Without this, W2's replaced-parent test fails, because the brief would have been skipped as parent-gone. Removing the resolution is red.

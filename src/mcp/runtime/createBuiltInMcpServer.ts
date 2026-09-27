@@ -1174,14 +1174,30 @@ function orchestrationCreateAgentCallKey(
               promptSubmitted: true,
             })
           } catch (err) {
+            const warning = err instanceof Error && err.message.length > 0
+              ? err.message
+              : 'Could not persist orchestration bootstrap delivery state.'
+            // WHY an incident only on the late path (q85): a punctual create
+            // returns this warning to its caller, who reads it. A late create's
+            // result goes to `onLateCreate`, whose caller already got "outcome
+            // unknown" and has left; nothing reads its return value, and
+            // `adoptLateResponse` only journals a REJECTED continuation, so the
+            // warning vanished while the child could later be reported as
+            // never bootstrapped. The journal is the late path's only reader.
+            if (late) {
+              dependencies.appRunJournal?.recordIncident({
+                kind: 'orchestration.bootstrap_mark_failed',
+                severity: 'warn',
+                reason: 'create_agent_late_bootstrap',
+                context: { sessionId: agent.sessionId, parentSessionId: scope.sessionId, message: warning },
+              })
+            }
             return toolText({
               ok: true,
               agent,
               promptSubmitted: true,
               bootstrapPromptDelivered: true,
-              bootstrapPromptPersistenceWarning: err instanceof Error && err.message.length > 0
-                ? err.message
-                : 'Could not persist orchestration bootstrap delivery state.',
+              bootstrapPromptPersistenceWarning: warning,
             })
           }
         }
