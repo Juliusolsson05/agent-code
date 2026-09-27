@@ -285,6 +285,26 @@ describe('AgentActivityRecorder', () => {
     expect(summary.totals.agentMs).toBe(2 * HOUR)
   })
 
+  // #1342 verification b (round 3): a named agent with a tldrIdentity has an
+  // alias group whose representative is not its name. A closed hour went
+  // through the group while the turn still open kept its raw key, so the
+  // summary showed one working agent as two until the turn closed.
+  it('counts a working agent once when its closed and open intervals are keyed differently before grouping', async () => {
+    const { recorder, phase } = await mount()
+    const [window] = windows() as unknown as Array<{ workspace: { sessions: Record<string, Record<string, unknown>> } }>
+    window.workspace.sessions.lead = { ...window.workspace.sessions.lead, tldrIdentity: 'tldr-lead' }
+    recorder.updateWorkspace([window] as unknown as PersistedWindow[], { 'name-1': 'Ada' })
+    phase('lead', 'thinking')
+    vi.setSystemTime(T0 + HOUR)
+    phase('lead', 'idle')
+    phase('lead', 'thinking')
+    vi.setSystemTime(T0 + 2 * HOUR)
+
+    const summary = await recorder.summary('24h')
+    expect(summary.totals.agents.user).toBe(1)
+    expect(summary.projects[0].topAgents.map(agent => [agent.label, agent.agentMs])).toEqual([['Ada', 2 * HOUR]])
+  })
+
   // An agent that gets a name later: its tldrIdentity rows join the name.
   it('joins an agent\'s earlier rows when it gets a name', async () => {
     const { recorder, phase } = await mount()

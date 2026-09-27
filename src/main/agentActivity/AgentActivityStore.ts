@@ -344,6 +344,20 @@ export class AgentActivityStore {
     }
   }
 
+  /**
+   * The group representative for any agent key, under the aliases on disk.
+   * WHY public (#1342 verification b, round 3): closed intervals are grouped
+   * in readIntervals, but a summary also adds the intervals still OPEN, and
+   * those carry the raw key of the moment. Grouping only one side showed a
+   * working agent as two rows until its turn closed. Both sides must go
+   * through this one mapping.
+   */
+  async agentKeyGrouping(): Promise<(key: string) => string> {
+    await this.tail
+    const groups = this.groupKeys(await this.loadAliases())
+    return key => groups.get(key) ?? key
+  }
+
   /** Intervals that overlap [from, to). */
   async readIntervals(from: number, to: number): Promise<RecordedInterval[]> {
     await this.tail
@@ -351,7 +365,7 @@ export class AgentActivityStore {
     const firstMonth = monthKey(Date.UTC(new Date(from).getUTCFullYear(), new Date(from).getUTCMonth() - 1, 1))
     const lastMonth = monthKey(to)
     const out: RecordedInterval[] = []
-    const groups = this.groupKeys(await this.loadAliases())
+    const group = await this.agentKeyGrouping()
     for (const name of await this.monthFiles()) {
       const month = name.slice(0, 7)
       if (month < firstMonth || month > lastMonth) continue
@@ -359,7 +373,7 @@ export class AgentActivityStore {
       for (const line of parseJsonLines(await readFile(join(this.dir, name), 'utf8'))) {
         if (line.t === 'c' && isNumber(line.c)) {
           const context = parseContext(line)
-          if (context) contexts.set(line.c, { ...context, agentKey: groups.get(context.agentKey) ?? context.agentKey })
+          if (context) contexts.set(line.c, { ...context, agentKey: group(context.agentKey) })
         } else if (line.t === 'i' && isNumber(line.c) && isNumber(line.s) && isNumber(line.e)) {
           const context = contexts.get(line.c)
           if (context && line.e > from && line.s < to) out.push({ context, startedAt: line.s, endedAt: line.e })

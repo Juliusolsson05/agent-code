@@ -32,3 +32,4 @@
 - **Crash before the successor's row is saved.** No projection ever aliases it. The recorder now also takes the identity main registered at spawn (`BuiltInMcpHttpHost.sessionTldrIdentity`, read when the session starts), so the interval carries it from the start. The key is `agentNameId ?? tldrIdentity (projection) ?? identity at spawn ?? sessionId`.
 - **A failed alias write** was already fixed (steering q63, `f87bc413`).
 - Tests for each are red on `f87bc413`.
+- **b (round 3): the summary's still-open intervals kept raw keys** while closed ones were grouped, so a working agent showed twice until its turn closed. `AgentActivityStore.agentKeyGrouping()` is now the one mapping, used by `readIntervals` and by `summary` for open intervals. Test added; it is red without the open-interval grouping.

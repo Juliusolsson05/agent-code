@@ -162,9 +162,17 @@ export class AgentActivityRecorder {
       : earliestOpen === null ? firstClosed : Math.min(firstClosed, earliestOpen)
     const { from, to } = rangeBounds(range, now, recordingSince)
     const closed = await this.deps.store.readIntervals(from, to)
+    // Open intervals go through the same alias groups as the closed ones
+    // readIntervals returns, or one working agent counts twice until its turn
+    // closes (#1342 verification b, round 3).
+    const group = await this.deps.store.agentKeyGrouping()
     return summarizeAgentActivity({
       // Agents working right now count up to this moment.
-      intervals: [...closed, ...open.map(interval => ({ context: interval.context, startedAt: interval.startedAt, endedAt: now }))],
+      intervals: [...closed, ...open.map(interval => ({
+        context: { ...interval.context, agentKey: group(interval.context.agentKey) },
+        startedAt: interval.startedAt,
+        endedAt: now,
+      }))],
       range,
       now,
       suspensions: await this.deps.store.readSuspensions(),
