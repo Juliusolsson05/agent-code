@@ -183,6 +183,28 @@ describe('GoalLoopService drain (#1341)', () => {
     expect(store.writes).toBeGreaterThan(before)
   })
 
+  // #1371 review (b, round 1), a surviving mutation: interrupt()'s persist (a session removed or
+  // exited) was not pinned as tracked work, so an untracked write could outlive dispose.
+  it('dispose waits for an interrupt\'s persist', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
+    directories.push(directory)
+    const store = new GatedStore(join(directory, 'goal-loop.json'))
+    const { svc, manager } = await service(undefined, store)
+    await svc.startLoop('s1', { goal: 'G.', loopPrompt: 'P.' })
+    let open!: () => void
+    store.gate = new Promise(resolve => { open = resolve })
+    const before = store.writes
+    manager.emit('removed', { sessionId: 's1' })
+    let disposed = false
+    const disposing = svc.dispose().then(() => { disposed = true })
+    await new Promise(resolve => setImmediate(resolve))
+    expect(disposed).toBe(false)
+    open()
+    await disposing
+    expect(store.writes).toBeGreaterThan(before)
+    expect(svc.snapshot()['s1']).toMatchObject({ phase: 'paused', pauseReason: 'interrupted' })
+  })
+
   // #1371 review (b), a surviving mutation: nothing asserted that dispose cancels the timers it owns.
   it('dispose cancels a held loop\'s poll timer', async () => {
     const { svc, manager, processState } = await service()
