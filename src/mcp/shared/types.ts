@@ -194,6 +194,12 @@ export const PARENT_HELD_ONLY_BUILT_IN_MCP_DOMAINS: ReadonlySet<BuiltInMcpDomain
   // need the user's review, but a parent with only Orchestration must not be
   // able to hand a child a capability the user never gave the parent.
   'skills',
+  // #1451 review a: usage is OFF by default precisely so an agent reads the
+  // account's cross-provider quota only when the user said so. Without this,
+  // any agent with Orchestration could mint it for a child and read the
+  // numbers back through orchestration_read_agent. A parent may pass usage on
+  // only when it holds usage itself.
+  'usage',
 ])
 
 /**

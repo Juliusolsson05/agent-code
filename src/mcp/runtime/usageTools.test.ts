@@ -83,10 +83,11 @@ describe('usage MCP domain (#1339)', () => {
   // pinned beside the shipped list in settings/persistence.test.ts: that list
   // is renderer state, and importing it here would pull renderer files into
   // the node program.
-  it('is configurable on every provider and not gated', () => {
+  it('is configurable on every provider, not confirmation-gated, and parent-held-only', () => {
     expect(CONFIGURABLE_BUILT_IN_MCP_DOMAINS).toContain('usage')
     expect(CONFIRMATION_GATED_BUILT_IN_MCP_DOMAINS).not.toContain('usage')
-    expect(PARENT_HELD_ONLY_BUILT_IN_MCP_DOMAINS.has('usage')).toBe(false)
+    // #1451 review a: only a parent that holds usage may grant it to a child.
+    expect(PARENT_HELD_ONLY_BUILT_IN_MCP_DOMAINS.has('usage')).toBe(true)
     for (const provider of AGENT_PROVIDER_KINDS) expect(filterBuiltInMcpDomainsForProvider(provider, ['usage'])).toEqual(['usage'])
   })
 })

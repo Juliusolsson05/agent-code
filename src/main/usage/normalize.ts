@@ -114,7 +114,14 @@ export function sanitizeUsageError(err: unknown, fallback: string): string {
   if (message.includes('404')) return 'Provider usage endpoint was not found.'
   if (message.includes('429')) return 'Provider usage endpoint rate limited the request.'
   if (message.includes('Keychain')) return message
-  if (message.includes('auth.json')) return message
+  // Only the fixed messages Agent Code itself throws about an auth file keep
+  // their words (exact provider prefix). Anything else that mentions
+  // auth.json — an fs error carrying the ABSOLUTE credential path, or a
+  // provider's own message — is one curated sentence (#1451 review a, q22):
+  // the usage MCP domain hands this text to agents, and it was a loose
+  // substring gate any provider text could pass by naming the file.
+  if (/^(Codex|Grok|OpenCode|opencode) auth\.json /.test(message)) return message
+  if (message.includes('auth.json')) return 'Its auth file (auth.json) could not be read.'
   // The Grok expiry row is only useful because its copy tells the user the
   // actual fix (run any Grok session to refresh auth.json); the generic
   // fallback would erase that. Exact-prefix match, not a loose substring, so

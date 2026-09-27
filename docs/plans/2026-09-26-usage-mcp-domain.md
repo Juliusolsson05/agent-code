@@ -37,3 +37,23 @@ Each is red on main (the tool and domain do not exist).
 
 ## Out of scope
 Choosing providers automatically from quota (the issue's separate follow-up).
+
+## Review round 1 (a: FIX-BEFORE-MERGE, b: MERGE-READY)
+
+- **a (major): an agent with only Orchestration could mint `usage` for a
+  child** and read the quota back.
+  - `usage` is now in `PARENT_HELD_ONLY_BUILT_IN_MCP_DOMAINS`: a parent
+    passes it on only when it holds it.
+  - Pinned through the real `orchestration_create_agent`. Removing the
+    entry turns 2 tests red.
+- **a (minor): an auth-file error carried the absolute credential path.**
+  `sanitizeUsageError` passed ANY message containing `auth.json`, so an fs
+  error with the path, or a provider text naming the file, went through.
+  - Only our own fixed "<Provider> auth.json …" messages keep their words.
+    Everything else is "Its auth file (auth.json) could not be read."
+    (q22).
+  - This also changes the Usage screen for the better.
+- **a (surviving mutation), residual:** `index.ts` composing
+  `readUsageSnapshotForTools({ force: true })` is not caught. The
+  composition line is untested, but the tool has no `force` input, and the
+  shared reader's default is no force.
