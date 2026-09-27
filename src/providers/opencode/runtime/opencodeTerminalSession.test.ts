@@ -198,6 +198,41 @@ describe('OpencodeTerminalSession', () => {
     expect(pty.write).not.toHaveBeenCalled()
   })
 
+  // Steering q97: the pre-paint hold is bounded, and what it cannot hold is
+  // REFUSED (write returns false, which main reports), never silently dropped.
+  it('refuses a paste larger than the pre-paint hold, and keeps what it already held', async () => {
+    const pty = fakePty()
+    ptyState.spawn.mockReturnValue(pty)
+    const { session } = create({ cwd: '/workspace', resumeSessionId: 'ses_123' })
+    await session.start()
+    expect(session.write('typed')).toBe(true)
+    expect(session.write('x'.repeat(64 * 1024))).toBe(false)
+    pty.emitData('\x1b[?1049h')
+    expect(pty.write.mock.calls.map(call => call[0])).toEqual(['typed'])
+  })
+
+  it('refuses the 257th held chunk', async () => {
+    const pty = fakePty()
+    ptyState.spawn.mockReturnValue(pty)
+    const { session } = create({ cwd: '/workspace', resumeSessionId: 'ses_123' })
+    await session.start()
+    for (let i = 0; i < 256; i += 1) expect(session.write('k')).toBe(true)
+    expect(session.write('k')).toBe(false)
+  })
+
+  it('clears held input when the TUI exits before painting', async () => {
+    const pty = fakePty()
+    ptyState.spawn.mockReturnValue(pty)
+    const { session } = create({ cwd: '/workspace', resumeSessionId: 'ses_123' })
+    await session.start()
+    session.write('x'.repeat(1024))
+    pty.emitExit({ exitCode: 1, signal: 0 })
+    await vi.waitFor(() => expect(session.isExited()).toBe(true))
+    expect((session as unknown as { heldInput: string[] }).heldInput).toEqual([])
+    // No backend any more: refused, not held.
+    expect(session.write('after exit')).toBe(false)
+  })
+
   it('reports a degraded durable channel instead of failing the pane', async () => {
     const pty = fakePty()
     ptyState.spawn.mockReturnValue(pty)

@@ -4058,8 +4058,11 @@ export class SessionManager extends EventEmitter {
     // The origin the caller supplies is as precise as the boundary can be
     // without a contract change; see InputWriteOrigin.
     this.recordInputWrite(sessionId, data, origin)
-    entry.session.write(data)
-    return true
+    // A session may refuse input it cannot take (#1114: OpenCode Terminal's
+    // bounded hold before its TUI paints). Refused input was not written, so
+    // the caller is told, exactly as for a missing backend above. The journal
+    // row above still says the write was attempted, which it was.
+    return entry.session.write(data) !== false
   }
 
   private writeReserved(

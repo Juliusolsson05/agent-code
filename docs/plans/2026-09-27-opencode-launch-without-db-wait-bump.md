@@ -20,3 +20,11 @@ An OpenCode pane's TUI spawns without waiting up to 20 s for the database-path l
 
 ## Verification boundary
 Unit and system tests with fake PTYs and the real package. The app is not launched. The real TUI's "paint before reading input" ordering is the package's stated assumption (recorded sessions support it). Holding input makes the host side of it true by construction.
+
+## Review round 1 and steering q97
+- **b and c (blocker, package):** after a ladder recovery the late report fired before a BUSY-deferred reader positioned, so the app's one heal could run too early and a turn was lost. Fixed in the package (opencode-terminal-headless#11: the report comes from `onPositioned`). This PR bumps to that merge.
+- **b (major, app): the pre-paint hold was unbounded, and exit did not clear it.**
+  - **Bounded:** 256 chunks (the renderer's own pre-attach queue cap) and 64 KiB. Past either bound the NEW input is refused, so what was accepted stays in order.
+  - **Refused, never silently dropped:** `OpencodeTerminalSession.write` returns `false`, `AgentSession.write` may return `false`, and `SessionManager.write` reports it. `AgentTerminalLeaf` shows a coalesced pane toast ("That input didn't reach the agent…") when `sendInput` answers `false`. The same toast now covers the older refusals keystrokes were silently dropped for (no backend, a prompt delivery holding the composer).
+  - **Cleared on exit** as well as on stop.
+  - Tests (each red on the previous head): a 64 KiB paste refused while earlier input is kept; the 257th chunk refused; exit clears the hold; the manager reports a refusal; the leaf toasts once.

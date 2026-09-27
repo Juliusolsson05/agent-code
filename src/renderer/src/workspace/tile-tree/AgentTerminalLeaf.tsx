@@ -318,8 +318,23 @@ export function AgentTerminalLeaf({
       // Replay-aware, coalescing outgoing path — see terminalInputForwarder.ts
       // (#745) for why replies xterm generates while parsing the replay must
       // never reach the provider and why same-tick chunks share one IPC call.
+      // WHY a refusal is shown (#1114, steering q97): main now says `false`
+      // when a session refused the input rather than taking it, e.g. an
+      // OpenCode terminal whose TUI has not painted yet and whose bounded
+      // pre-paint hold is full. Dropping that silently was the one thing the
+      // bound must not do. The same answer covers the older refusals
+      // (no backend, a prompt delivery holding the composer), which were
+      // silent for keystrokes too. Coalesced: a held key or a burst of
+      // refused chunks is one message, not a stack of them.
+      let lastRefusalToastAt = 0
       const forwarder = createTerminalInputForwarder(data => {
-        void window.api.sendInput(sessionId, data)
+        void window.api.sendInput(sessionId, data).then(accepted => {
+          if (accepted !== false || disposed) return
+          const now = Date.now()
+          if (now - lastRefusalToastAt < 3000) return
+          lastRefusalToastAt = now
+          showPaneToastRef.current(sessionId, "That input didn't reach the agent. Wait for the terminal to start, then try again.")
+        }, () => {})
       })
       offTextPaste = registerTerminalPasteTarget(sessionId, {
         isActive: () => !disposed && focusedRef.current && dimensionActiveRef.current,

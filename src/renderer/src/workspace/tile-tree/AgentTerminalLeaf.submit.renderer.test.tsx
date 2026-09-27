@@ -166,6 +166,7 @@ describe('AgentTerminalLeaf Mouse Mode Submit', () => {
     resize.mockClear()
     sendInput.mockClear()
     workspace.acknowledgeSession = vi.fn()
+    workspace.showPaneToast = vi.fn()
 
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
       const id = ++nextFrameId
@@ -207,6 +208,27 @@ describe('AgentTerminalLeaf Mouse Mode Submit', () => {
     await act(async () => { await Promise.resolve() })
 
     expect(sendInput).toHaveBeenCalledWith('session-1', '\r')
+  })
+
+  // #1114 / steering q97: main answers `false` when the session refused the
+  // input (an OpenCode terminal's full pre-paint hold, a missing backend). The
+  // pane says so once, instead of dropping it silently.
+  it('tells the user, once, when the agent refuses terminal input', async () => {
+    settings.mouseModeEnabled = true
+    sendInput.mockResolvedValue(false)
+    render(leaf())
+    act(() => flushAnimationFrames())
+    await act(async () => {
+      attach.resolve('')
+      await attach.promise
+    })
+    const button = screen.getByRole('button', { name: 'Send' })
+    fireEvent.click(button)
+    fireEvent.click(button)
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(workspace.showPaneToast).toHaveBeenCalledTimes(1)
+    expect(workspace.showPaneToast).toHaveBeenCalledWith('session-1', "That input didn't reach the agent. Wait for the terminal to start, then try again.")
+    sendInput.mockResolvedValue(undefined)
   })
 
   it('queues a pre-attach Submit and delivers it once attach lands', async () => {

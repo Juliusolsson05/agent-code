@@ -575,7 +575,11 @@ export interface AgentSessionEmitter {
 export interface AgentSession extends AgentSessionEmitter {
   start(): Promise<{ projectDir?: string } | void>
   stop(): Promise<void>
-  write(data: string): void
+  /** `false` = the session refused the input (nothing was written or held);
+   *  anything else = accepted. Sessions that never refuse return nothing.
+   *  SessionManager.write reports a refusal to its caller, which tells the
+   *  user (OpenCode Terminal's bounded pre-paint hold, #1114). */
+  write(data: string): void | boolean
   resize(cols: number, rows: number): void
 
   /** Optional: does the underlying process have a pid we can display /
