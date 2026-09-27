@@ -67,11 +67,9 @@ the surviving chunks as one continuous answer.
   tests use synthetic SSE frames in the recorded shape
   (`ClaudeProxyAdapter.clientDisconnect.test.ts`), and so will these.
 
-## Decisions (defaults taken; UNCONFIRMED until the manager or owner says otherwise)
+## Decisions (5 is OWNER-APPROVED; 3 is still UNCONFIRMED; the rest are rulings)
 
-1. **Wording:** "Some live output was not captured" (the issue's own
-   example). It claims nothing about the transcript, which may well be
-   complete. UNCONFIRMED.
+1. **Wording:** superseded by decision 5.
 2. **What gets sealed:** every flow the adapter is tracking at the gap
    point.
    - Streaming flows are sealed with the new interruption
@@ -90,24 +88,31 @@ the surviving chunks as one continuous answer.
    phase. Same trade as #1040. UNCONFIRMED.
 4. **Where the gap is placed:** at its true position in the line order,
    with a package change. We don't approximate it app-side.
-5. **How long the marker stays:** #963 and #1040's markers are WORK-SLOT
-   lifecycle candidates (`collectLifecycleCandidates`). They show only
-   while the pane is idle and the sealed turn is the newest semantic turn,
-   and they give way to the work chip as soon as the agent works again. For
-   an Esc (#1040) the turn is over, so the marker stays. A gap usually hits
-   mid-turn, and the next tool round-trip starts a new message within
-   seconds, so a work-slot marker may only flash.
-   - **Default (A):** the work-slot marker, the #1040 template. It is
-     cheap, consistent, and visible whenever the gap ends the visible
-     activity. The always-on `claude.proxy_transport_gap` incident is the
-     durable record.
-   - **Alternative (B):** a row anchored in the feed history at the sealed
-     turn, which survives later turns. The ledger would then need to
-     render interruption markers for archived turns, not only the newest.
-     That is a larger change to how archived semantic turns give way to
-     JSONL rows.
-   - A is UNCONFIRMED and asked of the manager. B is a follow-up if
-     wanted.
+5. **How long the marker stays: OWNER-APPROVED (B6 proxy, 2026-09-27):
+   option B**, a DURABLE feed-history row (temp/manager/assign/w3-1381-decision.md).
+   The owner's rule is that data loss is never hidden. A work-slot marker
+   (option A) would vanish once the agent worked again, so it would hide
+   the loss from anyone reviewing later. The row reads **"Part of this
+   response was not captured (HH:MM:SS–HH:MM:SS)"** and supersedes the
+   decision-1 wording. It persists after later turns and survives a
+   renderer reload. It is one row kind, adds no new UI surface, and uses
+   the existing muted MarkerRow styling.
+   - Ruling: the row is held by MAIN in memory, per session. It is not
+     written to disk: main outlives a renderer reload, which is the
+     rebuild the decision names. On-disk feed rows are what the owner
+     removed in #1235 (the ghost log). The always-on
+     `claude.proxy_transport_gap` incident is already the on-disk record.
+     Cost if wrong: after an app restart, the row is gone (the incident
+     stays).
+   - Ruling: the span is app-clock time, from `since` (when the tail was
+     last caught up, i.e. the previous poll that completed) to `until`
+     (when the gap was detected). Wire events carry no timestamp, and the
+     lost events were written inside that window. Cost if wrong: the
+     window is wider than the true loss, never narrower.
+   - Ruling: the #1040-style work-slot marker from 91b05b03 is withdrawn
+     (one row kind). The fold still keeps `interruption: 'transport-gap'`
+     on the turn, so the sealed turn reads as cut off rather than
+     finished.
 
 ## Change
 
@@ -120,8 +125,10 @@ the surviving chunks as one continuous answer.
   - `settleBelow` records `out.lines.length` at entry, which is the
     position after the old tail and before `.1`/live.
 - `ProxyServer.pollEventsOnce` emits lines and `transport-gap` interleaved
-  at each gap's index. The payload stays `{ lostGenerations }`, per gap.
-  The console.warn is unchanged.
+  at each gap's index. The payload becomes `{ lostGenerations, since,
+  until }` (app-clock ms): `since` = when the previous poll completed (the
+  tail was caught up then; null before the first), and `until` = now. The
+  console.warn is unchanged.
 - `ClaudeProxyAdapter.sealFlowsForTransportGap()` (public, synchronous):
   - streaming flows → `reapStaleActiveFlow(state, 'transport-gap')`;
   - every other tracked flow is dropped.
@@ -133,18 +140,34 @@ the surviving chunks as one continuous answer.
 - `ClaudeSession.proxyGapHandler` calls
   `this.headless?.proxy?.sealFlowsForTransportGap()` BEFORE re-emitting.
   The seal is synchronous, so the `turn_stopped` lands before any
-  post-gap event.
-- Renderer: `'transport-gap'` is added beside `'transport-error'` at every
-  #1040 touchpoint:
-  - `foldEvent`;
-  - `SemanticTurn.interruption`;
-  - `collectLedgerInput` (`gapInterruptedTurnId`, its own statics key);
-  - the model types;
-  - ledger items;
-  - the render model;
-  - `Feed.tsx` (a `MarkerRow` with the sentence above);
-  - observations;
-  - the redact enum and invariants.
+  post-gap event. The re-emit carries `{ lostGenerations, since, until }`.
+- `SessionManager`:
+  - on a gap, also appends a record to a bounded, per-session,
+    in-memory list (`TransportGapRecord = { id, since, until,
+    lostGenerations }`; the cap is the newest 50);
+  - emits `transport-gap {sessionId, gap}`;
+  - clears the list with the session's other cached state
+    (`cleanupSessionState`);
+  - `getTransportGaps(sessionId)` answers the reseed.
+- IPC:
+  - `session:transport-gap`, forwarded by the session feed tap like
+    `session:conditions`, so the phone gets it too;
+  - `session:reseed-transport-gaps(sessionIds)`, mirroring
+    `session:reseed-conditions`: the owning window gets every held record
+    re-sent on the live channel.
+  - Preload and `SessionFeed.onSessionTransportGap` are added to both
+    transports.
+- Renderer:
+  - the runtime holds `transportGaps: TransportGapRecord[]`, de-duplicated
+    by `id` because a reseed replays records already held;
+  - `collectLedgerInput` turns each record into a committed-plane
+    candidate with `timestampMs = since ?? until`, ordered among entries
+    like a provider notice;
+  - one row kind, `transport-gap`, rendered as the existing muted
+    `MarkerRow`: "Part of this response was not captured (HH:MM:SS–HH:MM:SS)";
+  - `foldEvent` keeps `interruption: 'transport-gap'`, with the model
+    types, invariants and redact to match;
+  - the reseed runs where conditions are reseeded.
 - The submodule pointer is bumped to the merged package commit, with a
   lockfile resync.
 
@@ -167,9 +190,13 @@ the surviving chunks as one continuous answer.
   Before the fix there is no such method.
 - App `claudeSession` test: a proxy `transport-gap` seals before the
   re-emit (order pinned).
-- App renderer: `foldEvent` keeps `'transport-gap'`, and the ledger/feed
-  item renders the sentence. Pinned the way #1040's
-  `ledgerFeedItems.test.ts` does it.
+- App `SessionManager`: a gap is recorded, bounded, returned by
+  `getTransportGaps`, and cleared with the session.
+- App end to end (the `turnClockAcrossSleep.test.ts` harness, driving the
+  REAL package adapter into the reducer and feed items): a gap mid-stream
+  seals the turn, and the durable row sits at its time among the entries.
+  It STAYS after a later turn completes, and it is back after the runtime
+  is rebuilt from a reseed (the reload).
 
 ## Verification
 
