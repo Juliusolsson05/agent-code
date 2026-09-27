@@ -13,7 +13,7 @@
 ## Decisions (defaults)
 1. **A failed status refresh after a successful write does not fail the write.** It returns `ok: true` with an optional `warning` on the success branch of `AiWorkspaceWriteFileResult`, documented as "the file IS written; do not retry". It logs the error, and still emits `file-written` to every workspace holding the file.
 2. **The owed-copy invariant is unchanged.** The state file is still never saved while a copy is owed.
-3. **A refused save explains itself.** `preserveOwedCopy` rewrites a copy failure: "AI Workspace storage needs attention: N unreadable row(s) must be copied aside before saving, and the copy next to <state file> could not be written (<code>). Clear whatever occupies that copy path to continue." Only the errno code is kept, not the raw text.
+3. **A refused save explains itself.** `preserveOwedCopy` rewrites a copy failure: "AI Workspace storage needs attention: N unreadable row(s) must be copied aside before saving, and the copy could not be written (<code>). <advice for that code>" (the advice names the state file's folder) Only the errno code is kept, not the raw text.
 
 ## Tests (fail-first, `AiWorkspaceRegistry.test.ts`)
 The input is the real recorded workspace state. One real entry is pointed at a temp file (the recorded paths are redacted), and one real workspace is made malformed so a copy is owed. The copy path is blocked with a directory.
@@ -36,3 +36,9 @@ The input is the real recorded workspace state. One real entry is pointed at a t
   - appending the raw error text to the refusal (asserted absent);
   - stopping the fan-out after the first workspace (two-workspace test);
   - dropping `get`'s notice.
+
+## Review c (at 589d42a9; MERGE-READY)
+Test-strength notes, not defects:
+- The emit on the warning path and the fan-out are now pinned. The two-workspace listener test landed in `d8f1eae6`.
+- Four of the six advice branches (EACCES/EPERM, EROFS, ENOSPC, generic) have no test. They are not reachable portably from a unit test without mocking the filesystem module.
+- The quoted refusal sentence in this plan and the body is corrected to the code's wording, and a test title is fixed.

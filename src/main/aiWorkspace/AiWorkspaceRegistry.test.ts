@@ -351,7 +351,7 @@ describe('a write whose status refresh cannot be saved (#1285)', () => {
     expect(await readFile(statePath, 'utf8')).not.toContain('storageWarning')
   })
 
-  it('warns on no ordinary write, and tells every workspace even when a listener throws', async () => {
+  it('gives no warning on an ordinary write, and a throwing listener does not fail it', async () => {
     // #1416 review a: a throwing `changed` listener (the production one
     // broadcasts to every window) turned a landed write into `ok: false`,
     // and stopped the second workspace hearing about it.
