@@ -1,5 +1,5 @@
 {
-  "provenance": "ac_agents_list on the owner's live window, 2026-09-19, through Agent Code's own control MCP. 33 sessions in total across 3 projects; the 11 below are a representative slice (every provider, every placement shape, both title sources). Session ids and tab ids are truncated to 8 characters; nothing else is edited. The rambling titles are verbatim, because they are the finding.",
+  "provenance": "ac_agents_list on the owner's live window, 2026-09-19, through Agent Code's own control MCP. 33 sessions in total across 3 projects; the 11 below are a representative slice (every provider, every placement shape, both title sources). Session ids and tab ids are truncated to 8 characters, and the private project name is a same-length placeholder (`project-c`; #1296); nothing else is edited. The rambling titles are verbatim, because they are the finding.",
   "totals": {
     "sessions": 33,
     "projects": 3,

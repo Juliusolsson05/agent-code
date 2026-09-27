@@ -1,5 +1,5 @@
 {
- "provenance": "Captured 2026-09-20 from a live Agent Code window through its own control MCP (`ac_agents_list` for identity and placement, `orchestration_list_agents` for the runtime attention fields of this window's orchestration children). Session and tab ids are truncated to 8 characters; nothing else is edited. Titles are verbatim, because they are the finding \u2014 the same reason owner-fleet-2026-09-19.json keeps its rambling ones.",
+ "provenance": "Captured 2026-09-20 from a live Agent Code window through its own control MCP (`ac_agents_list` for identity and placement, `orchestration_list_agents` for the runtime attention fields of this window's orchestration children). Session and tab ids are truncated to 8 characters, and private project names are same-length placeholders (`project-c`, `project`; #1296); nothing else is edited. Titles are verbatim, because they are the finding \u2014 the same reason owner-fleet-2026-09-19.json keeps its rambling ones.",
  "whyThisFleetIsTheRightEvidence": "48 sessions in one window, 35 of them orchestration children created by one parent during a single working session. It carries every attention state the redesign has to separate: a child still thinking, 30+ finished children nobody has closed, parked pool sessions whose label falls back to a prompt fragment or a cwd, terminals and an extension view that are not agents at all, and ONE STRANDED CHILD (ba61a050) that never received its bootstrap prompt \u2014 `promptSubmitted: false`, `messageCount: 0`, `lifecycleState: waiting` \u2014 which is #854 sitting in a real fleet.",
  "totals": {
   "sessionsInWindow": 48,
@@ -49,10 +49,10 @@
    "sessionId": "9bb36de4",
    "displayLabel": "C47",
    "title": "",
-   "displayedTitle": "startup",
+   "displayedTitle": "project",
    "provider": "claude",
    "providerRuntime": null,
-   "project": "startup",
+   "project": "project",
    "placements": [
     {
      "kind": "project",
@@ -65,10 +65,10 @@
    "sessionId": "1220cbcb",
    "displayLabel": "C48",
    "title": "",
-   "displayedTitle": "startup",
+   "displayedTitle": "project",
    "provider": "opencode",
    "providerRuntime": "terminal",
-   "project": "startup",
+   "project": "project",
    "placements": [
     {
      "kind": "project",

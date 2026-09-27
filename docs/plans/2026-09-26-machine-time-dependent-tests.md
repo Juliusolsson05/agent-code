@@ -49,11 +49,27 @@ that leak developer data. Each item below is taken from the issue, with its curr
    `/Users/juliusolsson` paths and private project names the issue lists, it held **queued prompts,
    drafts, prompt suggestions, sub-agent task descriptions and streaming baselines** (read in full,
    per q36).
-   - **Fix:** same-length redaction. Text fields are filled with `x` at their own length. The home
-     user and non-Agent-Code project names become same-length placeholders, including in object keys.
-     The two small fleet fixtures had one private project name each, replaced the same way.
-   - The extractor (`scripts/extract-agent-activity-runtimes.mts`) now applies the same pass, so a
-     regeneration stays redacted.
+   - **Fix:** same-length redaction, owned by `scripts/agent-activity-redaction-policy.ts`, which the
+     extractor imports.
+     - Text fields, and every `branch`, are filled with `x` at their own length.
+     - The home user becomes a same-length placeholder.
+     - Each distinct non-Agent-Code project becomes its **own** same-length placeholder (`p0---`,
+       `p1-----`, …), including in object keys. The rest of a path under it is x-filled, keeping the
+       separators.
+   - **Review of #1353 (q70):** the first committed file had been touched up by hand, so it wasn't the
+     script's output. The script also mapped same-length names to one placeholder, and it left branch
+     names and worktree suffixes in place.
+     - The file is now regenerated from the pre-redaction corpus in git history (`15e43abe^`) with the
+       policy module, and is byte-identical to that regeneration.
+     - `testing/unit/agentActivityRedactionPolicy.test.ts` pins distinct identities, filled paths and
+       branches, the refusal of too-short names, and that the committed file is a fixed point of the
+       policy.
+     - Every surviving string field was audited by key.
+   - The fleet fixtures:
+     - `startup` in live-fleet and `bringdown` in both are same-length placeholders.
+     - Their `provenance` now says so.
+     - Their titles stay verbatim, per the fixtures' own stated decision ("they are the finding").
+       Some are the owner's prompt fragments; that is flagged for the owner, not changed here.
    - The row model reads none of that text: the 32 agent-activity tests pass unchanged.
    - **Owner decision (not done here):** the original content remains in `main`'s git history.
      Removing it means rewriting `main`.
