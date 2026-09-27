@@ -1,4 +1,5 @@
 import { tldrIdentityForReplacement, tldrIdentityForSession } from '@renderer/features/tldr/identity'
+import { carryWorkflowRuns } from '@renderer/workspace/hook/actions/workflowCarry'
 import { hasReportingDomain } from '@shared/types/tldr'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
@@ -1814,21 +1815,6 @@ function stopGoalLoops(oldIds: readonly string[]): void {
  *  Fire-and-forget: a failed carry leaves the loop where it was (the
  *  pre-#1279 behaviour), never blocks the swap, and main refuses to overwrite
  *  a loop the successor already has. */
-/** Tell main that each replaced pane's workflow runs now belong to its
- *  successor (#1280), so its workflow cards and Active navigation survive the
- *  swap and a restart. Fire-and-forget like carryGoalLoops: a failed carry
- *  leaves the runs where they were, today's behaviour, and never blocks the
- *  swap. */
-function carryWorkflowRuns(idMap: ReadonlyMap<string, string>): void {
-  const carry = window.api?.carryWorkflowRuns
-  if (!carry) return
-  for (const [oldId, newId] of idMap) {
-    void carry(oldId, newId).catch(error => {
-      console.warn('[workflows] carry to the replacement session failed:', error)
-    })
-  }
-}
-
 function carryGoalLoops(idMap: ReadonlyMap<string, string>): void {
   const carry = window.api?.carryGoalLoop
   if (!carry) return
