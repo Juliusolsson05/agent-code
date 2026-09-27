@@ -140,3 +140,42 @@ describe('UndoCloseStack.restorableSessionIds', () => {
     expect(stack.restorableSessionIds().size).toBe(0)
   })
 })
+
+// #1387 review a (minor): a pointer kept for a restorable parent must go once
+// the parent's entry leaves the stack without a restore.
+describe('dropPointersTo and the stack\'s dropped notifications', () => {
+  it('drops only pointers to gone, non-live ids, and keeps untouched rows', async () => {
+    const { dropPointersTo } = await import('./undoClose')
+    const child = { cwd: '/p', kind: 'claude', linkedParentId: 'gone', orchestrationParentId: 'gone', orchestrationRootId: 'other' } as unknown as SessionMeta
+    const other = { cwd: '/p', kind: 'claude', orchestrationParentId: 'cross-window' } as unknown as SessionMeta
+    const sessions = { child, other } as Record<string, SessionMeta>
+    const out = dropPointersTo(sessions as never, new Set(['gone']) as never) as Record<string, SessionMeta>
+    expect(out.child).toEqual({ cwd: '/p', kind: 'claude', orchestrationRootId: 'other' })
+    expect(out.other).toBe(other)
+    expect(dropPointersTo(sessions as never, new Set(['nothing']) as never)).toBe(sessions)
+  })
+
+  it('keeps a pointer to a listed id that is live (defensive: an id the stack reports but the workspace still holds)', async () => {
+    const { dropPointersTo } = await import('./undoClose')
+    const parent = { cwd: '/p', kind: 'claude' } as unknown as SessionMeta
+    const child = { cwd: '/p', kind: 'claude', orchestrationParentId: 'parent' } as unknown as SessionMeta
+    const sessions = { parent, child } as Record<string, SessionMeta>
+    expect(dropPointersTo(sessions as never, new Set(['parent']) as never)).toBe(sessions)
+  })
+
+  it('reports expired and evicted entries on a microtask', async () => {
+    let now = 1_000_000
+    const stack = new UndoCloseStack(() => now)
+    const dropped: string[][] = []
+    stack.setDroppedListener(ids => { dropped.push([...ids].sort()) })
+    const meta = { cwd: '/p', kind: 'claude', projectId: 't', joinedAt: 0 } as never
+    stack.push({ type: 'session', closedAt: now, sessionId: 'first' as never, sessionMeta: meta } as never)
+    for (let i = 0; i < UNDO_CLOSE_MAX_ENTRIES; i++) stack.push({ type: 'session', closedAt: now, sessionId: `s${i}` as never, sessionMeta: meta } as never)
+    await Promise.resolve()
+    expect(dropped).toEqual([['first']])
+    now += UNDO_CLOSE_RETENTION_MS + 1
+    expect(stack.length).toBe(0)
+    await Promise.resolve()
+    expect(dropped.at(-1)?.length).toBe(UNDO_CLOSE_MAX_ENTRIES)
+  })
+})
