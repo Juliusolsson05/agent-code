@@ -131,6 +131,8 @@ describe('CliUpdateBanner: an update that could not start', () => {
   it.each([
     ['the offer', { kind: 'notify' as const, cli: 'claude' as const, installed: '2.1.281', latest: '2.1.282', severity: 'patch' as const, installMethod: 'npm' as const, checkedAt: 1 }, 'Update Now'],
     ['a deferral of the user\'s click', { ...deferred('claude'), requestedByUser: true as const }, 'Update now'],
+    // #1447 review b: the could-not-start row's own retry must say a rejection too.
+    ['the could-not-start retry', { kind: 'failed' as const, cli: 'claude' as const, from: '2.1.281', wantedLatest: '2.1.282', installMethod: 'npm' as const, reason: 'could-not-start' as const, logPath: null, finishedAt: 5 }, 'Update now'],
   ] as const)('says a rejected Update now request on %s instead of dropping it', async (_name, state, label) => {
     const updateNow = vi.fn(async () => { throw new Error('Error invoking remote method \'cli-updates:update-now\': EACCES /state') })
     Object.defineProperty(window, 'api', { configurable: true, value: { ...(window as { api?: object }).api, cliUpdatesUpdateNow: updateNow } })
