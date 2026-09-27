@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writ
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 
 import { collectProxyRunDirs, keyLogBaseline, runPrunePasses } from './debugRetention.js'
 import type { DebugStorageBucket, DebugStoragePrunePolicy } from './debugRetention.js'
@@ -166,3 +166,34 @@ it('saves no baseline when the proxy root is missing at capture', async () => {
   expect(await keyLogBaseline(file, join(dir, 'proxy-renamed-away'))).toBeNull()
   expect(existsSync(file)).toBe(false)
 })
+
+// B6 check at 68baa3e5: the birthtime filter was reverted (a clock step back
+// could leave an old key log out of the baseline), but nothing pinned the
+// revert. Capture on a clock stepped back to 2020: every existing key log must
+// still be in the baseline, so nothing key-log-only is collected.
+it('baselines every existing key log even when the clock is behind their birthtimes', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'keylog-baseline-'))
+  roots.push(dir)
+  const root = join(dir, 'proxy')
+  runDir(root, ['p', 's', 'old-run'], { 'sslkeylog.log': 'k' })
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2020-01-01T00:00:00Z'))
+  let baseline: ReadonlySet<string> | null
+  try {
+    baseline = await keyLogBaseline(join(dir, 'state', 'baseline.json'), root)
+  } finally {
+    clock.mockRestore()
+  }
+  expect(await collectProxyRunDirs(root, baseline)).toEqual([])
+})
+
+// B6 check: a baseline file that parses but has the wrong shape is unknown.
+it('treats a baseline file of the wrong shape as no baseline', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'keylog-baseline-'))
+  roots.push(dir)
+  const file = join(dir, 'baseline.json')
+  writeFileSync(file, JSON.stringify({ not: 'an array' }))
+  expect(await keyLogBaseline(file, join(dir, 'proxy'))).toBeNull()
+  writeFileSync(file, JSON.stringify(['ok', 42]))
+  expect(await keyLogBaseline(file, join(dir, 'proxy'))).toBeNull()
+})
+
