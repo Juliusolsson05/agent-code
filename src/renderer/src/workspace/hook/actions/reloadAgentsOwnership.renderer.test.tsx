@@ -5,6 +5,7 @@ import { act, cleanup, renderHook } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { SessionSpawnOptions } from '@preload/api/types'
 import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/state'
+import { mergeProjectTabs } from '@renderer/workspace/mergeProjectTabs'
 import { useSessionActions } from './session'
 import { makeRefs, stateWriter } from './testing/paneActionsHarness'
 import type { SessionMeta, WorkspaceState } from '@renderer/workspace/types'
@@ -28,7 +29,7 @@ const persisted = JSON.parse(readFileSync(
   sessions: Record<string, SessionMeta>
 } }> }
 
-function harness(heldKind: 'claude' | 'codex' = 'claude') {
+function harness(heldKind: 'claude' | 'codex' = 'claude', opts: { heldSpawnRejects?: boolean } = {}) {
   const recorded = persisted.windows[0]!.workspace
   const [claudeLane, codexLane] = recorded.stage.lanes.map(lane => lane.selectedSessionId!) as [string, string]
   const state = {
@@ -50,15 +51,23 @@ function harness(heldKind: 'claude' | 'codex' = 'claude') {
   let release!: () => void
   const held = new Promise<void>(resolve => { release = resolve })
   const spawnSession = vi.fn(async (options: SessionSpawnOptions) => {
-    if (options.kind === heldKind) await held
-    return { sessionId: `${options.kind}-restarted`, providerSessionId: options.resumeSessionId }
+    if (options.kind === heldKind) {
+      await held
+      if (opts.heldSpawnRejects) throw new Error('spawn failed')
+    }
+    // A safe (dangerous-off) respawn gets its own id so two overlapping
+    // reloads' successors can be told apart.
+    const suffix = options.dangerousMode === false ? 'safe' : 'restarted'
+    return { sessionId: `${options.kind}-${suffix}`, providerSessionId: options.resumeSessionId }
   })
-  const killOwnedSession = vi.fn(async () => true)
+  // Kills resolve immediately unless the test installs a hold for one id.
+  const killHolds = new Map<string, Promise<boolean>>()
+  const killOwnedSession = vi.fn(async (req: { sessionId: string }) => killHolds.get(req.sessionId) ?? true)
   window.api = { ...originalApi, spawnSession, killOwnedSession, controlGoalLoop: vi.fn(async () => null), carryGoalLoop: vi.fn(async () => null) }
   const hook = renderHook(() => useSessionActions(state, writer.setState, setRuntimes, refs))
   // The Claude agent is first in the snapshot, so it is the one in flight.
   const order = Object.keys(recorded.sessions).filter(id => id === claudeLane || id === codexLane)
-  return { hook, writer, refs, spawnSession, killOwnedSession, release, claudeLane, codexLane, order }
+  return { hook, writer, refs, spawnSession, killOwnedSession, killHolds, release, claudeLane, codexLane, order }
 }
 
 it('does not bring back an agent closed while its respawn was in flight', async () => {
@@ -155,4 +164,138 @@ it('does not file an early agent closed while a later agent was respawning', asy
   await act(async () => { h.release(); await reload })
   expect(h.writer.getState().sessions[`${firstKind}-restarted`]).toBeUndefined()
   expect(h.killOwnedSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: `${firstKind}-restarted`, caller: 'reload.orphaned-successor' }))
+})
+
+// #1326 review A1: the Dangerous Agents switch does not serialize clicks, so
+// on -> off can start a second reload before the first settles. The last
+// click must win: the safe successors are filed, the dangerous ones are not.
+it('lets the later of two overlapping reloads decide the final mode', async () => {
+  const h = harness()
+  let on!: Promise<void>, off!: Promise<void>
+  await act(async () => {
+    on = h.hook.result.current.reloadAgentSessions(true)
+    off = h.hook.result.current.reloadAgentSessions(false)
+  })
+  await vi.waitFor(() => expect(h.spawnSession).toHaveBeenCalledWith(expect.objectContaining({ kind: 'claude' })))
+  await act(async () => { h.release(); await on; await off })
+  const sessions = h.writer.getState().sessions
+  expect(sessions['claude-safe']).toBeDefined()
+  expect(sessions['codex-safe']).toBeDefined()
+  expect(sessions['claude-restarted']).toBeUndefined()
+  expect(sessions['codex-restarted']).toBeUndefined()
+  // The dangerous successors were reloaded away, not left running.
+  expect(h.killOwnedSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'claude-restarted' }))
+  expect(h.killOwnedSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'codex-restarted' }))
+})
+
+// #1326 review A2: a project merge keeps the session id but re-files it under
+// the target project and deletes the source. The successor must follow it.
+it('files the successor under the project an agent was merged into mid-reload', async () => {
+  const h = harness()
+  const source = h.writer.getState().sessions[h.claudeLane]!.projectId!
+  const target = h.writer.getState().tabs.find(tab => tab.id !== source)!.id
+  let reload!: Promise<void>
+  await act(async () => { reload = h.hook.result.current.reloadAgentSessions(true) })
+  await vi.waitFor(() => expect(h.spawnSession).toHaveBeenCalledWith(expect.objectContaining({ kind: 'claude' })))
+  h.writer.setState(prev => {
+    const merged = mergeProjectTabs(prev, { sourceTabIds: [source], targetTabId: target, now: Date.now() })
+    if (!merged.ok) throw new Error(merged.reason)
+    return merged.state
+  })
+  await act(async () => { h.release(); await reload })
+  expect(h.writer.getState().sessions['claude-restarted']?.projectId).toBe(target)
+})
+
+// #1326 review A3/B1: orphan kills used to be awaited INSIDE the commit-time
+// check loop, so a close during one was never re-checked. The commit must be
+// done, with no await, before any orphan kill starts.
+it('commits before it awaits any orphan kill', async () => {
+  const probe = harness()
+  const [first, second] = probe.order as [string, string]
+  cleanup()
+  const secondKind = probe.writer.getState().sessions[second]!.kind as 'claude' | 'codex'
+  const firstKind = probe.writer.getState().sessions[first]!.kind as string
+  const h = harness(secondKind)
+  let releaseKill!: (value: boolean) => void
+  h.killHolds.set(`${secondKind}-restarted`, new Promise<boolean>(resolve => { releaseKill = resolve }))
+  let reload!: Promise<void>
+  await act(async () => { reload = h.hook.result.current.reloadAgentSessions(true) })
+  await vi.waitFor(() => expect(h.spawnSession).toHaveBeenCalledWith(expect.objectContaining({ kind: secondKind })))
+  // The second agent is closed while its own respawn is in flight.
+  h.writer.setState(prev => {
+    const sessions = { ...prev.sessions }
+    delete sessions[second]
+    return { ...prev, sessions }
+  })
+  await act(async () => { h.release() })
+  await vi.waitFor(() => expect(h.killOwnedSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: `${secondKind}-restarted` })))
+  // While that orphan's kill is still pending, the first agent is already
+  // committed under its successor id; a close now targets that live row.
+  expect(h.writer.getState().sessions[`${firstKind}-restarted`]).toBeDefined()
+  expect(h.writer.getState().sessions[first]).toBeUndefined()
+  await act(async () => { releaseKill(true); await reload })
+})
+
+// #1326 review A4: a rejected orphan kill must neither abort the reload nor
+// strand the other successor unfiled.
+it('files the other successors when an orphan kill rejects', async () => {
+  const probe = harness()
+  const [first, second] = probe.order as [string, string]
+  cleanup()
+  const secondKind = probe.writer.getState().sessions[second]!.kind as 'claude' | 'codex'
+  const firstKind = probe.writer.getState().sessions[first]!.kind as string
+  const h = harness(secondKind)
+  h.killHolds.set(`${secondKind}-restarted`, Promise.reject(new Error('kill IPC failed')))
+  h.killHolds.get(`${secondKind}-restarted`)!.catch(() => undefined)
+  let reload!: Promise<void>
+  await act(async () => { reload = h.hook.result.current.reloadAgentSessions(true) })
+  await vi.waitFor(() => expect(h.spawnSession).toHaveBeenCalledWith(expect.objectContaining({ kind: secondKind })))
+  h.writer.setState(prev => {
+    const sessions = { ...prev.sessions }
+    delete sessions[second]
+    return { ...prev, sessions }
+  })
+  await act(async () => { h.release(); await reload })
+  expect(h.writer.getState().sessions[`${firstKind}-restarted`]).toBeDefined()
+  expect(h.writer.getState().sessions[`${secondKind}-restarted`]).toBeUndefined()
+})
+
+// #1326 review A5: a failed respawn of an agent closed meanwhile has no pane
+// to show `failed` in; it must not recreate a runtime under the closed id.
+it('does not recreate a runtime for a closed agent whose respawn failed', async () => {
+  const h = harness('claude', { heldSpawnRejects: true })
+  let reload!: Promise<void>
+  await act(async () => { reload = h.hook.result.current.reloadAgentSessions(true) })
+  await vi.waitFor(() => expect(h.spawnSession).toHaveBeenCalledWith(expect.objectContaining({ kind: 'claude' })))
+  h.writer.setState(prev => {
+    const sessions = { ...prev.sessions }
+    delete sessions[h.claudeLane]
+    return { ...prev, sessions }
+  })
+  const runtimes = { ...h.refs.latestRuntimesRef.current }
+  delete runtimes[h.claudeLane]
+  h.refs.latestRuntimesRef.current = runtimes
+  await act(async () => { h.release(); await reload })
+  expect(h.refs.latestRuntimesRef.current[h.claudeLane]).toBeUndefined()
+})
+
+// #1326 review mutation survivors: the same id can stop being "the agent we
+// set out to reload" without its row disappearing, by a cwd change or by its
+// project going away. Each must orphan the successor.
+it.each([
+  ['its cwd changed', (prev: WorkspaceState, id: string) => ({
+    ...prev, sessions: { ...prev.sessions, [id]: { ...prev.sessions[id]!, cwd: `${prev.sessions[id]!.cwd}-moved` } },
+  })],
+  ['its project was removed', (prev: WorkspaceState, id: string) => ({
+    ...prev, tabs: prev.tabs.filter(tab => tab.id !== prev.sessions[id]!.projectId),
+  })],
+])('does not file a successor when %s mid-reload', async (_label, change) => {
+  const h = harness()
+  let reload!: Promise<void>
+  await act(async () => { reload = h.hook.result.current.reloadAgentSessions(true) })
+  await vi.waitFor(() => expect(h.spawnSession).toHaveBeenCalledWith(expect.objectContaining({ kind: 'claude' })))
+  h.writer.setState(prev => change(prev, h.claudeLane))
+  await act(async () => { h.release(); await reload })
+  expect(h.writer.getState().sessions['claude-restarted']).toBeUndefined()
+  expect(h.killOwnedSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'claude-restarted', caller: 'reload.orphaned-successor' }))
 })

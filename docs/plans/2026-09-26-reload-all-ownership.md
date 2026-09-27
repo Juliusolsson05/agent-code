@@ -14,3 +14,12 @@
 
 ## Tests
 On the recorded workspace fixture: a close during the reload, a replace during it, a close before the loop reaches an agent, and a draft typed and an unread marker set during it. Red on main.
+
+## Review round 1 (#1326)
+- **Overlapping reloads (A1).** On -> off before the first reload settled ran two loops over one snapshot and could leave the dangerous successors running. Reloads now run one at a time; the later click restarts the earlier one's successors with the final setting.
+- **Project merge mid-reload (A2).** The successor was filed under its captured, now deleted, project. The commit now files it from the LIVE row; only the spawn's own fields (identity, MCP domains, resumed provider session) come from the loop.
+- **Close during an orphan kill, and a rejected orphan kill (A3/A4, B1).** The commit-time checks and the commit are now one synchronous run. Orphans are killed after it, each in its own try/catch.
+- **Failed respawn of a closed agent (A5).** It no longer recreates a `failed` runtime under the closed id.
+- **Mutation survivors (cwd check, project-ownership clause).** Pinned by a cwd change and a removed project mid-reload.
+
+Tests: 7 new cases on the same fixture, 5 red against the round-1 head (the two mutation pins pass there, as they cover existing behavior).

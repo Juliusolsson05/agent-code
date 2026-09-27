@@ -1482,8 +1482,8 @@ export function useSessionActions(
   // dangerous mode, then remaps visible panes and buried records
   // onto the fresh session ids. Plain terminal sessions are left
   // untouched.
-  const reloadAgentSessions = useCallback(
-    async (dangerousMode = refs.dangerousAgentsRef.current) => {
+  const reloadAgentSessionsNow = useCallback(
+    async (dangerousMode: boolean) => {
       const current = refs.stateRef.current
       const ownedIds = collectOwnedSessionIds(current)
       const staleIds = collectUnownedSessionIds(current)
@@ -1542,22 +1542,31 @@ export function useSessionActions(
       // successors on one provider transcript. Same rule as replaceSession's
       // canCommit (#815). Read through the setState updater, the one place
       // that sees the state as it is now, not as this closure captured it.
-      const stillReloadable = (oldId: SessionId, meta: SessionMeta): boolean => {
-        let owned = false
+      //
+      // Returns the LIVE row (not the captured one) so the commit can file
+      // the successor with whatever changed meanwhile that does not affect
+      // the spawn: a project merge re-files the same id under another
+      // project (#1326 review A2), a rename changes its title.
+      const liveReloadable = (oldId: SessionId, meta: SessionMeta): SessionMeta | null => {
+        let live: SessionMeta | null = null
         setState(prev => {
           const current = prev.sessions[oldId]
-          owned = Boolean(current && current.cwd === meta.cwd && current.kind === meta.kind
+          if (current && current.cwd === meta.cwd && current.kind === meta.kind
             && current.providerRuntime === meta.providerRuntime
-            && collectOwnedSessionIds(prev).has(oldId))
+            && collectOwnedSessionIds(prev).has(oldId)) live = current
           return prev
         })
-        return owned
+        return live
       }
+      // Per successor, the fields the SPAWN decided (identity, MCP domains,
+      // the provider session it resumed). Everything else comes from the
+      // live row at commit.
+      const spawnedFields = new Map<SessionId, Partial<SessionMeta>>()
       const oldMetas = new Map<SessionId, SessionMeta>()
 
       for (const [oldId, meta] of agentEntries) {
         // Closed or replaced since the snapshot: nothing of ours to reload.
-        if (!stillReloadable(oldId, meta)) continue
+        if (!liveReloadable(oldId, meta)) continue
         try {
           await killSessionBackendIfOwned(refs, oldId, 'reload.agent-sessions')
         } catch {
@@ -1597,20 +1606,17 @@ export function useSessionActions(
           idMap.set(oldId, newId)
           oldMetas.set(oldId, meta)
           if (builtInMcpDomains?.includes('goal_loop')) goalLoopCapable.add(newId)
-          freshSessions[newId] = {
-            // `agentNameId` needs no line here: withoutProvisionalProviderSession
-            // is field-preserving, so `...restoredMeta` carries the identity from
-            // the pre-reload session onto its new local id. Do not add a
-            // `?? oldId` fallback — a workspace with no identity has no
-            // allocated name to lose, and minting here would put a second
-            // author on the one decision the reconciler owns. The unit case in
-            // this task's test pins the helper's field-preservation, which is
-            // the only thing this spread relies on.
-            ...restoredMeta,
+          // The provider session the successor actually resumed is the one
+          // captured here, not whatever the live row says by commit time; a
+          // provisional (proxy-header) id is dropped exactly as before.
+          const { providerSessionId, providerSessionIdSource } = restoredMeta
+          spawnedFields.set(newId, {
+            ...(providerSessionId !== undefined ? { providerSessionId } : {}),
+            ...(providerSessionIdSource !== undefined ? { providerSessionIdSource } : {}),
             tldrIdentity: tldrIdentityForSession(oldId, meta),
             ...(builtInMcpDomains !== undefined ? { builtInMcpDomains, builtInMcpOverrides } : {}),
             ...(userMcpServerIds !== undefined ? { userMcpServerIds } : {}),
-          }
+          })
         } catch {
           // WHY the rejection's text is dropped (#1252 review): it is the raw
           // provider exception relayed through IPC, which can carry secrets,
@@ -1624,16 +1630,54 @@ export function useSessionActions(
       // can be closed or replaced while a LATER agent's spawn is in flight,
       // so the per-agent check above is not the last word. Its successor is
       // killed rather than filed.
+      //
+      // WHY there is no await from here to the end of the commit (#1326
+      // review A3/A4): the orphan kills used to be awaited INSIDE this loop.
+      // A close during one of those kills was then never re-checked (the
+      // closed agent's successor was filed anyway), and a kill that rejected
+      // aborted the reload with other successors spawned but never filed.
+      // Checks and commit are now one synchronous run the user cannot
+      // interleave with; orphans are killed after it, each on its own.
+      const orphans: Array<{ newId: SessionId; meta: SessionMeta }> = []
       for (const [oldId, newId] of [...idMap]) {
         const meta = oldMetas.get(oldId)!
-        if (stillReloadable(oldId, meta)) continue
+        const live = liveReloadable(oldId, meta)
+        if (live) {
+          // `agentNameId` needs no line here: the live row still carries the
+          // identity, and `...live` moves it onto the new local id. Do not
+          // add a `?? oldId` fallback — a workspace with no identity has no
+          // allocated name to lose, and minting here would put a second
+          // author on the one decision the reconciler owns.
+          const { providerSessionId: _liveProviderSessionId, providerSessionIdSource: _liveSource, ...liveRest } = live
+          freshSessions[newId] = { ...liveRest, ...spawnedFields.get(newId) }
+          continue
+        }
         idMap.delete(oldId)
         goalLoopCapable.delete(newId)
-        delete freshSessions[newId]
-        await killSession(newId, 'reload.orphaned-successor', { cwd: meta.cwd, kind: meta.kind ?? DEFAULT_PROVIDER, providerRuntime: meta.providerRuntime })
+        orphans.push({ newId, meta })
+      }
+      // A failed respawn whose agent was closed meanwhile has nothing left
+      // to show a `failed` pane in (#1326 review A5); recreating its runtime
+      // would leave an invisible stale entry under a closed id.
+      for (const oldId of [...failedIds]) {
+        const meta = agentEntries.find(([id]) => id === oldId)?.[1]
+        if (!meta || !liveReloadable(oldId, meta)) failedIds.delete(oldId)
+      }
+      const killOrphans = async (): Promise<void> => {
+        for (const { newId, meta } of orphans) {
+          try {
+            await killSession(newId, 'reload.orphaned-successor', { cwd: meta.cwd, kind: meta.kind ?? DEFAULT_PROVIDER, providerRuntime: meta.providerRuntime })
+          } catch {
+            // Best effort, like the pre-kill above: the successor is already
+            // unfiled, and one failed kill must not stop the others.
+          }
+        }
       }
 
-      if (idMap.size === 0 && failedIds.size === 0) return
+      if (idMap.size === 0 && failedIds.size === 0) {
+        await killOrphans()
+        return
+      }
 
       setRuntimes(prev => {
         const next: Record<SessionId, SessionRuntime> = { ...prev }
@@ -1695,8 +1739,9 @@ export function useSessionActions(
           nextSessions[newId] = meta
         }
 
-        // A successor carries its predecessor's pool membership through
-        // `...restoredMeta` above, so it keeps its project and its place.
+        // A successor carries its predecessor's LIVE pool membership (the
+        // `...liveRest` above), so it keeps its project and its place, even
+        // when a project merge moved it while the reload ran.
         //
         // WHY an agent whose respawn FAILED stays exactly where it was
         // (#1239): this used to delete it, and the project it left empty,
@@ -1732,6 +1777,8 @@ export function useSessionActions(
           setRuntimes,
         })
       }
+      // Only now, after the commit above ran with no await in between.
+      await killOrphans()
     },
     [
       refs.dangerousAgentsRef,
@@ -1742,6 +1789,29 @@ export function useSessionActions(
       setRuntimes,
       setState,
     ],
+  )
+
+  // WHY reloads run one at a time (#1326 review A1): the Dangerous Agents
+  // switch does not serialize clicks, and its handler flips the setting and
+  // then awaits a reload. On -> off before the first reload settles used to
+  // start two loops over the SAME snapshot; the on-reload committed first,
+  // the off-reload then found its agents gone, killed its safe successors as
+  // orphans, and left the dangerous ones running while Settings said off.
+  // Chaining makes the last click the last reload: it starts from the
+  // workspace the earlier one committed (refs are store-subscribed, so they
+  // are current the moment that commit returns) and restarts those
+  // successors with the final setting. A per-call default of the mode is
+  // read when the call is queued, which is the setting that click chose.
+  const reloadChainRef = useRef<Promise<void>>(Promise.resolve())
+  const reloadAgentSessions = useCallback(
+    (dangerousMode = refs.dangerousAgentsRef.current): Promise<void> => {
+      const run = reloadChainRef.current.then(() => reloadAgentSessionsNow(dangerousMode))
+      // A failed reload must not wedge every later one behind a rejection;
+      // the caller of THAT reload still sees its own rejection via `run`.
+      reloadChainRef.current = run.catch(() => undefined)
+      return run
+    },
+    [refs.dangerousAgentsRef, reloadAgentSessionsNow],
   )
 
   const softReloadAgentView = useCallback(
