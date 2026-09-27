@@ -35,3 +35,14 @@ Row 13 of #1251 moved here, so `debugRetention.ts` and its test now change only 
 | **c, minor:** Codex `rolloutPaths` unbounded | valid | `LruMap(4096)`, twice the recorded 2,023 indexed threads. A miss only costs the existing SQLite lookup. |
 | **c:** plan 3b stale | valid | Corrected above. |
 | **b survivors:** promptFolder's test hook using `get` instead of `peek`; a search-cache cap of 1 | declined | Neither is a behaviour of the app. The hook is test-only inspection, and the cap is a performance contract no test times; both are shared `LruMap` semantics, pinned in `lruMap.test.ts`. |
+
+## Review round 2 (a, b, c codex at `62091493`): all FIX-BEFORE-MERGE (final round)
+
+| Finding | Verdict | Change |
+|---|---|---|
+| **a, major:** a ledger absent for the whole prune (moved aside before it) read as "no ledger", so manual bundles became deletable | valid | **An absent ledger is `'unknown'` too:** it protects every legacy bundle and is never cached. Stated cost: with no ledger at all, pre-split legacy bundles are never aged out. Fail-first. |
+| **a, major:** a whole Claude project directory removed kept its summaries forever | valid | The sweep also drops summaries whose project directory is missing from the scope-independent root listing, or vanished (ENOENT) while being listed. A failed root listing, or EACCES on a directory, stays unknown and keeps them. Fail-first. |
+| **b, major; a and c, minor:** tombstone age used the wall clock, so a backward step plus correction dropped a fresh tombstone, and a future-dated one blocked the sweep | valid | `performance.now()` (monotonic). Tests fake only `performance`, plus a wall-clock step test; the `Date.now` mutant is red. |
+| **c, major; a and b, minor:** a failed paste append dropped its batch, the timer's failure was an unhandled rejection, and a joining flush resolved as success | valid | A failed batch goes back in front of the queue (order holds), and the timer path catches and logs. A flush retries after the write it joined, so both callers reject on a dead disk. The retry queue is bounded at 1000 lines, and dropped lines are reported as one `ERROR journal:dropped-lines` line once writes work. The failed-batch and false-success tests are red at the previous head; a new test pins the bound. |
+| **a / b / c survivors:** the `rolloutPaths` bound (Map, or the cap size) | declined | Pinning it needs over 4096 indexed rows or reaching into the private map; the mechanism is the shared `LruMap`, pinned in `lruMap.test.ts`. A miss only costs the existing SQLite lookup. |
+| **b survivors (from round 1):** the promptFolder hook, a search-cache cap of 1 | declined | Unchanged reasons: a test-only hook and an untimed performance contract. |
