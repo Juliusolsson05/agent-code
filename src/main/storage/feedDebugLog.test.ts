@@ -249,8 +249,17 @@ describe('a rebuilt cap state keeps the file\'s drop count', () => {
       const size = (await handle.stat()).size
       const tail = Buffer.alloc(4096)
       await handle.read(tail, 0, 4096, size - 4096)
-      const rows = tail.toString('utf8').split('\n').filter(row => row.includes('__feedDebugCapped'))
-      return (JSON.parse(rows.at(-1)!) as { droppedEntriesSoFar: number }).droppedEntriesSoFar
+      const tailSize = Math.min(size, 16_384)
+      const wide = Buffer.alloc(tailSize)
+      await handle.read(wide, 0, tailSize, size - tailSize)
+      const markers = wide.toString('utf8').split('\n').flatMap(row => {
+        try {
+          const parsed = JSON.parse(row.slice(row.indexOf('{'))) as { __feedDebugCapped?: unknown; droppedEntriesSoFar?: number }
+          return parsed.__feedDebugCapped === true ? [parsed.droppedEntriesSoFar ?? 0] : []
+        } catch { return [] }
+      })
+      void tail
+      return markers.at(-1) ?? -1
     } finally {
       await handle.close()
     }
@@ -279,6 +288,44 @@ describe('a rebuilt cap state keeps the file\'s drop count', () => {
     await queueFeedDebugAppend('capped-cycles', [], 1_000)
     await new Promise(resolve => setTimeout(resolve, 20))
     expect(await lastMarkerDrops('capped-cycles')).toBeGreaterThanOrEqual(4_000)
+  })
+
+  // Round-5 review a: the tail reader's three blind spots.
+  it('below the cap: a marker written by an oversized entry keeps its count', async () => {
+    await mkdir(join(stateDir, 'feed-debug'), { recursive: true })
+    await writeFile(logPath('below-cap'), '')
+    await truncate(logPath('below-cap'), 128 * 1024 * 1024 - 500)
+    await writeFile(logPath('below-cap'), '\n', { flag: 'a' })
+    const big = (id: number) => ({ ...entry(id), summary: 'x'.repeat(1_000) })
+    await queueFeedDebugAppend('below-cap', [big(1)], 1_000)
+    forgetFeedDebugSession('below-cap')
+    await queueFeedDebugAppend('below-cap', [big(2)], 1_000)
+    expect(await lastMarkerDrops('below-cap')).toBeGreaterThanOrEqual(2)
+  })
+
+  it('an ordinary row carrying the marker text in its data does not hide the real marker', async () => {
+    await cappedFileWithMarker('marker-in-data', 1_000)
+    await writeFile(logPath('marker-in-data'), JSON.stringify({ sessionId: 'marker-in-data', id: 9, data: { __feedDebugCapped: true, note: 'ordinary entry' } }) + '\n', { flag: 'a' })
+    forgetFeedDebugSession('marker-in-data')
+    await queueFeedDebugAppend('marker-in-data', [entry(1)], 1_000)
+    expect(await lastMarkerDrops('marker-in-data')).toBeGreaterThanOrEqual(1_001)
+  })
+
+  it('a torn final row neither hides the earlier marker nor swallows the next row', async () => {
+    await cappedFileWithMarker('torn-tail', 1_000)
+    await writeFile(logPath('torn-tail'), '{"sessionId":"torn-tail","__feedDebugCapped":true,"droppedEntriesSoFar":20', { flag: 'a' })
+    forgetFeedDebugSession('torn-tail')
+    await queueFeedDebugAppend('torn-tail', [entry(1)], 1_000)
+    expect(await lastMarkerDrops('torn-tail')).toBeGreaterThanOrEqual(1_001)
+  })
+
+  it('finds a marker behind several KiB of later rows', async () => {
+    await cappedFileWithMarker('rows-after-marker', 1_000)
+    const rows = Array.from({ length: 80 }, (_, i) => JSON.stringify({ sessionId: 'rows-after-marker', id: 100 + i, summary: 'y'.repeat(100) }) + '\n').join('')
+    await writeFile(logPath('rows-after-marker'), rows, { flag: 'a' })
+    forgetFeedDebugSession('rows-after-marker')
+    await queueFeedDebugAppend('rows-after-marker', [entry(1)], 1_000)
+    expect(await lastMarkerDrops('rows-after-marker')).toBeGreaterThanOrEqual(1_001)
   })
 
   it('after a forget during the first size check', async () => {

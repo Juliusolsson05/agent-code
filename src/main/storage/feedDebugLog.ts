@@ -74,7 +74,8 @@ async function loadInitialFileBytes(filePath: string): Promise<number | null> {
   }
 }
 
-// The drop count of the last tombstone row in an already-capped file, or 0.
+// The drop count of the file's last tombstone row (0 if none), and whether
+// the file ends with a complete row.
 //
 // WHY (#1392 review a, round 4): cap state is process-local and is rebuilt
 // whenever a session is forgotten and appends again (process exit with the
@@ -83,33 +84,53 @@ async function loadInitialFileBytes(filePath: string): Promise<number | null> {
 // reported 1 drop after an earlier row had reported thousands, and the LAST
 // marker in the file, which the doubling rule promises is within 2x of the
 // truth, understated it by orders of magnitude. Re-statting bytes restores the
-// size decision; this restores the count. Only the file's tail is read (the
-// tombstone rows are the last lines of a capped file), and any failure falls
-// back to 0, the old behaviour.
+// size decision; this restores the count. Only the file's tail is read, and
+// any failure falls back to 0, the old behaviour.
 const TOMBSTONE_TAIL_BYTES = 64 * 1024
-async function readLastTombstoneDrops(filePath: string, size: number): Promise<number> {
+async function readFileTail(filePath: string, size: number): Promise<{ drops: number; endsWithNewline: boolean }> {
+  // Round-5 review a hardened this reader three ways:
+  //  - it runs for ANY non-empty file, not only one at the cap: an entry too
+  //    big to fit can write a short marker and leave the file BELOW the cap;
+  //  - a row counts only if its PARSED top level is a tombstone. An ordinary
+  //    entry can carry the marker text inside `data`, and a substring match
+  //    let it hide the real marker;
+  //  - an unparsable row (torn by a failed append) is skipped, not fatal, so
+  //    an earlier complete marker is still found.
+  // Cost: one read of at most 64 KiB per session per process, at its first
+  // append. A marker further back than that (more than 64 KiB of ordinary
+  // rows written after it) is not found, which is the old behaviour.
+  const result = { drops: 0, endsWithNewline: true }
   try {
     const handle = await open(filePath, 'r')
     try {
       const length = Math.min(size, TOMBSTONE_TAIL_BYTES)
       const buffer = Buffer.alloc(length)
       await handle.read(buffer, 0, length, size - length)
+      result.endsWithNewline = length === 0 || buffer[length - 1] === 0x0a
       const lines = buffer.toString('utf8').split('\n')
       for (let i = lines.length - 1; i >= 0; i--) {
-        if (!lines[i]!.includes('"__feedDebugCapped":true')) continue
+        const line = lines[i]!
+        if (!line.includes('__feedDebugCapped')) continue
         // From the row's first `{`: a tail can start mid-row, and a file that
         // was preallocated or torn can carry NUL bytes before the row.
-        const row = lines[i]!.slice(lines[i]!.indexOf('{'))
-        const drops = (JSON.parse(row) as { droppedEntriesSoFar?: unknown }).droppedEntriesSoFar
-        return typeof drops === 'number' && Number.isFinite(drops) && drops > 0 ? drops : 0
+        let row: { __feedDebugCapped?: unknown; droppedEntriesSoFar?: unknown }
+        try {
+          row = JSON.parse(line.slice(line.indexOf('{')))
+        } catch {
+          continue
+        }
+        if (row.__feedDebugCapped !== true) continue
+        const drops = row.droppedEntriesSoFar
+        result.drops = typeof drops === 'number' && Number.isFinite(drops) && drops > 0 ? drops : 0
+        break
       }
     } finally {
       await handle.close()
     }
   } catch {
-    // Unreadable tail or a torn row: the pre-#1392 count of 0.
+    // Unreadable tail: the pre-#1392 count of 0.
   }
-  return 0
+  return result
 }
 
 // Per-session feed-debug log writer.
@@ -350,8 +371,17 @@ export function queueFeedDebugAppend(
           throw new Error(`feed-debug: unknown size for ${sessionId}, refusing to append`)
         }
         capState.bytesWritten = startingBytes
-        if (startingBytes >= MAX_FEED_DEBUG_FILE_BYTES) {
-          capState.droppedEntries = await readLastTombstoneDrops(filePath, startingBytes)
+        if (startingBytes > 0) {
+          const tail = await readFileTail(filePath, startingBytes)
+          capState.droppedEntries = tail.drops
+          if (!tail.endsWithNewline) {
+            // A torn last row (a failed append) has no newline, so this
+            // session's first row would be glued onto it and neither would
+            // parse. Close the torn row first. Best effort: if this fails the
+            // append below fails the same way and the renderer retries.
+            await writeFile(filePath, '\n', { encoding: 'utf8', flag: 'a' })
+            capState.bytesWritten += 1
+          }
         }
       }
 
@@ -513,7 +543,7 @@ function feedDebugFilePath(sessionId: string): string {
  * crossed a few forgets reported a fraction of its true total in its last
  * marker, breaking the 2x promise. Chained on the session's write queue so it
  * lands after any append already queued, which makes it the file's LAST
- * marker (the one readLastTombstoneDrops and forensics read). Best effort: a
+ * marker (the one readFileTail and forensics read). Best effort: a
  * failed write loses only what the old code always lost.
  *
  * Residual: a crash or a kill of main still loses the unmarked drops. Only a
