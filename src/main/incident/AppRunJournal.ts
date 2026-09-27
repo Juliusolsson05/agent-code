@@ -8,7 +8,7 @@ import { pid, versions } from 'node:process'
 import { BrowserWindow } from 'electron'
 
 import { INCIDENT_RUNS_DIR, STATE_DIR } from '@main/storage/paths.js'
-import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
+import { scheduleDebugStoragePrune, holdDebugStoragePruneUntilRecovered } from '@main/storage/debugRetention.js'
 import type { StateProcessLock } from '@main/storage/processLock.js'
 import { createIncidentId, getAppRunId } from '@main/incident/appRunIds.js'
 import type { BuildInfo } from '@main/buildInfo.js'
@@ -199,6 +199,11 @@ export class AppRunJournal {
       },
     })
     await this.writeHeartbeat()
+    // The run's first prune waits until the workspace has recovered (#775):
+    // closing the gate here, in the one boot-only place that owns the first
+    // prune, holds it and every other early request (startup, feed-debug
+    // appends) as one pending prune.
+    holdDebugStoragePruneUntilRecovered()
     scheduleDebugStoragePrune('incident-run-start')
   }
 

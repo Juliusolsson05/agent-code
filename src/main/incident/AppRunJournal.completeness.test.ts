@@ -25,8 +25,10 @@ vi.mock('electron', () => ({
     getFocusedWindow: () => null,
   },
 }))
+const retentionCalls = vi.hoisted(() => [] as string[])
 vi.mock('@main/storage/debugRetention.js', () => ({
-  scheduleDebugStoragePrune: vi.fn(),
+  scheduleDebugStoragePrune: vi.fn((reason: string) => { retentionCalls.push(`prune:${reason}`) }),
+  holdDebugStoragePruneUntilRecovered: vi.fn(() => { retentionCalls.push('hold') }),
 }))
 vi.mock('@main/incident/appRunIds.js', () => ({
   createIncidentId: () => 'incident-test',
@@ -134,5 +136,16 @@ describe('AppRunJournal completeness snapshot', () => {
     expect(fsHarness.writeFile).toHaveBeenCalledTimes(1)
     expect(journal.getCompletenessSnapshot().bytesWritten).toBeGreaterThan(0)
     warn.mockRestore()
+  })
+})
+
+// #775: the run's first prune waits until the workspace has recovered. start()
+// closes the retention boot gate BEFORE requesting that prune, so the request
+// is held rather than run during the session herd.
+describe('AppRunJournal boot prune', () => {
+  it('holds retention before requesting the run-start prune', async () => {
+    retentionCalls.length = 0
+    await makeJournal().start()
+    expect(retentionCalls).toEqual(['hold', 'prune:incident-run-start'])
   })
 })
