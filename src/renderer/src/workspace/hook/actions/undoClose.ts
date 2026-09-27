@@ -14,6 +14,7 @@ import type {
 } from '@renderer/workspace/types'
 import { remapTiledLanes } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import {
+  dropEntryPointersTo,
   dropPointersTo,
   remapMetaLineage,
   remapSingleEntryLineage,
@@ -574,7 +575,12 @@ export function useUndoCloseAction(
         } else if (result === 'retryable-failure') {
           if (!restoredAny && !consumedAny) return 'retryable-failure'
           const rest = [...remaining, member]
-          const leftover: ClosedEntry = rest.length === 1 ? rest[0] : { ...entry, entries: rest }
+          // Strip pointers to members this replay consumed from what goes
+          // back for retry, or the retry restores them (#1387 review a r3).
+          const leftover: ClosedEntry = dropEntryPointersTo(
+            rest.length === 1 ? rest[0] : { ...entry, entries: rest },
+            consumedIds,
+          )
           refs.undoStackRef.current.push(leftover)
           // Part of the group came back; say what did not (#1242).
           showToast(restoreFailureMessage(leftover), RESTORE_FAILURE_TOAST_MS)

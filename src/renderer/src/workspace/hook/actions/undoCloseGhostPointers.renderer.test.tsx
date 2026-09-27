@@ -55,6 +55,36 @@ it('drops pointers to a group member consumed as stale from a member restored af
   harness.unmount()
 })
 
+// Review a, round 3: same group, but C's spawn fails TRANSIENTLY after P was
+// consumed. C goes back on the stack as a leftover; its entry metadata must no
+// longer name P, or the next Undo restores C pointing at a parent that can
+// never return.
+it('strips pointers to a consumed member from a leftover pushed back for retry', async () => {
+  const gone = '/projects/deleted-worktree'
+  const relayed = `Error invoking remote method 'session:spawn': ${String(new MissingWorkspaceDirectoryError(gone))}`
+  const spawn = vi.fn()
+    .mockRejectedValueOnce(new Error(relayed))
+    .mockRejectedValueOnce(new Error('spawn timed out'))
+    .mockResolvedValueOnce('restored-child')
+  const harness = mount({}, spawn)
+  harness.refs.undoStackRef.current.push({
+    type: 'group', closedAt: Date.now(),
+    entries: [
+      { type: 'session', closedAt: Date.now(), sessionId: 'child', sessionMeta: meta({ title: 'Child', linkedParentId: 'parent', orchestrationParentId: 'parent', orchestrationRootId: 'parent' }) },
+      { type: 'session', closedAt: Date.now(), sessionId: 'parent', sessionMeta: meta({ cwd: gone }) },
+    ],
+  } as never)
+  await act(async () => { await harness.undo() })
+  expect(harness.refs.undoStackRef.current.length).toBe(1)
+  await act(async () => { await harness.undo() })
+  const restored = harness.writer.getState().sessions['restored-child']
+  expect(restored).toBeDefined()
+  expect(restored).not.toHaveProperty('linkedParentId')
+  expect(restored).not.toHaveProperty('orchestrationParentId')
+  expect(restored).not.toHaveProperty('orchestrationRootId')
+  harness.unmount()
+})
+
 // Review b, round 2: the stack's expiry notification must actually reach the
 // workspace (the listener registration in useUndoCloseAction), not just fire.
 it('drops a live child\'s kept pointer when its parent\'s undo entry expires', async () => {

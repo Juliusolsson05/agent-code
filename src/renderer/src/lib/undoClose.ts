@@ -276,6 +276,29 @@ export function dropPointersTo(
   return changed ? out : sessions
 }
 
+/**
+ * The same rule as dropPointersTo, applied to a waiting entry's OWN metadata
+ * (#1387 review a, round 3). A group member pushed back for a retry must not
+ * carry pointers to a member the same group already consumed: that parent can
+ * never return, and the later restore would bring the dead pointer back.
+ */
+export function dropEntryPointersTo(entry: ClosedEntry, gone: ReadonlySet<SessionId>): ClosedEntry {
+  if (gone.size === 0) return entry
+  const clean = (meta: SessionMeta): SessionMeta => {
+    if (!(meta.linkedParentId && gone.has(meta.linkedParentId)) &&
+        !(meta.orchestrationParentId && gone.has(meta.orchestrationParentId)) &&
+        !(meta.orchestrationRootId && gone.has(meta.orchestrationRootId))) return meta
+    const next = { ...meta }
+    if (next.linkedParentId && gone.has(next.linkedParentId)) delete next.linkedParentId
+    if (next.orchestrationParentId && gone.has(next.orchestrationParentId)) delete next.orchestrationParentId
+    if (next.orchestrationRootId && gone.has(next.orchestrationRootId)) delete next.orchestrationRootId
+    return next
+  }
+  if (entry.type === 'group') return { ...entry, entries: entry.entries.map(member => dropEntryPointersTo(member, gone) as SingleClosedEntry) }
+  if (entry.type === 'session') return { ...entry, sessionMeta: clean(entry.sessionMeta) }
+  return { ...entry, sessions: entry.sessions.map(member => ({ ...member, meta: clean(member.meta) })) }
+}
+
 // ---- Stack ----
 
 export class UndoCloseStack {
