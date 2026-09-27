@@ -110,3 +110,33 @@ it('keeps an agent whose respawn failed, marked failed with the spawn error, and
   expect(JSON.stringify(failed)).not.toContain('posix_spawnp')
   expect(resolveReadinessText(failed)).toBe(`${SESSION_START_FAILED_MESSAGE} (start-failed)`)
 })
+
+// #1324 review C: a failed respawn whose (laundered) rejection is one of the
+// curated sentences keeps it, so a missing CLI names File › Setup… here as it
+// does on New Agent, instead of "check provider setup".
+it('keeps a curated failure sentence on the failed pane', async () => {
+  vi.useFakeTimers()
+  const recorded = persisted.windows[0]!.workspace
+  const [claudeLane] = recorded.stage.lanes.map(lane => lane.selectedSessionId!)
+  const state = {
+    tabs: recorded.projects,
+    activeTabId: recorded.activeProjectId,
+    sessions: recorded.sessions,
+    pinnedSessionIds: [],
+    stage: recorded.stage,
+  } as unknown as WorkspaceState
+  const refs = makeRefs(state), writer = stateWriter(state, refs)
+  refs.latestRuntimesRef.current = Object.fromEntries(recorded.stage.lanes.map(lane => [lane.selectedSessionId!, { ...emptyRuntime(), processStatus: 'started' }]))
+  const setRuntimes = (update: Record<string, SessionRuntime> | ((prev: Record<string, SessionRuntime>) => Record<string, SessionRuntime>)) => {
+    refs.latestRuntimesRef.current = typeof update === 'function' ? update(refs.latestRuntimesRef.current) : update
+  }
+  const cliMissing = 'claude CLI not found. Open Setup (File › Setup…) to install it or enter its path.'
+  const spawnSession = vi.fn(async (options: SessionSpawnOptions) => {
+    if (options.kind === 'claude') throw new Error(`Error invoking remote method 'session:spawn': ProviderCliNotFoundError: ${cliMissing}`)
+    return { sessionId: 'codex-restarted', providerSessionId: options.resumeSessionId }
+  })
+  window.api = { ...originalApi, spawnSession, killOwnedSession: vi.fn(async () => true), controlGoalLoop: vi.fn(async () => null) }
+  const hook = renderHook(() => useSessionActions(state, writer.setState, setRuntimes, refs))
+  await act(async () => { await hook.result.current.reloadAgentSessions(true); await vi.runAllTimersAsync() })
+  expect(refs.latestRuntimesRef.current[claudeLane!]).toMatchObject({ processStatus: 'failed', processError: cliMissing })
+})

@@ -52,3 +52,11 @@ it('shows the CLI sentence only for a known provider', () => {
   expect(curatedSpawnMessage("Error invoking remote method 'session:spawn': ProviderCliNotFoundError: opencode CLI not found. Open Setup (File › Setup…) to install it or enter its path.", '/repo'))
     .toBe('opencode CLI not found. Open Setup (File › Setup…) to install it or enter its path.')
 })
+
+// #1324 review B: main now sends the fixed proxy sentence (inside Electron's
+// IPC wrapper), not the raw mitmproxy text; the renderer must keep it.
+it('keeps the proxy guidance main hands over through IPC', () => {
+  const relayed = "Error invoking remote method 'session:spawn': Error: Claude proxy startup failed. Restart Agent Code after rebuilding, or disable Proxy-Streamed Semantic Rendering in settings if the proxy will not start in this environment."
+  expect(curatedSpawnMessage(relayed, '/repo')).toContain('Claude proxy startup failed')
+  expect(sessionSpawnErrorMessage('claude', new Error(relayed), true, '/repo')).toContain('Claude proxy startup failed')
+})

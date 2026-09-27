@@ -34,7 +34,7 @@ import {
   releaseIdentityCarry,
   reserveIdentityCarry,
 } from '@renderer/workspace/agentNames/pendingIdentityCarry'
-import { sessionSpawnErrorMessage } from '@renderer/workspace/spawn/errorMessage'
+import { curatedSpawnMessage, sessionSpawnErrorMessage } from '@renderer/workspace/spawn/errorMessage'
 
 import type {
   WorkspaceSetRuntimes,
@@ -1534,7 +1534,7 @@ export function useSessionActions(
       const idMap = new Map<SessionId, SessionId>()
       // Old ids whose respawn failed. See the setState below for why these
       // stay in the workspace instead of being removed (#1239).
-      const failedIds = new Set<SessionId>()
+      const failedIds = new Map<SessionId, string>()
       const freshSessions: Record<SessionId, SessionMeta> = {}
       // Successors that can still complete a goal loop; see carryGoalLoops.
       const goalLoopCapable = new Set<SessionId>()
@@ -1590,12 +1590,13 @@ export function useSessionActions(
             ...(builtInMcpDomains !== undefined ? { builtInMcpDomains, builtInMcpOverrides } : {}),
             ...(userMcpServerIds !== undefined ? { userMcpServerIds } : {}),
           }
-        } catch {
-          // WHY the rejection's text is dropped (#1252 review): it is the raw
-          // provider exception relayed through IPC, which can carry secrets,
-          // and the pane renders `processError` verbatim. Main's recovery
-          // path already returns this same fixed message for the same failure.
-          failedIds.add(oldId)
+        } catch (err) {
+          // WHY only a curated sentence survives (#1252 review, #1324 review
+          // C): the pane renders `processError` verbatim. Main now launders
+          // the rejection, but the pane keeps the same rule as every create:
+          // a missing CLI or folder names its fix, anything else is the fixed
+          // sentence main's recovery path uses.
+          failedIds.set(oldId, (err instanceof Error ? curatedSpawnMessage(err.message, meta.cwd) : null) ?? SESSION_START_FAILED_MESSAGE)
         }
       }
 
@@ -1607,12 +1608,12 @@ export function useSessionActions(
         // A failed respawn keeps its pane, in the same `failed` state a
         // failed wake uses: its backend was killed above, so the pane must
         // say so and offer Retry (which wakes it under the same id).
-        for (const oldId of failedIds) {
+        for (const [oldId, processError] of failedIds) {
           const current = next[oldId] ?? emptyRuntime()
           next[oldId] = {
             ...current,
             processStatus: 'failed',
-            processError: SESSION_START_FAILED_MESSAGE,
+            processError,
             recoveryFailureCode: 'start-failed',
             inputReady: false,
             inputReadinessReason: null,
