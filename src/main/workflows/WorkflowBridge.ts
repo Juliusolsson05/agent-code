@@ -149,6 +149,8 @@ export class WorkflowBridge {
    */
   private readonly aliases = new Map<string, string>()
   private readonly aliasFile: string | null
+  private aliasSave: Promise<void> = Promise.resolve()
+  private aliasTempCounter = 0
 
   constructor(
     private readonly service: WorkflowService,
@@ -167,38 +169,77 @@ export class WorkflowBridge {
     if (this.unsubscribe) return
     this.unsubscribe = this.service.subscribe(event => this.enqueue(event))
     await this.loadAliases()
+    // Snapshot what the file held, so pruning below can only drop edges it
+    // loaded. A carry the renderer lands while listStoredRunReferences is
+    // awaited is live-process state and must survive even though no stored
+    // run names its source yet (the late-registration case it exists for).
+    const loaded = new Map(this.aliases)
     if (typeof this.service.listStoredRunReferences === 'function') {
       const references = await this.service.listStoredRunReferences()
+      const clientIds = new Set<string>()
       for (const reference of references) {
         if (!reference.clientId) continue
+        clientIds.add(reference.clientId)
         const { cwd, clientId, ...run } = reference
         this.upsertRun(this.resolveSession(clientId), cwd, run)
       }
+      await this.pruneAliases(loaded, clientIds)
     }
   }
 
   /**
    * The pane `from` was replaced by `to` (#1280): its runs now belong to `to`.
-   * Called by the renderer at the same commit points that carry a goal loop.
-   * Only a pane that owns runs is recorded, so the alias file grows with
-   * replaced panes that ran workflows, not with every replacement.
+   * Called by the renderer at the same commit points that carry a goal loop,
+   * and by Undo Close, which resumes the same conversation under a fresh id.
+   *
+   * WHY the alias is recorded even when `from` owns no runs yet (#1325 review
+   * A1): a workflow the pane's MCP started just before the swap registers
+   * through `registerRun(from, ...)` when its tool call returns, which can be
+   * after this commit, and its durable clientId is `from` forever. Without the
+   * edge that run lands in a dead slot now and after every restart. The file
+   * stays small because `start()` prunes every edge no stored run reaches.
    */
   async carrySession(from: string, to: string): Promise<void> {
     const source = nonEmpty(from, 'from')
     const target = nonEmpty(to, 'to')
     if (source === target) return
     const moving = this.runsBySession.get(source)
-    if (!moving) return
     const existing = this.runsBySession.get(target)
-    const session = existing && existing.cwd === moving.cwd
-      ? { cwd: moving.cwd, slots: new Map([...moving.slots, ...existing.slots]) }
-      : moving
-    this.runsBySession.delete(source)
-    this.runsBySession.set(target, session)
+    if (moving && existing && existing.cwd !== moving.cwd) {
+      // WHY skip instead of letting one side win (#1325 review A4): a slot
+      // holds runs for one cwd, so a merge is impossible, and overwriting the
+      // target silently deleted runs the successor already showed. Every
+      // renderer carry is a same-cwd replacement, so reaching this means the
+      // two ids are not really one pane; leaving both slots (and recording no
+      // alias) keeps each run visible where it was instead of guessing.
+      console.warn('[workflows] not carrying workflow runs across different working directories')
+      return
+    }
+    // `target` is a live pane now. An older edge out of it (it was replaced
+    // once and is back) would send its runs to a pane that no longer exists,
+    // and with this carry could form a cycle, so it goes.
+    this.aliases.delete(target)
     this.aliases.set(source, target)
+    let session = existing
+    if (moving) {
+      // WHY merge through collapseLineage (#1325 review A5): the successor may
+      // already hold a Resume of one of the moved runs (registered under the
+      // new id before this carry landed). A plain map merge showed parent and
+      // child as two cards, while a restart, which goes through upsertRun,
+      // shows one; both paths must produce the same representation. Moved
+      // slots go first so the oldest slot key keeps its React identity.
+      session = existing
+        ? { cwd: moving.cwd, slots: new Map([...moving.slots, ...existing.slots]) }
+        : moving
+      collapseLineage(session.slots)
+      this.runsBySession.delete(source)
+      this.runsBySession.set(target, session)
+    }
     await this.saveAliases()
-    this.publishSessionRuns(source, { cwd: moving.cwd, slots: new Map() })
-    this.publishSessionRuns(target, session)
+    if (moving && session) {
+      this.publishSessionRuns(source, { cwd: moving.cwd, slots: new Map() })
+      this.publishSessionRuns(target, session)
+    }
   }
 
   /** Follow the replacement chain to the pane that owns a clientId today. */
@@ -221,17 +262,63 @@ export class WorkflowBridge {
         if (from && typeof to === 'string' && to) this.aliases.set(from, to)
       }
     } catch {
-      // Missing (no pane with runs was ever replaced) or unreadable: runs are
-      // then filed under the id they started with, today's behaviour. The
-      // runs themselves are safe in the workflow store either way.
+      // Missing (no pane was ever replaced) or unreadable: runs are then filed
+      // under the id they started with, today's behaviour. The runs
+      // themselves are safe in the workflow store either way.
     }
   }
 
-  private async saveAliases(): Promise<void> {
+  /**
+   * Drop loaded edges that no stored run's clientId reaches. WHY: every
+   * replacement now records an edge (see carrySession), so without this the
+   * file grows with every reload for the life of the install. An edge only
+   * matters for a run whose durable clientId leads through it; a late
+   * registration from a previous process cannot happen after a restart, so
+   * after the inventory an unreachable loaded edge is dead weight.
+   */
+  private async pruneAliases(
+    loaded: ReadonlyMap<string, string>,
+    clientIds: ReadonlySet<string>,
+  ): Promise<void> {
+    const reachable = new Set<string>()
+    for (const clientId of clientIds) {
+      let current = clientId
+      while (this.aliases.has(current) && !reachable.has(current)) {
+        reachable.add(current)
+        current = this.aliases.get(current)!
+      }
+    }
+    let pruned = false
+    for (const [from, to] of loaded) {
+      // Only an edge that is still exactly what the file held: a carry during
+      // start() may have rewritten it, and that one is live.
+      if (reachable.has(from) || this.aliases.get(from) !== to) continue
+      this.aliases.delete(from)
+      pruned = true
+    }
+    if (pruned) await this.saveAliases()
+  }
+
+  /**
+   * WHY serialized (#1325 review B): Reload Agents fires one carry per pane
+   * without awaiting. With independent writers an older snapshot could
+   * rename last and erase a newer edge on disk while memory still had it, so
+   * the loss only showed after a restart. Each queued write snapshots the map
+   * when it runs, so the last write always carries every edge made so far.
+   */
+  private saveAliases(): Promise<void> {
+    const write = this.aliasSave.then(() => this.writeAliases())
+    this.aliasSave = write
+    return write
+  }
+
+  private async writeAliases(): Promise<void> {
     if (!this.aliasFile) return
     // Temp file + rename: a crash mid-write must not leave half a JSON
-    // document, which loadAliases would read as no aliases at all.
-    const temporary = `${this.aliasFile}.${process.pid}.${Date.now()}.tmp`
+    // document, which loadAliases would read as no aliases at all. The counter
+    // keeps two writes in the same millisecond off one temp path.
+    this.aliasTempCounter += 1
+    const temporary = `${this.aliasFile}.${process.pid}.${Date.now()}.${this.aliasTempCounter}.tmp`
     try {
       await mkdir(dirname(this.aliasFile), { recursive: true })
       await writeFile(temporary, JSON.stringify(Object.fromEntries(this.aliases)), { mode: 0o600 })
@@ -239,6 +326,7 @@ export class WorkflowBridge {
     } catch (error) {
       await unlink(temporary).catch(() => undefined)
       // The move already happened in memory; only a restart would lose it.
+      // Never rejects, so one failed write cannot wedge the queue behind it.
       console.warn('[workflows] could not persist a replaced pane\'s workflow runs:', error)
     }
   }
@@ -367,7 +455,16 @@ export class WorkflowBridge {
   }
 
   registerRun(sessionId: string, cwd: string, run: WorkflowRunStartResult): void {
-    const { sessionId: normalizedSessionId, session } = this.upsertRun(sessionId, cwd, run)
+    // WHY resolve here (#1325 review A1/A2): callers name the session they
+    // captured when the work started. The MCP onRunStarted callback holds the
+    // tool call's scope, and Resume holds the owner it found before awaiting
+    // the service; either can land after the pane was replaced. Filing under
+    // the captured id would recreate the dead pane's slot.
+    const { sessionId: normalizedSessionId, session } = this.upsertRun(
+      this.resolveSession(nonEmpty(sessionId, 'sessionId')),
+      cwd,
+      run,
+    )
     this.publishSessionRuns(normalizedSessionId, session)
   }
 
@@ -401,40 +498,7 @@ export class WorkflowBridge {
       reference = { ...reference, ...lifecycle }
     }
     session.slots.set(run.runId, reference)
-    // WHY collapse after insertion instead of choosing a slot from the incoming run alone:
-    // startup storage inventory has no parent-before-child ordering contract. A successor may be
-    // seen before its parent, and a three-run lineage can arrive newest, oldest, middle. Repeatedly
-    // replacing any present parent with its present child converges on the leaf while retaining the
-    // oldest slot key for stable React identity. Live resumes take the same path, so restart and
-    // in-process navigation cannot drift into different lineage representations.
-    while (true) {
-      const entries = [...session.slots.entries()]
-      // Collapse from the oldest available edge toward the leaf. If C→B is collapsed before B→A,
-      // B's own ancestry disappears with its card and A can no longer be recognized as the same
-      // lineage. A valid resume graph is acyclic, so at least one present edge has a parent whose
-      // own parent is not present; absence of such an edge means corrupt/cyclic lineage, which is
-      // safer to display as separate cards than to spin or discard an arbitrary run.
-      const edge = entries
-        .map(([childSlot, child]) => {
-          if (!child.resumedFromRunId) return null
-          const parentEntry = entries.find(([, parent]) => parent.runId === child.resumedFromRunId)
-          if (!parentEntry || parentEntry[0] === childSlot) return null
-          const [, parent] = parentEntry
-          const parentHasPresentParent = parent.resumedFromRunId !== undefined &&
-            entries.some(([, candidate]) => candidate.runId === parent.resumedFromRunId)
-          return parentHasPresentParent
-            ? null
-            : { childSlot, child, parentSlot: parentEntry[0] }
-        })
-        .find((candidate): candidate is {
-          childSlot: string
-          child: WorkflowRunReferenceData
-          parentSlot: string
-        } => candidate !== null)
-      if (!edge) break
-      session.slots.delete(edge.childSlot)
-      session.slots.set(edge.parentSlot, edge.child)
-    }
+    collapseLineage(session.slots)
     this.runsBySession.set(normalizedSessionId, session)
     return { sessionId: normalizedSessionId, session }
   }
@@ -794,5 +858,47 @@ function cloneReference(reference: WorkflowRunReferenceData): WorkflowRunReferen
   return {
     ...reference,
     ...(reference.workflow ? { workflow: { ...reference.workflow } } : {}),
+  }
+}
+
+/**
+ * Fold every resumed run into its parent's slot so a lineage is one card.
+ * Shared by upsertRun and carrySession so a live merge and a restart build the
+ * same representation (#1325 review A5).
+ */
+function collapseLineage(slots: Map<string, WorkflowRunReferenceData>): void {
+  // WHY collapse after insertion instead of choosing a slot from the incoming run alone:
+  // startup storage inventory has no parent-before-child ordering contract. A successor may be
+  // seen before its parent, and a three-run lineage can arrive newest, oldest, middle. Repeatedly
+  // replacing any present parent with its present child converges on the leaf while retaining the
+  // oldest slot key for stable React identity. Live resumes take the same path, so restart and
+  // in-process navigation cannot drift into different lineage representations.
+  while (true) {
+    const entries = [...slots.entries()]
+    // Collapse from the oldest available edge toward the leaf. If C→B is collapsed before B→A,
+    // B's own ancestry disappears with its card and A can no longer be recognized as the same
+    // lineage. A valid resume graph is acyclic, so at least one present edge has a parent whose
+    // own parent is not present; absence of such an edge means corrupt/cyclic lineage, which is
+    // safer to display as separate cards than to spin or discard an arbitrary run.
+    const edge = entries
+      .map(([childSlot, child]) => {
+        if (!child.resumedFromRunId) return null
+        const parentEntry = entries.find(([, parent]) => parent.runId === child.resumedFromRunId)
+        if (!parentEntry || parentEntry[0] === childSlot) return null
+        const [, parent] = parentEntry
+        const parentHasPresentParent = parent.resumedFromRunId !== undefined &&
+          entries.some(([, candidate]) => candidate.runId === parent.resumedFromRunId)
+        return parentHasPresentParent
+          ? null
+          : { childSlot, child, parentSlot: parentEntry[0] }
+      })
+      .find((candidate): candidate is {
+        childSlot: string
+        child: WorkflowRunReferenceData
+        parentSlot: string
+      } => candidate !== null)
+    if (!edge) break
+    slots.delete(edge.childSlot)
+    slots.set(edge.parentSlot, edge.child)
   }
 }

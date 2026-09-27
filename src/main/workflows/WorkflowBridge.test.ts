@@ -10,6 +10,23 @@ import { createWorkflowState } from 'workflow-mcp/state'
 // delivery bookkeeping (cursors, interests, batching), not routing, so the
 // registry is stubbed to a single always-resolvable window — routing itself is
 // covered in windowRegistry.routing.test.ts.
+// #1325 review B: alias writes can overlap, and the lost-edge order needs the
+// first write's rename to finish last. A test sets `renameGate.hold` to make
+// the next rename wait; every other rename is the real one.
+const renameGate = vi.hoisted(() => ({ hold: null as Promise<void> | null }))
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    rename: async (from: string, to: string) => {
+      const hold = renameGate.hold
+      renameGate.hold = null
+      if (hold) await hold
+      return actual.rename(from, to)
+    },
+  }
+})
+
 vi.mock('@main/window/windowRegistry.js', () => ({
   recordIpcDiagnosticBreadcrumb: vi.fn(),
   sendToWindow: vi.fn(),
@@ -473,7 +490,11 @@ describe('WorkflowBridge session carry (#1280)', () => {
   const { mkdtempSync, rmSync } = require('node:fs') as typeof import('node:fs')
   const { tmpdir } = require('node:os') as typeof import('node:os')
   const { join } = require('node:path') as typeof import('node:path')
-  const reference = (runId: string, clientId: string) => ({
+  const { readFileSync, writeFileSync } = require('node:fs') as typeof import('node:fs')
+  // The shape workflow-mcp's startResult() projects from a stored manifest:
+  // every client-owned run in the owner's store has a lineageId and a script
+  // path (#1325 review B), so the fixture carries both.
+  const reference = (runId: string, clientId: string, extra: Record<string, unknown> = {}) => ({
     runId,
     cwd: '/repo',
     clientId,
@@ -481,7 +502,16 @@ describe('WorkflowBridge session carry (#1280)', () => {
     cursor: 3,
     workflow: { name: 'hunt', description: 'Find bugs' },
     transcriptDirectory: `/state/${runId}/transcripts`,
+    lineageId: runId,
+    scriptPath: '/repo/.claude/workflows/hunt.js',
+    ...extra,
   })
+  const run = (runId: string, extra: Record<string, unknown> = {}) => {
+    const { cwd: _cwd, clientId: _clientId, ...started } = reference(runId, 'unused', extra)
+    return started
+  }
+  const runIds = (bridge: InstanceType<typeof WorkflowBridge>, sessionId: string, cwd = '/repo') =>
+    bridge.getSessionRuns({ sessionId, cwd }).runs.map(entry => entry.runId)
   function aliasFile(): string {
     const dir = mkdtempSync(join(tmpdir(), 'workflow-aliases-'))
     return join(dir, 'workflow-session-aliases.json')
@@ -526,5 +556,138 @@ describe('WorkflowBridge session carry (#1280)', () => {
     await bridge.resume({ cwd: '/repo', runId: 'run-1' })
     expect(svc.resume).toHaveBeenCalledWith(expect.objectContaining({ clientId: 'pane-new' }), expect.anything())
     expect(bridge.getSessionRuns({ sessionId: 'pane-new', cwd: '/repo' }).runs.map(run => run.runId)).toEqual(['run-resumed'])
+  })
+
+  it('tells a still-mounted view of the old pane that its runs left', async () => {
+    const send = vi.fn()
+    const bridge = new WorkflowBridge(service([reference('run-1', 'pane-old')]), { send, aliasFile: aliasFile() })
+    await bridge.start()
+    await bridge.carrySession('pane-old', 'pane-new')
+    expect(send).toHaveBeenCalledWith({ sessionId: 'pane-old' }, 'workflows:session-runs', expect.objectContaining({ runs: [] }))
+  })
+
+  // Review A1: the pane's MCP tool call can return after the swap committed,
+  // and registers under the id it captured. Its durable clientId is that id.
+  it('files a run that registers after the carry under the successor, now and after a restart', async () => {
+    const file = aliasFile()
+    const bridge = new WorkflowBridge(service([]), { send: vi.fn(), aliasFile: file })
+    await bridge.start()
+    await bridge.carrySession('pane-old', 'pane-new')
+    bridge.registerRun('pane-old', '/repo', run('run-late'))
+    expect(runIds(bridge, 'pane-new')).toEqual(['run-late'])
+    expect(runIds(bridge, 'pane-old')).toEqual([])
+    const restarted = new WorkflowBridge(service([reference('run-late', 'pane-old')]), { send: vi.fn(), aliasFile: file })
+    await restarted.start()
+    expect(runIds(restarted, 'pane-new')).toEqual(['run-late'])
+  })
+
+  it('files a second late run under the successor after the first was carried', async () => {
+    const bridge = new WorkflowBridge(service([reference('run-first', 'pane-old')]), { send: vi.fn(), aliasFile: aliasFile() })
+    await bridge.start()
+    await bridge.carrySession('pane-old', 'pane-new')
+    bridge.registerRun('pane-old', '/repo', run('run-late'))
+    expect(runIds(bridge, 'pane-new')).toEqual(['run-first', 'run-late'])
+  })
+
+  // Review A2: Resume finds the owner, then awaits the service; the carry
+  // lands during that await.
+  it('files a resume that returns after a carry under the successor', async () => {
+    let finish!: (value: unknown) => void
+    const svc = service([reference('run-parent', 'pane-old')])
+    ;(svc.resume as ReturnType<typeof vi.fn>).mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const bridge = new WorkflowBridge(svc, { send: vi.fn(), aliasFile: aliasFile() })
+    await bridge.start()
+    const resuming = bridge.resume({ cwd: '/repo', runId: 'run-parent' })
+    await bridge.carrySession('pane-old', 'pane-new')
+    finish(run('run-child', { resumedFromRunId: 'run-parent', lineageId: 'run-parent' }))
+    await resuming
+    expect(runIds(bridge, 'pane-new')).toEqual(['run-child'])
+    expect(runIds(bridge, 'pane-old')).toEqual([])
+  })
+
+  // Review B: Reload Agents carries every pane without awaiting.
+  it('keeps every edge on disk when two carries save at once', async () => {
+    const file = aliasFile()
+    const bridge = new WorkflowBridge(service([reference('run-a', 'a'), reference('run-x', 'x')]), { send: vi.fn(), aliasFile: file })
+    await bridge.start()
+    let release!: () => void
+    renameGate.hold = new Promise(resolve => { release = resolve })
+    const first = bridge.carrySession('a', 'b')
+    // Let the first write reach its held rename before the second starts.
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const second = bridge.carrySession('x', 'y')
+    await new Promise(resolve => setTimeout(resolve, 20))
+    release()
+    await Promise.all([first, second])
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ a: 'b', x: 'y' })
+  })
+
+  it('keeps the runs the successor already has when the pane\'s runs join it', async () => {
+    const bridge = new WorkflowBridge(service([reference('run-old', 'pane-old'), reference('run-new', 'pane-new')]), { send: vi.fn(), aliasFile: aliasFile() })
+    await bridge.start()
+    await bridge.carrySession('pane-old', 'pane-new')
+    expect(runIds(bridge, 'pane-new')).toEqual(['run-old', 'run-new'])
+  })
+
+  // Review A5: a Resume filed under the successor before the carry landed.
+  it('shows a moved run and its resume in the successor as one card, as a restart does', async () => {
+    const bridge = new WorkflowBridge(service([
+      reference('run-parent', 'pane-old'),
+      reference('run-child', 'pane-new', { resumedFromRunId: 'run-parent', lineageId: 'run-parent' }),
+    ]), { send: vi.fn(), aliasFile: aliasFile() })
+    await bridge.start()
+    await bridge.carrySession('pane-old', 'pane-new')
+    expect(runIds(bridge, 'pane-new')).toEqual(['run-child'])
+  })
+
+  // Review A4: a slot holds one cwd, so the two cannot merge.
+  it('never deletes a successor\'s runs in another working directory', async () => {
+    const file = aliasFile()
+    const bridge = new WorkflowBridge(service([
+      reference('run-old', 'pane-old', { cwd: '/first' }),
+      reference('run-new', 'pane-new', { cwd: '/second' }),
+    ]), { send: vi.fn(), aliasFile: file })
+    await bridge.start()
+    await bridge.carrySession('pane-old', 'pane-new')
+    expect(runIds(bridge, 'pane-new', '/second')).toEqual(['run-new'])
+    expect(runIds(bridge, 'pane-old', '/first')).toEqual(['run-old'])
+    expect(() => readFileSync(file, 'utf8')).toThrow()
+  })
+
+  it('starts with the runs under the id they started with when the alias file is not JSON', async () => {
+    const file = aliasFile()
+    writeFileSync(file, '{"pane-a": "pane-b"')
+    const bridge = new WorkflowBridge(service([reference('run-1', 'pane-a')]), { send: vi.fn(), aliasFile: file })
+    await bridge.start()
+    expect(runIds(bridge, 'pane-a')).toEqual(['run-1'])
+  })
+
+  it('stops at a cycle in the alias file instead of spinning', async () => {
+    const file = aliasFile()
+    writeFileSync(file, JSON.stringify({ 'pane-a': 'pane-b', 'pane-b': 'pane-a' }))
+    const bridge = new WorkflowBridge(service([reference('run-1', 'pane-a')]), { send: vi.fn(), aliasFile: file })
+    await bridge.start()
+    expect(runIds(bridge, 'pane-a')).toEqual(['run-1'])
+  })
+
+  // Every replacement records an edge now, so a restart must drop the ones no
+  // stored run needs or the file grows for the life of the install.
+  it('drops edges no stored run reaches at start, and keeps the chains that do', async () => {
+    const file = aliasFile()
+    writeFileSync(file, JSON.stringify({ 'pane-a': 'pane-b', 'pane-b': 'pane-c', 'no-runs': 'gone' }))
+    const bridge = new WorkflowBridge(service([reference('run-1', 'pane-a')]), { send: vi.fn(), aliasFile: file })
+    await bridge.start()
+    expect(runIds(bridge, 'pane-c')).toEqual(['run-1'])
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ 'pane-a': 'pane-b', 'pane-b': 'pane-c' })
+  })
+
+  it('forgets an old edge out of a pane that is live again', async () => {
+    const file = aliasFile()
+    const bridge = new WorkflowBridge(service([reference('run-1', 'pane-a')]), { send: vi.fn(), aliasFile: file })
+    await bridge.start()
+    await bridge.carrySession('pane-a', 'pane-b')
+    await bridge.carrySession('pane-b', 'pane-a')
+    expect(runIds(bridge, 'pane-a')).toEqual(['run-1'])
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ 'pane-b': 'pane-a' })
   })
 })
