@@ -15,7 +15,7 @@ import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/comma
 import { submitActiveComposer } from '@renderer/workspace/tile-tree/TileLeaf/composerEnterRegistry'
 import { sessionHasTranscript } from '@renderer/workspace/transcriptAvailability'
 import { isWorkingAgent } from '@renderer/workspace/agentFollow'
-import { CLIPBOARD_WRITE_FAILED } from '@renderer/features/workspace/commands/clipboardFailure'
+import { CLIPBOARD_WRITE_FAILED } from '@renderer/lib/clipboardFailure'
 
 // DELETED with the unified layout (#992) — see RETIRED_COMMAND_IDS in
 // catalog.test.ts for the ledger:

@@ -1,4 +1,6 @@
-// What a copy command says when the clipboard refused the write (#1250 row 9).
+// What a copy action says when the clipboard refused the write (#1250 row 9):
+// the copy commands, the assistant-message picker and Browser Pocket's pick,
+// so one failure mode has one sentence (#1421 review c).
 //
 // WHY fixed words: the rejection is a DOMException whose message is browser
 // text ("Document is not focused."), and user-visible text is curated (q22).

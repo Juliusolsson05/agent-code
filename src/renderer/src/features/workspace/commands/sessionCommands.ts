@@ -1,5 +1,5 @@
 import { commandTarget } from '@renderer/features/command-palette/commandTarget'
-import { CLIPBOARD_WRITE_FAILED } from '@renderer/features/workspace/commands/clipboardFailure'
+import { CLIPBOARD_WRITE_FAILED } from '@renderer/lib/clipboardFailure'
 import { clonedMcpOverrides } from '@renderer/workspace/mcpDomains'
 import { DEFAULT_PROVIDER, effectiveProviderRuntime, isAgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'

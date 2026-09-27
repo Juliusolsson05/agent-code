@@ -25,3 +25,12 @@ New `paneCommands.copy.renderer.test.ts`. The runtime entries are the recorded b
 ## Out of scope
 - #1250's other rows.
 - Debug-panel copy buttons (developer surfaces).
+
+## Review round 1 (a, b: FIX-BEFORE-MERGE; c: MERGE-READY)
+- **a1 (Major): a refused copy reports `ran` to `commands.run` callers.** Declined, with reasons:
+  - Throwing would make `runGuarded` add its own "Command failed: Copy Last Response" toast, so every human path would get two messages for one failure.
+  - The `commands.run` contract already says `ran` means only that the dispatcher returned, and tells the caller to observe the app afterwards.
+- **a2 (Minor): nothing pinned that the command stays pending until the write settles.** Test added with a deferred write: the command is not settled and silent before the write, then says "Copied". It fails with a fire-and-forget `.then`.
+- **b1 (Major): Browser Pocket's pick (no composer) swallowed a refused write and said "Element copied".** It now says the refusal. Test in `pick.renderer.test.ts`, red on the old pick.
+- **b2 / c1 (Minor): the wording was compared against the constant only.** It is now asserted literally.
+- **c2 (Minor): the assistant-message picker and the code-block picker said "Clipboard write failed".** Both now use the shared sentence. The constant moved to `lib/clipboardFailure.ts`, since four features share it.

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { CommandContext } from '@renderer/features/command-palette/types'
 import type { Workspace } from '@renderer/workspace/hook'
-import { CLIPBOARD_WRITE_FAILED } from '@renderer/features/workspace/commands/clipboardFailure'
+import { CLIPBOARD_WRITE_FAILED } from '@renderer/lib/clipboardFailure'
 import { paneCommands } from '@renderer/features/workspace/commands/paneCommands'
 import { sessionCommands } from '@renderer/features/workspace/commands/sessionCommands'
 import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
@@ -63,7 +63,26 @@ describe('copy commands and a refused clipboard', () => {
     stubClipboard(refused)
     const { ctx, toasts } = context(bundle.input.provider)
     await copyLast.run(ctx)
-    expect(toasts).toEqual([CLIPBOARD_WRITE_FAILED])
+    // The literal words (#1421 review b, c): comparing against the constant
+    // alone would let the advice be reworded away unnoticed.
+    expect(toasts).toEqual(["Couldn't copy to the clipboard. Click into the app and try again."])
+    expect(CLIPBOARD_WRITE_FAILED).toBe(toasts[0])
+  })
+
+  // #1421 review a: the command's promise is the dispatcher's single-flight
+  // and outcome; it must not resolve (or say anything) before the write does.
+  it('stays pending, and silent, until the clipboard write settles', async () => {
+    let finish!: () => void
+    stubClipboard(() => new Promise<void>(resolve => { finish = resolve }))
+    const { ctx, toasts } = context(bundle.input.provider)
+    let settled = false
+    const running = Promise.resolve(copyLast.run(ctx)).then(() => { settled = true })
+    await Promise.resolve(); await Promise.resolve()
+    expect(settled).toBe(false)
+    expect(toasts).toEqual([])
+    finish()
+    await running
+    expect(toasts).toEqual(['Copied to clipboard'])
   })
 
   it('says Copied only after the clipboard took the recorded response', async () => {
