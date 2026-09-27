@@ -203,10 +203,26 @@ describe('review round 2 model rules', () => {
     expect(summarizeEntry({ command: 'srv', args: ['--api-key', 'd6f8g2h9', '--port', '8080'] })).toBe('srv … … --port 8080')
   })
 
-  it('counts every literal as part of where secrets go, but not which secret a value references', () => {
+  // q118 (#1420 round-2 review a): WHICH input a value references is part of
+  // where secrets go. An endpoint built from `${input:trusted-host}` becomes
+  // another host when the agent points it at `${input:evil-host}`, so a
+  // reference change must be a destination change, like any literal edit.
+  it('counts every literal AND every reference id as part of where secrets go', () => {
     const base = { command: 'npx', env: { T: '${input:a}' } }
-    expect(userMcpDestination(base)).toBe(userMcpDestination({ command: 'npx', env: { T: '${input:b}' } }))
+    expect(userMcpDestination(base)).not.toBe(userMcpDestination({ command: 'npx', env: { T: '${input:b}' } }))
     expect(userMcpDestination(base)).not.toBe(userMcpDestination({ command: 'npx', env: { T: '${input:a}', NODE_OPTIONS: '--require x' } }))
+    // Key order is not a destination.
+    expect(userMcpDestination({ command: 'npx', env: { A: '1', B: '${input:a}' } }))
+      .toBe(userMcpDestination({ command: 'npx', env: { B: '${input:a}', A: '1' } }))
+  })
+
+  // q118 (round-2 review a, finding 2): the old mask wrote every reference as
+  // `${input}`, which is also literal text substitution leaves alone, so
+  // `${input:t}${input}` and `${input}${input:t}` looked identical while the
+  // resolved header changed.
+  it('never confuses a literal `${input}` with a reference', () => {
+    const header = (auth: string) => ({ type: 'http', url: 'https://api.example/mcp', headers: { Authorization: auth } })
+    expect(userMcpDestination(header('Bearer ${input:t}${input}'))).not.toBe(userMcpDestination(header('Bearer ${input}${input:t}')))
   })
 
   // #1420 reviews a+b: masking the WHOLE value that contains a reference let
@@ -218,8 +234,5 @@ describe('review round 2 model rules', () => {
       .not.toBe(userMcpDestination(at('https://evil.example/mcp?key=${input:t}')))
     const header = (auth: string) => ({ type: 'http', url: 'https://api.example/mcp', headers: { Authorization: auth } })
     expect(userMcpDestination(header('Bearer ${input:t}'))).not.toBe(userMcpDestination(header('Basic ${input:t}')))
-    // Which input a value references is still not a destination.
-    expect(userMcpDestination(at('https://trusted.example/mcp?key=${input:t}')))
-      .toBe(userMcpDestination(at('https://trusted.example/mcp?key=${input:other}')))
   })
 })
