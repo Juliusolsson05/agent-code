@@ -383,3 +383,36 @@ it('does not carry a provisional provider id onto a fresh successor', async () =
   expect(successor.providerSessionId).toBeUndefined()
   expect(successor.providerSessionIdSource).toBeUndefined()
 })
+
+// Integration of #1324 (curated failure sentence on a failed respawn) with
+// #1326 (ownership across awaits): one agent's respawn fails while the other
+// is closed mid-reload. The failed pane shows main's curated sentence (never
+// raw IPC text), and the closed one is neither filed nor left running.
+it('shows the curated sentence on a failed respawn while a closed agent stays closed', async () => {
+  const h = harness('claude')
+  const cliMissing = 'codex CLI not found. Open Setup (File › Setup…) to install it or enter its path.'
+  let releaseClaude!: () => void
+  const claudeHeld = new Promise<void>(resolve => { releaseClaude = resolve })
+  h.spawnSession.mockImplementation(async (options: SessionSpawnOptions) => {
+    if (options.kind === 'codex') throw new Error(`Error invoking remote method 'session:spawn': Error: ${cliMissing}`)
+    await claudeHeld
+    return { sessionId: `${options.kind}-restarted`, providerSessionId: options.resumeSessionId }
+  })
+  let reload!: Promise<void>
+  await act(async () => { reload = h.hook.result.current.reloadAgentSessions(true) })
+  await vi.waitFor(() => expect(h.spawnSession).toHaveBeenCalledWith(expect.objectContaining({ kind: 'claude' })))
+  h.writer.setState(prev => {
+    const sessions = { ...prev.sessions }
+    delete sessions[h.claudeLane]
+    return { ...prev, sessions }
+  })
+  await act(async () => { releaseClaude(); await reload })
+  const after = h.writer.getState()
+  // The failed Codex agent keeps its pane, id and a curated message.
+  expect(after.sessions[h.codexLane]).toBeDefined()
+  expect(h.refs.latestRuntimesRef.current[h.codexLane]).toMatchObject({ processStatus: 'failed', processError: cliMissing })
+  // The closed Claude agent is not resurrected, and its successor is stopped.
+  expect(after.sessions['claude-restarted']).toBeUndefined()
+  expect(after.sessions[h.claudeLane]).toBeUndefined()
+  expect(h.killOwnedSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'claude-restarted', caller: 'reload.orphaned-successor' }))
+})

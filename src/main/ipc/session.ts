@@ -1,7 +1,9 @@
 import { ipcMain } from 'electron'
 import { createHash } from 'node:crypto'
 
-import type { SessionManager } from '@main/sessionManager.js'
+import { ProviderCliNotFoundError, type SessionManager } from '@main/sessionManager.js'
+import { MissingWorkspaceDirectoryError } from '@main/workspaceDirectory.js'
+import { CLAUDE_PROXY_STARTUP_FAILED_MESSAGE, isClaudeProxyStartupFailure, SESSION_START_FAILED_MESSAGE } from '@shared/types/session.js'
 import { mainOperations } from '@main/performance/operations.js'
 import type { PasteDebugJournalRegistry } from '@main/pasteDebugJournal.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
@@ -35,6 +37,8 @@ import type { SessionWindowLease } from '@main/window/sessionWindowRouter.js'
 import { screenInterest, screenTailHistory } from '@main/sessions/screenInterest.js'
 import type { AgentScreenSnapshot } from '@shared/types/session.js'
 import type { ScreenTailSample } from '@shared/debug/screenTail.js'
+
+const WINDOW_CANNOT_OWN_SESSION = 'The requesting window can no longer own this session'
 
 // One secret per app process is enough for correlation inside that run's
 // incident journal, and unlike a bare SHA-256 it prevents an exported bundle
@@ -88,14 +92,14 @@ export function registerSessionIpc(
       try {
         return await manager.spawn(options, sessionId => {
           lease = claimSessionForWindow(sessionId, owner)
-          if (!lease) throw new Error('The requesting window can no longer own this session')
+          if (!lease) throw new Error(WINDOW_CANNOT_OWN_SESSION)
         })
       } catch (error) {
         // A failed spawn never returns its minted id to the renderer, so no
         // pane-disposal request can clean this claim later. Release only this
         // admission; a successor recovery may already have claimed the id.
         releaseSession(lease)
-        throw error
+        throw launderSpawnError(error, options, appRunJournal)
       }
     },
   )
@@ -560,4 +564,88 @@ export function registerSessionIpc(
       return await resolveTranscriptPaths(requests)
     },
   )
+}
+
+/**
+ * What a failed session:spawn tells the renderer (#1267, steering q22 at the
+ * source). IPC relays only an error's message, and a provider launch
+ * exception can carry environment values, proxy URLs or scoped MCP tokens;
+ * every renderer surface used to have to remember not to show it. recover()
+ * already flattens its failures this way (sessionManager recoverSession).
+ * Only failures whose text our own code builds from a fixed template cross
+ * as themselves: a missing workspace folder (a path the user chose and the
+ * pane header already shows; #1324 review A noted it is not secret-free in
+ * general, but it reveals nothing the UI does not), a
+ * missing provider CLI (names File › Setup…), and this window losing the
+ * session. A Claude proxy that would not start becomes its fixed guidance.
+ * Everything else is the one safe sentence. Main logs and journals only a
+ * fixed signature (classifySpawnFailure), never the text.
+ */
+function launderSpawnError(
+  error: unknown,
+  options: Pick<SessionSpawnOptions, 'kind' | 'useProxy'> | undefined,
+  journal: AppRunJournal | undefined,
+): Error {
+  // WHY every read of the thrown value happens exactly once, inside a try,
+  // and every return is a FRESH Error built from that one read (#1324 review
+  // round 2 A/B): the thrown value is provider-controlled. Converting a
+  // non-Error to text runs its toString; an Error's `message` can be a getter
+  // that throws, or that answers the fixed window sentence on the first read
+  // and a token on the next. Returning the original object let IPC read it
+  // again. So nothing of the original crosses except text we compared.
+  let failure: SpawnFailure
+  try {
+    failure = classifySpawnFailure(error, proxyGuidanceApplies(options))
+  } catch {
+    failure = { signature: 'unreadable-throw', message: SESSION_START_FAILED_MESSAGE }
+  }
+  // WHY a signature and not the message (#1324 review C): the laundered
+  // rejection is all the renderer, the incident journal and a debug bundle
+  // ever see, so the one fact that identified the recorded node-pty trap
+  // ("posix_spawnp failed") was lost to every artifact this repo debugs
+  // from. A fixed code carries that fact and nothing else.
+  journal?.record({ area: 'session.spawn', name: 'session.spawn.failed', severity: 'warn', data: { kind: options?.kind ?? null, signature: failure.signature } })
+  console.warn('[session:spawn] provider start failed:', failure.signature)
+  return new Error(failure.message)
+}
+
+/**
+ * Only a Claude spawn that runs the proxy gets the proxy guidance (#1324
+ * review A/B, round 2 A/B). `useProxy` must be exactly true: that is the
+ * test sessionManager uses to start mitmproxy at all, so an omitted value is
+ * a launch without a proxy and must not be told to disable one. A Codex
+ * spawn whose error mentions mitmdump is not a Claude proxy failure either.
+ */
+function proxyGuidanceApplies(options: Pick<SessionSpawnOptions, 'kind' | 'useProxy'> | undefined): boolean {
+  return options?.kind === 'claude' && options.useProxy === true
+}
+
+type SpawnFailure = { signature: string; message: string }
+
+/**
+ * Which known failure a spawn rejection is (a fixed code, safe to journal)
+ * and the one sentence the renderer may see for it. New signatures go here as
+ * they are identified from recorded incidents. Reads `error.message` once;
+ * the caller catches a throwing read.
+ */
+export function classifySpawnFailure(error: unknown, proxyApplies: boolean): SpawnFailure {
+  const generic = (signature: string): SpawnFailure => ({ signature, message: SESSION_START_FAILED_MESSAGE })
+  if (!(error instanceof Error)) return generic('non-error-throw')
+  const raw: unknown = error.message
+  if (typeof raw !== 'string') return generic('unreadable-throw')
+  // Our own fixed templates cross as themselves: a missing workspace folder
+  // (a path the user chose and the pane header already shows; review A noted
+  // it is not secret-free in general, but it reveals nothing the UI does not)
+  // and a missing provider CLI (names File › Setup…).
+  if (error instanceof MissingWorkspaceDirectoryError) return { signature: 'missing-workspace', message: raw }
+  if (error instanceof ProviderCliNotFoundError) return { signature: 'cli-not-found', message: raw }
+  if (raw === WINDOW_CANNOT_OWN_SESSION) return { signature: 'window-refused', message: WINDOW_CANNOT_OWN_SESSION }
+  if (raw.includes('posix_spawnp failed')) return generic('posix-spawnp')
+  // The proxy code only where the guidance applies (round 2 B3): a Codex
+  // `spawn /repo/mitmdump: ENOENT` is an ENOENT, and signing it claude-proxy
+  // would send the next debugger after the wrong subsystem.
+  if (proxyApplies && isClaudeProxyStartupFailure(raw)) return { signature: 'claude-proxy', message: CLAUDE_PROXY_STARTUP_FAILED_MESSAGE }
+  if (/\bENOENT\b/.test(raw)) return generic('enoent')
+  if (/\bEACCES\b/.test(raw)) return generic('eacces')
+  return generic('unclassified')
 }

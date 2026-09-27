@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AppWindowHooks } from './appWindow.js'
 import type { SessionManager } from '@main/sessionManager.js'
 import type { LspManager } from '@main/lspManager.js'
+import { SESSION_START_FAILED_MESSAGE } from '@shared/types/session'
 
 const harness = vi.hoisted(() => ({
   history: vi.fn(),
@@ -147,15 +148,19 @@ describe('session routing through its real lifecycle callers', () => {
     expect(registry.captureSessionWindowLease('pane')).toBe(lease)
   })
 
+  // The raw provider text never crosses IPC (#1267, session:spawn launders
+  // it); what this test pins is that laundering did not skip the lease
+  // release, which runs in the same failure path.
   it('releases a failed spawn id which no renderer ever received', async () => {
     registry.createAppWindow()
     manager.spawn = vi.fn<SessionManager['spawn']>(async (_options, onId) => {
       onId?.('failed-pane')
-      throw new Error('fixture startup failure')
+      throw new Error('fixture startup failure token=secret')
     })
-    await expect(harness.handlers.get('session:spawn')!({
+    const rejection = await Promise.resolve(harness.handlers.get('session:spawn')!({
       sender: harness.built[0]!.webContents,
-    }, {})).rejects.toThrow('fixture startup failure')
+    }, {})).then(() => null, (error: Error) => error.message)
+    expect(rejection).toBe(SESSION_START_FAILED_MESSAGE)
     expect(registry.captureSessionWindowLease('failed-pane')).toBeNull()
   })
 
