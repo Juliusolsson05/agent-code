@@ -1,4 +1,6 @@
-import type { LanePort, PocketDrivingEvent, PocketFlags, PocketPickResult, PortWatchSession } from '@shared/browserPocket/types.js'
+import type { LanePort, PocketDrivingEvent, PocketFlags, PocketPickOutcome, PortWatchSession } from '@shared/browserPocket/types.js'
+
+type PickFailureReason = Extract<PocketPickOutcome, { kind: 'failed' }>['reason']
 
 import { emptyBuffers, entriesSince, reduceCdpEvent, type CdpBuffers, type ConsoleEntry, type NetworkEntry } from '../core/cdpBuffers.js'
 
@@ -95,7 +97,9 @@ type Pocket = {
    * (review A #6: a timeout reset silently dropped the colour scheme). */
   emulation: { colorScheme?: 'light' | 'dark' | null }
   buffers: CdpBuffers
-  pickAbort: (() => void) | null
+  /** Ends the pick in flight. `failure` (#1431 review a): a lifecycle end
+   *  (reset, detach, DevTools) is not the user's cancel and is said as one. */
+  pickAbort: ((failure?: PickFailureReason) => void) | null
   /**
    * Bumped by every reset (an active action timed out, the feature was turned
    * off, the guest was unregistered or replaced). Work queued under an older
@@ -477,9 +481,19 @@ export class BrowserPocketController {
 
   // ----------------------------------------------------------- picker
 
-  async pick(pocketId: string): Promise<PocketPickResult | null> {
+  async pick(pocketId: string): Promise<PocketPickOutcome> {
     const p = this.pockets.get(pocketId)
-    if (!p || !this.flags.enabled) return null
+    // WHY an outcome and not null (#1305): every failure below used to be
+    // null, which the renderer treats as the user's own cancel.
+    if (!p || !this.flags.enabled) return { kind: 'failed', reason: 'unavailable' }
+    // DevTools holds the page's debugger, so attaching would throw. Say that
+    // cause before touching the queue, as the agent gate does (`devtools_open`).
+    // An earlier pick is settled first (#1431 review a): a second pick always
+    // replaces the first, and with DevTools open the first can never finish.
+    if (p.guest.isDevToolsOpened()) {
+      p.pickAbort?.('devtools-open')
+      return { kind: 'failed', reason: 'devtools-open' }
+    }
     // A second pick replaces the first instead of leaving it hanging for 60 s.
     p.pickAbort?.()
     // The cancel handle exists from the FIRST moment, before the import and
@@ -488,8 +502,16 @@ export class BrowserPocketController {
     // action did nothing and the overlay armed later anyway (review round 2,
     // A #4). `aborted` is checked again right before the overlay arms.
     let aborted = false
+    let abortFailure: PickFailureReason | undefined
     let armedAbort: (() => void) | null = null
-    const abort = () => { aborted = true; armedAbort?.() }
+    // The FIRST abort decides the outcome, whatever it is (#1431 verification
+    // a, b): a user's cancel followed by a switch-off stays a silent cancel,
+    // and a switch-off followed by a cancel stays `unavailable`.
+    const abort = (failure?: PickFailureReason) => {
+      if (!aborted) abortFailure = failure
+      aborted = true
+      armedAbort?.()
+    }
     p.pickAbort = abort
     const { pickElement } = await import('./picker.js')
     // Through the queue, so an agent's CDP click can never land while the
@@ -497,9 +519,11 @@ export class BrowserPocketController {
     // with `picking` set so the user's pick click does not pause the agent
     // (review A #4).
     const job = p.queue.then(async () => {
-      if (aborted) return null
-      p.picking = true
+      // Inside the try (#1431 review a): a pick cancelled while queued used to
+      // return before the finally, leaving a stale abort handle behind.
       try {
+        if (aborted) return null
+        p.picking = true
         return await pickElement(p, () => this.ensureAttached(p), fn => { armedAbort = fn }, () => aborted)
       } finally {
         p.picking = false
@@ -507,7 +531,24 @@ export class BrowserPocketController {
       }
     })
     p.queue = job.catch(() => undefined)
-    return job.catch(() => null)
+    // An abort WINS over whatever the pick then produced (#1431 review b):
+    // after the node is chosen, the picker resolves it through further CDP
+    // calls with no abort hook, so a cancel, a switch-off or DevTools landing
+    // then used to be ignored (a chip inserted after the user cancelled) or
+    // said as a generic error. Only a reasonless abort is the user's cancel.
+    const aborted_ = (): PocketPickOutcome | null => (aborted
+      ? abortFailure ? { kind: 'failed', reason: abortFailure } : { kind: 'cancelled' }
+      : null)
+    return job.then(
+      (result): PocketPickOutcome => aborted_() ?? (result ? { kind: 'picked', result } : { kind: 'cancelled' }),
+      (error: unknown): PocketPickOutcome => {
+        // The raw CDP error stays here (it can name the page URL); the
+        // renderer gets a reason and says it in its own words (q22).
+        console.warn('[browser-pocket] pick failed:', error)
+        // DevTools can open while the pick waits in the queue.
+        return aborted_() ?? { kind: 'failed', reason: p.guest.isDevToolsOpened() ? 'devtools-open' : 'error' }
+      },
+    )
   }
 
   cancelPick(pocketId: string): void {
@@ -583,7 +624,9 @@ export class BrowserPocketController {
   }
 
   private detach(p: Pocket): void {
-    p.pickAbort?.()
+    // Detaching (a reset, the feature switched off, the guest going away) is
+    // not the user's cancel (#1431 review a).
+    p.pickAbort?.('unavailable')
     if (p.attached || p.guest.debugger.isAttached()) {
       try { p.guest.debugger.detach() } catch { /* already gone */ }
     }
@@ -591,6 +634,10 @@ export class BrowserPocketController {
   }
 
   private forget(p: Pocket): void {
+    // The guest is gone (destroyed, or unregistered): an armed pick can never
+    // finish, and once the pocket leaves the map no cancel can reach it. Settle
+    // it now as a failure (#1431 review c) instead of a silent 60 s cancel.
+    p.pickAbort?.('unavailable')
     if (p.resumeTimer) clearTimeout(p.resumeTimer)
     this.pockets.delete(p.pocketId)
     this.snapshotCursor.delete(p.sessionId)

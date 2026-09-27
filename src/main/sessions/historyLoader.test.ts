@@ -292,6 +292,22 @@ describe('readInitialTranscriptTail', () => {
 })
 
 describe('readOlderTranscriptWindow', () => {
+  // #1413 review a: the older page of a transcript that became unreadable
+  // after its first page loaded came back as an empty page with
+  // `hasMore: false`. The renderer then dropped "older history exists" and
+  // said nothing. It now rejects, so the page is reported as failed and can
+  // be retried; a genuinely empty file stays an honest empty page.
+  it('rejects an older page of a transcript that became unreadable, but not of an empty one', async () => {
+    const file = writeClaude('vanishing.jsonl', 30)
+    const first = await loadInitialHistoryChunkFromFile(file, 12)
+    expect(first.hasMore).toBe(true)
+    rmSync(file)
+    await expect(loadOlderHistoryChunkFromFile(file, { kind: 'claude', beforeMarker: 'u-18', limit: 12 })).rejects.toThrow(/ENOENT/)
+    const empty = join(root, 'empty-older.jsonl')
+    writeFileSync(empty, '')
+    expect(await loadOlderHistoryChunkFromFile(empty, { kind: 'claude', beforeMarker: 'u-18', limit: 12 })).toEqual({ entries: [], hasMore: false })
+  })
+
   it('pages older history identically to the forward marker scan at every depth, with and without an offset', async () => {
     const file = writeClaude('pages.jsonl', 300)
     const bytes = readFileSync(file)

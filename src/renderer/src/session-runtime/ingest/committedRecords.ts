@@ -143,8 +143,10 @@ export function isPaginationAnchor(mapped: readonly Entry[], marker: string | nu
  * ghost `_atp.updatedAt`, and the ownership ledger's collapsed-running rule
  * compares it with the live turn — both are "when the producer observed
  * this", so a resumed session compares yesterday against yesterday. Entries
- * without a usable `timestamp` (compact boundaries, queue ops) leave the
+ * without a usable `timestamp` (Claude compact boundaries, queue ops) leave the
  * cursor where it was: they are not evidence the committed channel is alive.
+ * A Codex compact boundary carries its rollout line's timestamp (#1386), so it
+ * does advance the cursor, correctly: the `compacted` line was committed.
  *
  * Shared since #1177: the phone used to hand the ledger a constant 0, so the
  * collapsed-running rule could never fire there (ARCHITECTURE §8.3).

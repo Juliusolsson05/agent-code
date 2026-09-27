@@ -9,7 +9,8 @@ import {
   codexToolResultEntry,
   codexToolUseEntry,
   codexOutputText,
-  isCodexExecWrapperOutput,
+  codexExecWrapperExitCode,
+  isCodexExecWrapperRunning,
   parseCodexJson,
   stripCodexExecWrapper,
 } from '@providers/codex/renderer/transcript/entries'
@@ -44,9 +45,10 @@ type CodexMessageBlock =
 //
 // Ordering with `stampCodexTurnId`: Codex rollout doesn't put
 // `turn_id` on per-item entries — only on `task_started` /
-// `turn_started` and `turn_context`. Without tracking it here the
-// ghost reconciler has nothing to match Codex assistant-text ghosts
-// against (they don't carry `message.id`, don't carry `tool_use_id`).
+// `turn_started` and `turn_context`. The feed's committed-text keys
+// (renderUnits.ts) use it. Ghost reconciliation does NOT: a ghost is keyed
+// by the proxy response id, which is not this turn UUID. Ghosts match on
+// the item id instead (`stampCodexItemId`, #1231).
 
 // Codex injects two synthetic user messages on the first turn of
 // every conversation, both meant for the model and not the human:
@@ -195,17 +197,59 @@ function codexConversationEntryFromMessageItem(
   }
 }
 
+// WHY no `compactMetadata` (#1289): the boundary used to carry the whole
+// `compacted` payload, including `replacement_history` (the retained developer
+// instructions, AGENTS.md, earlier user prompts, and an encrypted summary of
+// 13–23 KB). That kept a second copy of that text in memory and in every debug
+// bundle, and nothing in the app reads a Codex boundary's metadata; its uuid
+// already identifies the rollout line. A varying metadata object also made
+// each boundary a different rendering shape.
 function codexCompactBoundaryEntry(
   uuid: string,
-  payload: Record<string, unknown>,
+  timestamp: string | undefined,
 ): Entry {
   return {
     type: 'system',
     subtype: 'compact_boundary',
     content: 'Conversation compacted',
     uuid,
-    compactMetadata: payload,
+    // WHY a timestamp (#1289): rendering/model/order.ts sorts timestamp-less
+    // rows to the end of their phase, so without it the boundary painted at
+    // the bottom of the feed instead of where the compaction happened.
+    timestamp,
   }
+}
+
+// A committed Codex compaction: a timestamped boundary, then the summary when
+// the CLI wrote a readable one (#1289).
+//
+// WHY `replacement_history` is not mapped here: in the common case it is not
+// new conversation. It is the context Codex keeps across the compaction
+// (developer instructions, the AGENTS.md block, earlier user prompts, and from
+// 0.155 an encrypted `compaction` summary item). Mapped, it repainted prompts
+// already in the feed: 17,326 of 20,343 sampled replacement messages
+// duplicated an earlier user message.
+//
+// KNOWN GAP (review a of #1386, follow-up #1393): it is NOT
+// always a duplicate. 82 local rollouts (68 sessions) are resumed files that
+// START with a `compacted` line, so its retained user prompts are the only
+// copy of that earlier conversation in the file. This line-at-a-time mapper
+// cannot tell that case apart (a paged older-history load can also start a
+// page with a `compacted` line that has predecessors in the previous page),
+// so the fix belongs where the loader knows it is mapping from file offset 0.
+// Before #1386 no `compacted` line rendered at all, so this is not a
+// regression. WHY the summary is conditional: `message` is empty in every
+// 0.15x rollout, where the summary is encrypted; only 56 of about 1,500 local
+// compactions (older CLIs) carry readable text.
+function mapCodexCompacted(
+  uuid: string,
+  timestamp: string | undefined,
+  payload: Record<string, unknown>,
+): Entry[] {
+  const out: Entry[] = [codexCompactBoundaryEntry(`${uuid}:compact-boundary`, timestamp)]
+  const message = typeof payload.message === 'string' ? payload.message.trim() : ''
+  if (message) out.push(codexCompactSummaryEntry(`${uuid}:compact-summary`, timestamp, message))
+  return out
 }
 
 function codexCompactSummaryEntry(
@@ -228,17 +272,17 @@ function codexCompactSummaryEntry(
 }
 
 /**
- * Extract the Codex rollout's per-turn response id from a
- * `turn_context` side-channel entry. Returns null for any other
+ * Extract the Codex rollout's per-turn id (a UUID, NOT the proxy response
+ * id) from a `turn_context` side-channel entry. Returns null for any other
  * entry type. Call sites that iterate a rollout stream use this to
  * keep a rolling "current turn id" that subsequent `response_item`
  * entries get stamped with via `stampCodexTurnId`.
  *
  * WHY: Codex rollout doesn't put `turn_id` on per-item entries —
- * only on `task_started`/`turn_started` and `turn_context`. Without
- * tracking it here the ghost reconciler in `reconcileUpstream` has
- * nothing to match Codex assistant-text ghosts against (they don't
- * carry `message.id`, don't carry `tool_use_id`).
+ * only on `task_started`/`turn_started` and `turn_context`. The feed's
+ * committed-text keys use it. It is NOT the id a Codex ghost is keyed by
+ * (that is the proxy response id), so `reconcileUpstream` matches ghosts
+ * by item id instead (#1231).
  */
 export function codexTurnIdFromRollout(entry: Record<string, unknown>): string | null {
   if (entry.type !== 'turn_context') return null
@@ -246,18 +290,46 @@ export function codexTurnIdFromRollout(entry: Record<string, unknown>): string |
 }
 
 /**
- * Stamp a mapped Codex feed entry with the rollout turn id so the
- * ghost reconciler can supersede by turn id. The field is added as
- * an Agent Code-local extension to the shared `Entry` type via cast —
- * consumers that don't care about it ignore it, and
- * `reconcileUpstream` reads it defensively.
+ * Stamp a mapped Codex feed entry with the rollout turn id. Its consumer is
+ * the feed's committed-text ownership keys (features/feed/ui/semantic/
+ * renderUnits.ts). The ghost reconciler does NOT use it: a ghost is keyed by
+ * the proxy response id, never this turn UUID, so ghosts match on
+ * `codexItemId` instead (`stampCodexItemId`, #1231). The field is an Agent
+ * Code-local extension to the shared `Entry` type via cast; consumers that
+ * don't care about it ignore it.
  */
 export function stampCodexTurnId(entry: Entry, turnId: string | null): Entry {
   if (turnId === null) return entry
   return { ...entry, codexTurnId: turnId } as Entry
 }
 
+/**
+ * Stamp mapped Codex feed entries with the provider ITEM id (`msg_…`, `rs_…`,
+ * `fc_…`, `ctc_…`) of the rollout `response_item` they came from.
+ *
+ * WHY (#1231): this is the one id the live stream and the rollout share. A
+ * Codex ghost is keyed by the proxy response id (`resp_…`), while the rollout
+ * knows each item's id and its turn UUID, never the response id. So no
+ * committed entry could supersede a Codex text ghost, and every one orphaned.
+ * The proxy adapter already carries the same item id on the live block
+ * (`SemanticLiveBlock.itemId`); `reconcileUpstream` matches on it. It was
+ * verified on six real 0.157.1 sessions: every `msg_…` id on the proxy stream
+ * appears verbatim in the rollout. An Agent Code-local field like
+ * `codexTurnId`; consumers that don't care ignore it.
+ */
+export function stampCodexItemId(entry: Entry, itemId: string | null): Entry {
+  if (itemId === null) return entry
+  return { ...entry, codexItemId: itemId } as Entry
+}
+
 export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): Entry[] {
+  const mapped = mapCodexRolloutToFeedEntriesUnstamped(entry)
+  if (entry.type !== 'response_item' || mapped.length === 0) return mapped
+  const itemId = stringField(asRecord(entry.payload), 'id')
+  return itemId === null ? mapped : mapped.map(mappedEntry => stampCodexItemId(mappedEntry, itemId))
+}
+
+function mapCodexRolloutToFeedEntriesUnstamped(entry: Record<string, unknown>): Entry[] {
   const payload = asRecord(entry.payload)
   // Shared with the marker below and main's history loader (#1288): the old
   // `ts:id|call_id|type` rule collided for a call and its output, and for
@@ -265,6 +337,11 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
   const uuid = codexRolloutIdentity(entry)
   const timestamp =
     typeof entry.timestamp === 'string' ? entry.timestamp : undefined
+
+  // WHY before the payload.type guard (#1289): a `compacted` line's payload
+  // has no `type` (every one of about 1,500 local lines), so that guard
+  // returned [] for all of them and Codex compaction never rendered.
+  if (entry.type === 'compacted' && payload) return mapCodexCompacted(uuid, timestamp, payload)
 
   if (!payload || typeof payload.type !== 'string') return []
 
@@ -324,6 +401,14 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
       // its result was persisted. The provider renderer absorbs this empty
       // result after it has updated the command card, so retaining terminal
       // evidence does not reintroduce a blank standalone row.
+      //
+      // WHERE this event comes from (#1321): almost never a rollout. Current
+      // codex-rs treats `ExecCommandEnd` as transient, and 0 of 2,541 local
+      // rollouts contain one. rust-v0.107.0 through v0.136.0 persisted it in
+      // extended-history mode (app-server `persist_extended_history`), next to
+      // the always-durable wrapped `function_call_output` below, which is
+      // stamped with this same metadata. createCodexTranscriptEntryMapper
+      // prefers the wrapper, the fuller carrier (#1395 reviews a, b).
       return [
         codexToolResultEntry(
           uuid,
@@ -368,33 +453,6 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
     return []
   }
 
-  if (entry.type === 'compacted') {
-    const out: Entry[] = [
-      codexCompactBoundaryEntry(`${uuid}:compact-boundary`, payload),
-    ]
-
-    const message = typeof payload.message === 'string' ? payload.message.trim() : ''
-    if (message) {
-      out.push(codexCompactSummaryEntry(`${uuid}:compact-summary`, timestamp, message))
-    }
-
-  const replacementHistory = Array.isArray(payload.replacement_history)
-      ? payload.replacement_history
-      : []
-    for (let i = 0; i < replacementHistory.length; i += 1) {
-      const item = asRecord(replacementHistory[i])
-      if (!item) continue
-      const mapped = codexConversationEntryFromMessageItem(
-        `${uuid}:replacement:${i}`,
-        timestamp,
-        item,
-      )
-      if (mapped) out.push(mapped)
-    }
-
-    return out
-  }
-
   if (entry.type !== 'response_item') return []
 
   const conversationEntry = codexConversationEntryFromMessageItem(uuid, timestamp, payload)
@@ -434,9 +492,42 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
       return [codexToolResultEntry(uuid, timestamp, payload.call_id, structured)]
     }
     const output = stripCodexExecWrapper(structured)
-    if (!output.trim() || isCodexExecWrapperOutput(structured)) {
-      return []
+    const exitCode = codexExecWrapperExitCode(structured)
+    if (exitCode !== null) {
+      // A finished exec: the wrapper is the durable carrier of the result AND
+      // its exit status (#1321; see codexExecWrapperExitCode for why nothing
+      // else in the rollout carries them). It is stamped with the same
+      // `exec_command_end` metadata the live event produced, so the command
+      // card reads it as the native transport it is: bytes are the command's
+      // own, is_error and exitCode come from the real exit line. An EMPTY
+      // successful result is kept on purpose, exactly as for the event: it is
+      // the only proof the command finished rather than being interrupted,
+      // and the row dispatcher absorbs it once the card has its status.
+      return [
+        codexToolResultEntry(uuid, timestamp, payload.call_id, output, exitCode !== 0, {
+          kind: 'exec_command_end',
+          parsedCmd: [],
+          command: [],
+          cwd: null,
+          exitCode,
+        }),
+      ]
     }
+    if (isCodexExecWrapperRunning(structured)) {
+      // A partial chunk of a command still running (#1395 review a, P1). Its
+      // bytes are real output; its outcome is not known yet, so it is marked
+      // for the command adapter, which then shows "unknown" instead of success.
+      return [codexToolResultEntry(uuid, timestamp, payload.call_id, output, false, { kind: 'exec_command_running' })]
+    }
+    if (structured.startsWith('Chunk ID:')) {
+      // A wrapper whose header we could not parse (no LF `Output:` marker, a
+      // CRLF header, an unknown status line). None of 95,251 local wrappers
+      // has such a shape, but if one appears its outcome is unknown, not a
+      // success (#1395 review b): the bytes are kept whole, since there is no
+      // proven header/body boundary to strip at.
+      return [codexToolResultEntry(uuid, timestamp, payload.call_id, structured, false, { kind: 'exec_command_unparsed' })]
+    }
+    if (!output.trim()) return []
     return [codexToolResultEntry(uuid, timestamp, payload.call_id, output)]
   }
 

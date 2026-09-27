@@ -6,6 +6,7 @@ import { TldrFreshness } from './TldrFreshness'
 import { isPreviewVisible, useTldrView } from './viewState'
 import { useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import type { PreviewKind } from './viewState'
+import { LAYERS } from '@renderer/ui/layers'
 
 // What differs between the TLDR and Goal peeks is only where the text comes
 // from and what it is called. Sharing the overlay keeps the subscription race
@@ -101,7 +102,7 @@ export function TldrOverlay({ kind = 'tldr', identity, enabled, runtime, provide
     // follows the active theme (light themes included) and reads in the same
     // canvas and ink as the rest of the UI. Opaque canvas keeps the pane's own
     // text from bleeding through behind the summary.
-    className="absolute inset-0 z-50 bg-canvas text-center text-ink"
+    className={`absolute inset-0 ${LAYERS.paneTakeover} bg-canvas text-center text-ink`}
     onMouseDown={event => { event.preventDefault(); event.stopPropagation() }}
     onClick={event => event.stopPropagation()}
   >

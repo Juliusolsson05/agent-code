@@ -138,6 +138,169 @@ export function appendSemanticHistory(
   ].slice(-SEMANTIC_HISTORY_CAP)
 }
 
+/**
+ * Archive a turn that REPLAY reopened and left open, WITHOUT ever erasing
+ * anything the archived copy of it could paint (#1391, steering q93).
+ *
+ * Source-of-truth rule: when the same turnId is already archived, the result
+ * is a FIELD-WISE MONOTONIC MERGE of the archived row and the replay copy:
+ *   - two strings at the same path: the replay's only when it EXTENDS the
+ *     archived one (starts with it and is longer), else the archived one.
+ *     Streamed content only grows by appending, so this takes a replay that
+ *     got further, while an enum-like string (`status: 'completed'` vs a
+ *     reopened `'in_progress'`, which is LONGER) or a replay that diverged
+ *     keeps the archived value. A first draft used "longer string wins" and
+ *     would have flipped a completed block back to in_progress, which drops
+ *     its text ownership key (semantic.ts keys it on finalized/completed)
+ *     and double-renders it next to JSONL;
+ *   - two plain objects (the turn, `blocks`, each block, `lookups`,
+ *     `toolCallsById`, `usage`, ...): merged key by key, recursively, so a
+ *     key only one copy has survives;
+ *   - two arrays of primitives (`blockOrder`, the lookups' id lists): their
+ *     union, archived order first;
+ *   - LIFECYCLE fields take the more advanced value, whichever copy has it
+ *     (#1391 review a, round 4): a `status` (block, tool lookup, image/shell
+ *     call) ranks pending < in_progress < terminal; `messagePhase` ranks
+ *     commentary < final_answer; booleans OR (`finalized`, `inputJsonValid`
+ *     only ever become true as evidence arrives). The round-3
+ *     rule kept the ARCHIVED lifecycle value, which protected a completed
+ *     archive from a reopened replay but also blocked the opposite and
+ *     equally real case: an archive cut while a block or tool was still
+ *     pending, completed by the replay. That merged row had no text ownership
+ *     key (double-rendered beside JSONL) and painted a resolved tool as
+ *     running;
+ *   - a TOOL RESULT is one unit, not separate fields (#1391 review a round
+ *     5, steering q95): `resultContent`, `resultIsError`, `resultAt` and the
+ *     tool's lookup state (`toolCallsById[id]` and its membership in
+ *     `resolvedToolUseIds` / `erroredToolUseIds`) all come from the copy
+ *     with the LATER `resultAt`, and from the replay on a tie. Merged field
+ *     by field, an archived error followed by a corrected result kept
+ *     `resultIsError` (OR) and the error lookup status (equal terminal rank)
+ *     next to the corrected text, so a success painted red. The live reducer
+ *     lets a later result clear the error (foldEvent.ts's tool_result
+ *     paths), so no single field of a result is monotonic; only the tuple's
+ *     time is;
+ *   - `task.inProgressToolUseIds` is DERIVED, so it is recomputed after the
+ *     merge (the union of both copies minus every id either copy resolved or
+ *     errored), and `activeToolNames` keeps only names both copies agree are
+ *     active. A plain union would resurrect a tool the replay resolved;
+ *   - anything else (numbers, arrays of objects such as todos): the archived
+ *     value unless it is missing, then the replay's.
+ * INVARIANT: every string in the archived row survives at its path, unchanged
+ * or extended, and every archived block index and id stays. The ledger renders
+ * only from these fields (turn text when blockless, each block's text /
+ * thinking / reasoningSummary / reasoningText / arguments / input / result),
+ * so no field visible before can vanish, while content the replay ADDED
+ * (a block the archive lacked, longer text) is kept too. No lifecycle field
+ * moves backwards, and none is held back when either copy has progressed.
+ *
+ * WHY not a proxy: three proxies failed review (#1391 review a, rounds 1-3).
+ * Turn-text length missed empty blocks; block counts missed an empty block
+ * at the same index; one content total missed provider fields
+ * (reasoningSummary) and let turn text the ledger never paints outweigh a
+ * missing answer block. A merge needs no judgement of which copy is
+ * "richer": it keeps both.
+ *
+ * Only the bootstrap-complete path uses this. On the live fold paths a newer
+ * copy of a turn is authoritative (appendSemanticHistory's plain replace).
+ */
+export function archiveReplayedTurn(
+  history: SemanticRuntimeState['history'],
+  turn: SemanticLiveTurn,
+): SemanticRuntimeState['history'] {
+  const archived = history.find(existing => existing.turnId === turn.turnId)
+  const merged = archived
+    ? withDerivedTask(withToolResultUnits(mergeMonotonic(archived, turn) as SemanticLiveTurn, archived, turn), archived, turn)
+    : turn
+  return appendSemanticHistory(history, merged)
+}
+
+// Unknown values rank as -1, which keeps the archived value (see below).
+const STATUS_RANK: Record<string, number> = {
+  pending: 0, queued: 0,
+  in_progress: 1, running: 1, streaming: 1, searching: 1, generating: 1,
+  completed: 2, failed: 2, error: 2, errored: 2, cancelled: 2, canceled: 2, incomplete: 2, interrupted: 2,
+}
+const PHASE_RANK: Record<string, number> = { commentary: 0, final_answer: 1 }
+
+function mergeMonotonic(archived: unknown, replay: unknown, key?: string): unknown {
+  if (archived === undefined || archived === null) return replay
+  if (replay === undefined || replay === null) return archived
+  if (typeof archived === 'boolean' && typeof replay === 'boolean') return archived || replay
+  if (typeof archived === 'string' && typeof replay === 'string') {
+    const rank = key === 'status' ? STATUS_RANK : key === 'messagePhase' ? PHASE_RANK : null
+    if (rank) {
+      // Replay wins only when it is strictly MORE advanced. Two different
+      // terminal values (completed vs error), or a value this table does not
+      // know, keep the archived one.
+      return (rank[replay] ?? -1) > (rank[archived] ?? -1) ? replay : archived
+    }
+    return replay.length > archived.length && replay.startsWith(archived) ? replay : archived
+  }
+  if (Array.isArray(archived) && Array.isArray(replay)) {
+    const primitive = (value: unknown) => value === null || typeof value !== 'object'
+    if (archived.every(primitive) && replay.every(primitive)) {
+      return [...archived, ...replay.filter(value => !archived.includes(value))]
+    }
+    return archived.length > 0 ? archived : replay
+  }
+  if (isPlainObject(archived) && isPlainObject(replay)) {
+    const out: Record<string, unknown> = { ...archived }
+    for (const [childKey, value] of Object.entries(replay)) out[childKey] = mergeMonotonic(archived[childKey], value, childKey)
+    return out
+  }
+  return archived
+}
+
+function withToolResultUnits(merged: SemanticLiveTurn, archived: SemanticLiveTurn, replay: SemanticLiveTurn): SemanticLiveTurn {
+  const blocks = { ...merged.blocks }
+  const lookups = {
+    ...merged.lookups,
+    toolCallsById: { ...merged.lookups.toolCallsById },
+    resolvedToolUseIds: [...merged.lookups.resolvedToolUseIds],
+    erroredToolUseIds: [...merged.lookups.erroredToolUseIds],
+  }
+  for (const key of Object.keys(blocks)) {
+    const index = Number(key)
+    const a = archived.blocks[index]
+    const r = replay.blocks[index]
+    if (!a || !r || (a.resultAt === undefined && r.resultAt === undefined)) continue
+    // Later result wins; the replay on a tie or when only it has a time.
+    const source = a.resultAt !== undefined && (r.resultAt === undefined || a.resultAt > r.resultAt) ? a : r
+    const sourceTurn = source === a ? archived : replay
+    blocks[index] = {
+      ...blocks[index]!,
+      resultContent: source.resultContent,
+      resultIsError: source.resultIsError,
+      resultAt: source.resultAt,
+    }
+    const id = blocks[index]!.toolUseId ?? blocks[index]!.callId
+    if (id === undefined) continue
+    const call = sourceTurn.lookups.toolCallsById[id]
+    if (call) lookups.toolCallsById[id] = call
+    const setMembership = (list: string[], member: boolean) => {
+      const at = list.indexOf(id)
+      if (member && at < 0) list.push(id)
+      if (!member && at >= 0) list.splice(at, 1)
+    }
+    setMembership(lookups.resolvedToolUseIds, sourceTurn.lookups.resolvedToolUseIds.includes(id))
+    setMembership(lookups.erroredToolUseIds, sourceTurn.lookups.erroredToolUseIds.includes(id))
+  }
+  return { ...merged, blocks, lookups }
+}
+
+function withDerivedTask(merged: SemanticLiveTurn, archived: SemanticLiveTurn, replay: SemanticLiveTurn): SemanticLiveTurn {
+  const settled = new Set([...merged.lookups.resolvedToolUseIds, ...merged.lookups.erroredToolUseIds])
+  const inProgress = [...new Set([...archived.task.inProgressToolUseIds, ...replay.task.inProgressToolUseIds])]
+    .filter(id => !settled.has(id))
+  const activeToolNames = archived.task.activeToolNames.filter(name => replay.task.activeToolNames.includes(name))
+  return { ...merged, task: { ...merged.task, inProgressToolUseIds: inProgress, activeToolNames } }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
 /** True when the turn is still live — hasn't received its
  *  terminal `turn_stopped`/`turn_completed` yet. Used by session-
  *  status derivation and the foldSemanticEvent branch that decides

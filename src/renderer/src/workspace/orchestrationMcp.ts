@@ -8,6 +8,7 @@ import type {
   OrchestrationCloseResult,
   OrchestrationLifecycleState,
 } from '@mcp/shared/orchestrationTypes'
+import { isCompactSummaryEntry } from '@shared/types/transcript'
 import { entryTextContent } from '@renderer/session-runtime/entries'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
@@ -644,7 +645,7 @@ function visibleMessages(
   const messages: OrchestrationAgentMessage[] = []
   const entries = orchestrationVisibleEntries(runtime, meta)
   for (const entry of entries) {
-    if (entry.type !== 'user' && entry.type !== 'assistant') continue
+    if (!isAgentMessageEntry(entry)) continue
     const text = entryTextContent(entry)
     if (!text?.trim()) continue
     messages.push({
@@ -772,7 +773,7 @@ export function visibleMessageSummary(
   const entries = entriesOverride ?? orchestrationVisibleEntries(runtime, meta)
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index]!
-    if (entry.type !== 'user' && entry.type !== 'assistant') continue
+    if (!isAgentMessageEntry(entry)) continue
     messageCount += 1
 
     const needsTailMessage = !budgetExhausted && messagesReversed.length < maxMessages
@@ -865,6 +866,22 @@ function hasAssistantOutput(
   ))
 }
 
+// WHY a compaction summary is not a message (#1386 review a): providers write
+// it as a synthetic `type: 'user'` entry (Claude's `isCompactSummary` row, and
+// Codex's readable `compacted.message` from older CLIs). Counted here, a
+// coordinator reading a child with maxMessages=1 got the summary back as the
+// child's latest user instruction, and messageCount grew with no prompt. The
+// feed, the preview turn count and latestUserPrompts already skip it; the
+// three agent read paths below (tail summary, full list, cheap count) must
+// agree with them, so they share this one predicate.
+type AgentMessageEntry = SessionRuntime['entries'][number] & { type: 'user' | 'assistant' }
+
+// A type guard, so callers keep the `user | assistant` narrowing they had from
+// the inline check this replaced.
+function isAgentMessageEntry(entry: SessionRuntime['entries'][number]): entry is AgentMessageEntry {
+  return (entry.type === 'user' || entry.type === 'assistant') && !isCompactSummaryEntry(entry)
+}
+
 function cheapMessageCount(
   runtime: SessionRuntime | null,
   meta?: SessionMeta,
@@ -872,7 +889,7 @@ function cheapMessageCount(
   if (!runtime) return 0
   let count = 0
   for (const entry of orchestrationVisibleEntries(runtime, meta)) {
-    if (entry.type === 'assistant' || entry.type === 'user') count += 1
+    if (isAgentMessageEntry(entry)) count += 1
   }
   if (runtime.semantic.currentTurn?.text?.trim()) count += 1
   return count

@@ -197,6 +197,25 @@ a Developer ID Application certificate and Apple notarization credentials and
 verifies both thin app bundles before upload. For day-to-day development, use
 `npm run dev`.
 
+## Diagnostics flags
+
+Every diagnostic below is off by default. The recommended daily profile is to leave them all off, and to
+set `AGENT_CODE_DEV_DEBUG=1` only when you want to record or inspect something. Environment flags are
+read from the environment or a git-ignored `.env` at the repository root, at launch.
+
+| Switch | Where | Default | What it costs when on |
+|---|---|---|---|
+| `AGENT_CODE_DEV_DEBUG=1` | env | off | Dev Debug panel and recording commands. It also writes each session's feed-debug ring to `~/.config/agent-code/feed-debug/` once a second (up to 128 MiB per session). |
+| `AGENT_CODE_SESSION_RECORD=1` | env (needs `DEV_DEBUG`) | off | Auto-records every session from launch (screen frames and IPC), for unattended soak runs. It is the heaviest diagnostic: roughly 1 MB/s of serialization on the main process. |
+| `AGENT_CODE_PERF=1` | env | off | Extra performance spans and traces (`PerformanceService`). `AGENT_CODE_PERF_VERBOSE` and `AGENT_CODE_PERF_SLOW_MS` tune it. The Performance Monitor's baseline history runs regardless. |
+| Persistent Aggressive Debug Logs | Settings → Experimental | off | Autosaves a debug bundle per active pane every minute, and also persists the feed-debug ring, like `DEV_DEBUG`. |
+
+"Save Debug Logs" works with everything off: it reads the in-memory feed-debug ring, not the files.
+Debug storage under `~/.config/agent-code/` is pruned automatically (`src/main/storage/debugRetention.ts`).
+
+"Proxy-Streamed Semantic Rendering" (Settings → Experimental, on by default) is not a diagnostic: it is how Claude sessions stream live.
+Its per-session wire log is bounded (claude-code-headless rotation, #1273).
+
 ## Companion packages
 
 - [`claude-code-headless`](https://github.com/Juliusolsson05/claude-code-headless)

@@ -1,6 +1,6 @@
 import type { StateCreator } from 'zustand'
 
-import { applyTheme } from '@renderer/app-state/settings/theme'
+import { applyTheme, patchTouchesTheme } from '@renderer/app-state/settings/theme'
 import { DEFAULT_SETTINGS, USAGE_HEADER_LEVELS } from '@renderer/app-state/settings/types'
 import type { AppStore, SettingsSlice } from '@renderer/app-state/types'
 
@@ -26,7 +26,10 @@ export const createSettingsSlice: StateCreator<
   setSettings: patch =>
     set(state => {
       const next = { ...state.settings, ...patch }
-      applyTheme(next, state.installedExtensions)
+      // Synchronous on purpose, so a theme change is visible in the same
+      // frame as the click; useThemeSync re-applies after commit. Only a
+      // patch that touches a theme input pays for it (#784).
+      if (patchTouchesTheme(patch)) applyTheme(next, state.installedExtensions)
       return { settings: next }
     }, false, 'settings/setSettings'),
   resetSettings: () =>
@@ -44,13 +47,16 @@ export const createSettingsSlice: StateCreator<
       else next[sessionId] = colorId
       return { settings: { ...state.settings, dispatchColorFlags: next } }
     }, false, 'settings/setDispatchColorFlag'),
+  // The toggles below change row/header chrome only, never a theme input, so
+  // they no longer re-apply the theme (#784). They used to, which rewrote the
+  // palette and fired THEME_CHANGED_EVENT for every xterm and Monaco on a
+  // usage-header toggle.
   toggleStatusMode: () =>
     set(state => {
       const next = {
         ...state.settings,
         showStatusMode: !state.settings.showStatusMode,
       }
-      applyTheme(next, state.installedExtensions)
       return { settings: next }
     }, false, 'settings/toggleStatusMode'),
   toggleWorktreeBadges: () =>
@@ -59,7 +65,6 @@ export const createSettingsSlice: StateCreator<
         ...state.settings,
         showWorktreeBadges: !state.settings.showWorktreeBadges,
       }
-      applyTheme(next, state.installedExtensions)
       return { settings: next }
     }, false, 'settings/toggleWorktreeBadges'),
   toggleUsageHeader: () =>
@@ -68,7 +73,6 @@ export const createSettingsSlice: StateCreator<
         ...state.settings,
         usageHeaderEnabled: !state.settings.usageHeaderEnabled,
       }
-      applyTheme(next, state.installedExtensions)
       return { settings: next }
     }, false, 'settings/toggleUsageHeader'),
   cycleUsageHeaderLevel: () =>
@@ -85,7 +89,6 @@ export const createSettingsSlice: StateCreator<
         // command does nothing.
         usageHeaderEnabled: true,
       }
-      applyTheme(next, state.installedExtensions)
       return { settings: next }
     }, false, 'settings/cycleUsageHeaderLevel'),
 })

@@ -5,6 +5,7 @@ import {
   COMMAND_SORT_MODE_LABELS,
 } from '@renderer/features/command-palette/lib/sortCommands'
 import type { CommandSortMode } from '@renderer/features/command-palette/lib/sortCommands'
+import { LAYERS } from '@renderer/ui/layers'
 
 // The palette's browse-order picker.
 //
@@ -203,12 +204,12 @@ export function CommandSortControl({
           role="menu"
           // Right-anchored: the control sits at the right edge of the header,
           // so a left-anchored menu would hang off the dialog.
-          className="rounded-float overflow-hidden
-            absolute right-0 top-[calc(100%+4px)] z-50
+          className={`rounded-float overflow-hidden
+            absolute right-0 top-[calc(100%+4px)] ${LAYERS.inSurfacePopover}
             min-w-[168px]
             border border-popover-border bg-popover-bg
             shadow-[0_8px_24px_var(--theme-shadow-color)]
-          "
+          `}
         >
           {COMMAND_SORT_MODES.map((candidate, index) => (
             <button

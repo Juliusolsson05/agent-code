@@ -11,6 +11,7 @@ import type {
   GitRecentCommit,
   GitSubmoduleStatus,
 } from '@shared/types/gitStatus'
+import { SidePanel } from '@renderer/components/ui/side-panel'
 
 // GitBar — a narrow right-edge panel showing git state for the
 // focused pane's cwd: current branch, latest 5 commits, and the
@@ -54,7 +55,7 @@ export function GitBar({ cwd, onClose }: Props) {
   // need different copy — "not a git repository" is actively misleading on
   // a machine without git. Rendered as a persistent muted STATE, not a
   // toast: the 10s poll would re-fire a toast forever.
-  const [error, setError] = useState<'not-repo' | 'git-missing' | null>(null)
+  const [error, setError] = useState<'not-repo' | 'git-missing' | 'timed-out' | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const refresh = useCallback(async () => {
@@ -65,7 +66,8 @@ export function GitBar({ cwd, onClose }: Props) {
       setError(null)
     } else {
       setData(null)
-      setError(result.gitMissing ? 'git-missing' : 'not-repo')
+      // A slow repo is not "not a repository" (#1250 row 11).
+      setError(result.gitMissing ? 'git-missing' : result.timedOut ? 'timed-out' : 'not-repo')
     }
   }, [cwd])
 
@@ -82,13 +84,7 @@ export function GitBar({ cwd, onClose }: Props) {
   const totalDel = data?.files.reduce((s, f) => s + f.deletions, 0) ?? 0
 
   return (
-    <div className="
-      h-full w-[280px] flex-shrink-0
-      border-l border-border bg-surface
-      flex flex-col
-      overflow-hidden
-      text-[11px] font-code
-    ">
+    <SidePanel label="Git" className="w-[280px] text-[11px] font-code">
       {/* The shared side-panel header (UI pass, G-26). Its close had no
           accessible name and no focus style. */}
       <PanelHeader label="Git" onClose={onClose} />
@@ -97,7 +93,9 @@ export function GitBar({ cwd, onClose }: Props) {
         <div className="px-3 py-4 text-muted text-center">
           {error === 'git-missing'
             ? 'Git not found — Git features are disabled.'
-            : 'Not a Git repository.'}
+            : error === 'timed-out'
+              ? 'Git took too long to answer here. It will try again.'
+              : 'Not a Git repository.'}
         </div>
       )}
 
@@ -108,6 +106,13 @@ export function GitBar({ cwd, onClose }: Props) {
             <span className="text-muted">Branch </span>
             <span className="text-accent">{data.branch}</span>
           </div>
+          {/* #1250 row 11: a timed-out diff or log reads as empty; say so
+              instead of showing a clean-looking status. */}
+          {data.incomplete ? (
+            <div role="status" className="px-3 py-2 border-b border-border text-warning">
+              Git took too long; this may be incomplete.
+            </div>
+          ) : null}
 
           {/* Diff summary */}
           {data.files.length > 0 && (
@@ -195,7 +200,7 @@ export function GitBar({ cwd, onClose }: Props) {
       {!data && !error && (
         <div className="px-3 py-4 text-muted text-center">loading…</div>
       )}
-    </div>
+    </SidePanel>
   )
 }
 

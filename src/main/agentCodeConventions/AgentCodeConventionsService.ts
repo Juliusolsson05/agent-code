@@ -1061,7 +1061,7 @@ export class AgentCodeManagedSkillsService {
       try {
         await resetAgentCodeConventionsState(this.stateFilePath)
       } catch (error) {
-        return this.installedIoError(error)
+        return this.installedIoError(recoveryResetError(error))
       }
       this.document = createEmptyAgentCodeConventionsDocument()
       this.recovery = undefined
@@ -1479,7 +1479,7 @@ export class AgentCodeManagedSkillsService {
       try {
         await resetAgentCodeConventionsState(this.stateFilePath)
       } catch (error) {
-        return this.customIoError(error)
+        return this.customIoError(recoveryResetError(error))
       }
       this.document = createEmptyAgentCodeConventionsDocument()
       this.recovery = undefined
@@ -1688,7 +1688,7 @@ export class AgentCodeManagedSkillsService {
       try {
         await resetAgentCodeConventionsState(this.stateFilePath)
       } catch (error) {
-        return this.ioError(error)
+        return this.ioError(recoveryResetError(error))
       }
       this.document = createEmptyAgentCodeConventionsDocument()
       this.recovery = undefined
@@ -3692,6 +3692,16 @@ export class AgentCodeManagedSkillsService {
 // product can separate its managed-skill Settings experiences without forcing unrelated
 // consumers to migrate in the same feature diff.
 export { AgentCodeManagedSkillsService as AgentCodeConventionsService }
+
+// WHY a fixed sentence for a failed recovery reset (#1424 review a): the
+// unlink error carries the state file's absolute path and the OS code, and
+// the recovery panel shows the result's message as it is. The raw error stays
+// in the main log for diagnosis (q22). The rest of this service still passes
+// error.message through; that wider sweep is a separate issue.
+function recoveryResetError(error: unknown): Error {
+  console.warn('[agent-code-conventions] recovery reset failed:', error)
+  return new Error("Couldn't remove the unreadable state file. Check that Agent Code's data folder is writable, then try again.")
+}
 
 function safeErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message

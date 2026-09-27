@@ -9,6 +9,7 @@ import { attachPocket, setPocketView } from '../actions'
 import { requestPocket } from '../state/pocketBus'
 import { usePocketLive, usePocketLiveStore } from '../state/pocketLiveStore'
 import { useLanePorts } from '../state/lanePortsStore'
+import { LAYERS } from '@renderer/ui/layers'
 
 /**
  * The 22 px collapsed pocket in a lane (spec §4.1): glanceable, never a
@@ -96,7 +97,7 @@ export function PocketStrip({ sessionId, workspace }: { sessionId: SessionId; wo
           role="tooltip"
           // Popover chrome like every floating menu (theme shadow; the old
           // hard rgba shadow was a smear on light themes).
-          className="rounded-float pointer-events-none absolute bottom-[24px] left-2 z-40 flex w-[320px] flex-col gap-1 overflow-hidden border border-popover-border bg-popover-bg p-1.5 text-[11px] text-ink shadow-[0_8px_24px_var(--theme-shadow-color)]"
+          className={`rounded-float pointer-events-none absolute bottom-[24px] left-2 ${LAYERS.paneOverlay} flex w-[320px] flex-col gap-1 overflow-hidden border border-popover-border bg-popover-bg p-1.5 text-[11px] text-ink shadow-[0_8px_24px_var(--theme-shadow-color)]`}
         >
           {live.thumbnail ? <img src={live.thumbnail} alt="" className="rounded-control w-full border border-border" /> : null}
           {details.map(line => (

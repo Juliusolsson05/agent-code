@@ -12,6 +12,8 @@ import { resolveRenderShapeDefinition } from '@providers/registry.renderShapes'
 import { renderDebugBoundaryForElement } from './registry'
 import { operationDecisionDiagnostic } from './diagnostics'
 import type { RenderDebugSelection, RenderDebugSnapshot } from './types'
+import { LAYERS } from '@renderer/ui/layers'
+import { SidePanel } from '@renderer/components/ui/side-panel'
 
 const PREVIEW_CHARS = 100_000
 
@@ -326,7 +328,7 @@ export function RenderingDebugInspector({ sessionId, provider, onSave, onClose }
         <div
           data-render-debug-ui
           aria-hidden="true"
-          className="fixed pointer-events-none border-2 border-red-500 z-[10000]"
+          className={`fixed pointer-events-none border-2 border-red-500 ${LAYERS.debugOverlay}`}
           style={{
             top: bounds.top - 2,
             left: bounds.left - 2,
@@ -336,9 +338,10 @@ export function RenderingDebugInspector({ sessionId, provider, onSave, onClose }
           }}
         />
       ) : null}
-      <aside
+      <SidePanel
+        label="Rendering debug"
         data-render-debug-ui
-        className="h-full w-[580px] flex-shrink-0 border-l border-red-500/60 bg-surface flex flex-col overflow-hidden font-code"
+        className="w-[580px] border-red-500/60 font-code"
       >
         <div className="flex items-center justify-between px-3 py-2 border-b border-border text-[10px] uppercase tracking-wider">
           <span className="text-red-400">Rendering Debug Mode</span>
@@ -360,7 +363,7 @@ export function RenderingDebugInspector({ sessionId, provider, onSave, onClose }
             >
               Copy All as JSON
             </button>
-            <button type="button" onClick={onClose} className="text-muted hover:text-ink text-[16px]">×</button>
+            <button type="button" onClick={onClose} aria-label="Close rendering debug" title="Close" className="text-muted hover:text-ink text-[16px]">×</button>
           </div>
         </div>
         <div className="px-3 py-2 border-b border-border text-[11px] text-muted">
@@ -402,7 +405,7 @@ export function RenderingDebugInspector({ sessionId, provider, onSave, onClose }
             </Disclosure>
           </div>
         )}
-      </aside>
+      </SidePanel>
     </>
   )
 }

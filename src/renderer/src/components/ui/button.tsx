@@ -68,7 +68,12 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: 'border-accent bg-accent text-accent-fg hover:brightness-110',
+        // The ring offset makes the focus ring visible on the accent fill:
+        // every built-in theme's focus ring IS the accent, so a flush 1px
+        // accent ring on an accent border read as no focus at all, and #1221
+        // puts initial focus on exactly these confirm buttons (Claude review
+        // of #1221, reviewer C F1). Same fix Switch already carries.
+        default: 'border-accent bg-accent text-accent-fg hover:brightness-110 focus-visible:ring-offset-1 focus-visible:ring-offset-surface',
         secondary:
           'border-control-border bg-surface-hi text-ink hover:border-control-border-hover',
         // `hover:bg-control-hover-bg` is new relative to the pre-retokenization

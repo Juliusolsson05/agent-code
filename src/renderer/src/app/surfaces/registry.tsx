@@ -44,35 +44,38 @@ import { AgentMcpServersSurface } from '@renderer/features/mcp/surfaces/AgentMcp
 // in the owning feature's surfaces/ folder + add ONE import + ONE array
 // entry here. App.tsx is never edited.
 //
-// ORDER MATTERS within each array, AND the mount order of the groups in
-// App.tsx (overlays → modals) is part of the same contract: together they
-// define the DOM sibling order at the app root, which IS the paint order
-// whenever z-indexes tie. Most of these surfaces are `position: fixed`
-// z-50, so "which array, at which index" decides what covers what. The
-// order below is the exact order App.tsx rendered these surfaces before
-// the extraction — keep new entries at the END unless you have a stacking
-// reason and write it down.
+// HOW STACKING ACTUALLY WORKS (#512, corrected in review): the layers are
+// named in ui/layers.ts. Almost every entry here renders the shared Radix
+// Dialog (LAYERS.dialog; the caffeinate entry renders nothing and forwards to
+// the app toast). A Dialog's content portals into <body> when it OPENS, so
+// between two open dialogs the one OPENED LATER paints on top, whatever their
+// order in this array. Array order only decides between dialogs that open in
+// the same React commit. A surface that must always sit above another needs
+// an explicit mechanism (its own layer in ui/layers.ts), not an array index.
+//
+// The order below is still the exact order App.tsx rendered these surfaces
+// before the extraction; keep new entries at the END so same-commit ties do
+// not move.
 
 /** Rendered at the app root, after the overlays. */
 export const modalSurfaces: SurfaceEntry[] = [
   { id: 'command-palette', Component: CommandPaletteSurface },
   { id: 'path-picker', Component: PathPickerSurface },
-  // ⚠ Two non-modal surfaces interleaved into the modal stack ON PURPOSE.
-  // Pre-refactor App.tsx rendered them exactly here — after the palette
-  // and path picker, before the tile-tabs..usage modals — and that DOM
-  // position is load-bearing because all three of palette / dispatch-count
-  // / toast are fixed z-50, so sibling order is the only tiebreaker:
-  //   - tiled-dispatch-count must paint ABOVE the command palette. Tiled
-  //     dispatch can fire while the palette is open (native menu; the
-  //     palette deliberately stays open for keepPaletteOpen-style flows),
-  //     and the count prompt is the thing awaiting input — burying it
-  //     behind the palette soft-locks the flow.
-  //   - both must stay BELOW the later modals (a modal opened over the
-  //     toast dims it, as before).
-  // The first cut of this registry put these two in overlaySurfaces
-  // (rendered before the modals group), which silently reversed the
-  // palette/count-prompt stacking — codex review of PR #505 caught it.
-  // Grouping by semantic kind is NOT safe here; group by paint order.
+  // The next three entries were interleaved here ON PURPOSE when they were
+  // fixed z-50 siblings of the palette, and pre-refactor App.tsx rendered
+  // them exactly here. Today:
+  //   - tiled-dispatch-count and dispatch-row-project are Dialogs in
+  //     LAYERS.dialog. The count prompt paints above the command palette
+  //     because it OPENS after it (tiled dispatch fires from an open
+  //     palette, and the prompt is what awaits input; burying it would
+  //     soft-lock the flow). Any dialog opened after either of them paints
+  //     over it, whatever the array says.
+  //   - caffeinate-toast renders nothing and forwards to the app toast
+  //     (LAYERS.toast).
+  // Their position here only decides a same-commit tie. History: the first
+  // cut of this registry moved the two prompts into overlaySurfaces, which
+  // reversed the palette/count-prompt stacking while they were z-50 siblings
+  // (codex review of PR #505).
   { id: 'tiled-dispatch-count', Component: TiledDispatchCountSurface },
   { id: 'dispatch-row-project', Component: DispatchRowProjectSurface },
   { id: 'caffeinate-toast', Component: CaffeinateToastSurface },
@@ -93,8 +96,8 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'rewind-to-prompt', Component: RewindToPromptSurface },
   { id: 'agent-title-prompt', Component: AgentTitlePromptSurface },
   { id: 'usage', Component: UsageModalSurface },
-  // New modals append so their z-50 sibling order cannot accidentally move an
-  // established surface below one it used to cover; see the registry contract.
+  // New modals append so a same-commit tie cannot move an established
+  // surface; see the stacking note above.
   { id: 'provider-switch-picker', Component: ProviderSwitchPickerSurface },
   { id: 'key-vault', Component: KeyVaultModalSurface },
   // Appended per the contract above. It is only opened from a command, which
@@ -103,16 +106,19 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'new-agent-in', Component: NewAgentInSurface },
   // Appended per the contract above. Opened only from a session command that
   // closes the palette first; it must paint over every established modal so
-  // the warning is never hidden behind the surface it is warning about.
+  // the warning is never hidden behind the surface it is warning about, and
+  // it does because it opens after them (open order).
   { id: 'root-management-confirm', Component: RootManagementConfirmSurface },
   // Appended per the contract above; opened only from a command that closes
   // the palette first (#913).
   { id: 'merge-project-tabs', Component: MergeProjectTabsSurface },
   // Appended per the contract above. Opened only from a session command that
-  // closes the palette first, so it stacks over established modals by order.
+  // closes the palette first; it paints over anything already open because it
+  // opens later (open order, see the stacking note above).
   { id: 'tldr-history', Component: ReportHistorySurface },
   // Appended per the contract above (#964). Opened only from a command that
-  // closes the palette first, so it stacks over established modals by order.
+  // closes the palette first; it paints over anything already open because it
+  // opens later.
   { id: 'agent-analytics', Component: AgentAnalyticsSurface },
   // Appended per the contract above (#1143); both are opened from commands
   // that close the palette first. The per-agent picker can hand off to the
@@ -123,32 +129,38 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'mcp-server-dialog', Component: McpServerDialogSurface },
   // Appended per the contract above (#1161). Opened from the Skills grid, the
   // "Add Skill…" command (which closes the palette first) and an external
-  // skill's "Manage with Agent Code"; it stacks over Settings by order.
+  // skill's "Manage with Agent Code"; it paints over Settings because it opens
+  // after it.
   { id: 'add-skill-dialog', Component: AddSkillDialogSurface },
-  // Built-in apps host. Last in the array, which per the paint-order contract
-  // above means it paints above every modal already mounted. That placement is
-  // reasoned, not defaulted: an app is always user-initiated from the palette and
-  // is the thing awaiting input for as long as it is open, so nothing already on
-  // screen has a claim to cover it. No app has a reason to sit *under* another
-  // modal — if one ever does, that is a signal it should not be an app.
+  // Built-in apps host. An app is always user-initiated and is the thing
+  // awaiting input while open, so it should cover what is already on screen,
+  // and it does: it opens after them (open order, see the stacking note above).
+  // Its position here only decides a same-commit tie. A dialog opened
+  // AFTER an app paints over it; no app has a reason to sit under another
+  // modal, and if one ever does, that is a signal it should not be an app.
   { id: 'app-host', Component: AppHostSurface },
   // The shared in-app confirm (replaced window.confirm, keyboard-first plan
-  // D8). LAST, after even app-host, because a confirm is always a question
-  // ABOUT the surface underneath it — the Conventions editor asking "discard
-  // changes?", Key Vault asking "delete key?" — so it must paint above
-  // whichever surface asked. It renders nothing until requestConfirm queues
-  // a request.
+  // D8). A confirm is always a question ABOUT the surface underneath it (the
+  // Conventions editor asking "discard changes?", Key Vault asking "delete
+  // key?"), so it must paint above whichever surface asked. It does, because
+  // it opens after that surface (open order); its position here only decides
+  // a same-commit tie. It renders nothing until requestConfirm queues a request.
   { id: 'confirm-dialog', Component: ConfirmHost },
+  // #512: RemotePanel renders a centred Radix Dialog, but was registered as a
+  // side panel, so it mounted inside the main row and only painted as a modal
+  // because DialogContent portals out. It is a modal; it lives here, appended
+  // per the contract above (its portal stacks by open order either way).
+  { id: 'remote-panel', Component: RemotePanelSurface },
 ]
 
 /**
  * Rendered at the app root, after the main row, BEFORE the modals — so
  * everything in this array paints UNDER the modal stack when z-indexes
- * tie. Only surfaces that must never cover a modal belong here (voice
- * dictation is z-40, below the z-50 stack regardless). A z-50 surface
- * that needs a specific position relative to the modals goes into
- * modalSurfaces at an explicit index instead — see the interleaved
- * entries there for why.
+ * tie. Voice dictation's chip is in LAYERS.toast, above every dialog on
+ * purpose (dictating into a dialog must stay visible), so its position here
+ * no longer decides its stacking. A surface that must sit at a fixed height
+ * relative to the dialogs needs its own named layer in ui/layers.ts; a
+ * position in either array only breaks same-commit ties.
  */
 export const overlaySurfaces: SurfaceEntry[] = [
   { id: 'voice-dictation', Component: VoiceDictationSurface },
@@ -159,6 +171,5 @@ export const sidePanelSurfaces: SurfaceEntry[] = [
   { id: 'git-bar', Component: GitBarSurface },
   { id: 'worktrees-bar', Component: WorktreesBarSurface },
   { id: 'agent-status-panel', Component: AgentStatusPanelSurface },
-  { id: 'remote-panel', Component: RemotePanelSurface },
   { id: 'debug-surfaces', Component: DebugSurfaces },
 ]
