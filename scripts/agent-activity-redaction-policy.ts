@@ -31,7 +31,9 @@ const TEXT_FIELDS = new Set(['branch', 'content', 'draftInput', 'prompt', 'text'
 const PUBLIC_PROJECT = 'agent-code'
 
 /** The macOS home folders a dash-encoded project dir may continue with (see assertHomesBelongTo). */
-const HOME_FOLDERS = new Set(['Desktop', 'Documents', 'Downloads', 'Developer', 'Projects', 'Library'])
+// Dot folders (`.claude` → `--claude`) are deliberately absent: the empty component after the
+// user makes them the most ambiguous form, and the recorded corpus has none, so they refuse.
+const HOME_FOLDERS = new Set(['Desktop', 'Development', 'Documents', 'Downloads', 'Developer', 'Projects', 'Library'])
 
 /** The same-length stand-in for the recorder's home user (`fixture-home` for a 12-character name). */
 export function homePlaceholder(homeUser: string): string {
