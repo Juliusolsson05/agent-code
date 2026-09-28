@@ -5,7 +5,7 @@ import {
   DEFAULT_PROVIDER,
   isAgentProviderKind,
 } from '@shared/types/providerKind'
-import type { AgentProviderKind } from '@shared/types/providerKind'
+import type { AgentProviderKind, SessionKind } from '@shared/types/providerKind'
 import { useEffect } from 'react'
 
 import type { Entry } from '@shared/types/transcript'
@@ -176,6 +176,88 @@ function claudeUserEntryText(raw: unknown): string | null {
 // commit happens here, after setRuntimes has returned, where it runs exactly
 // once per burst.
 const claudeQueueBySession = new Map<SessionId, ClaudeQueueState>()
+
+/**
+ * The idle settlement of a Claude session's queue, or null when nothing
+ * changed (#677). Callers commit a non-null result to claudeQueueBySession
+ * AFTER setRuntimes returns (the rule above) and paint `result.pending`.
+ *
+ * WHY one helper with three callers: settlement (settle both debts, then mark
+ * unattributed survivors stale) is how a queue item that already departed
+ * stops being displayed, and exact-evidence carriers (content-bearing
+ * `remove`, `popAll(content)`) deliberately leave their debt for it. It used
+ * to be reachable only from a semantic event that arrived while the session
+ * was already idle. When the turn's last semantic event lands while the
+ * process is still active and the process then goes idle, or a bootstrap
+ * replay ends with debt open (production bootstrap gets no replayed semantic
+ * events), nothing settled and the chip stayed until the next turn, or
+ * forever for a session with no next turn. The semantic event (existing
+ * guard) and bootstrap-complete now ask this; bootstrap also requires
+ * `debt-covers-pending` (see debtCoversPending), because a quiet replay alone
+ * is not proof the queue drained.
+ *
+ * WHY NOT the process-state flip (manager decision, option B, on #1396's
+ * round-2 review): a REDELIVERED `dequeue` makes `debt >= pending` cover a
+ * genuinely queued prompt, and at a live process-idle flip that would hide a
+ * real queued user prompt. We do not trade a hidden user prompt for tidier
+ * state. Bootstrap is kept because the recorded fixture proves that case.
+ * The live-idle half of #677 waits on the redelivery follow-up.
+ *
+ * WHY not settle inline in the carriers instead: that inline settlement was
+ * the bug those carriers were fixed for. It consumed the very item the
+ * carrier named and left an unrelated item pending forever (#670).
+ *
+ * Only an EXISTING reconciler state is settled. A session with no map entry
+ * has no queue, and defaulting to a fresh state compared unequal on every idle
+ * tick (the no-op bail regression noted at the semantic call site).
+ */
+function settleClaudeQueueIfIdle(
+  sessionId: SessionId,
+  sessionKind: SessionKind | undefined,
+  idle: boolean,
+  proof: 'idle' | 'debt-covers-pending',
+): ClaudeQueueState | null {
+  if (sessionKind !== 'claude' || !idle) return null
+  const existing = claudeQueueBySession.get(sessionId)
+  if (existing === undefined) return null
+  if (proof === 'debt-covers-pending' && !debtCoversPending(existing)) return null
+  const marked = markStaleWhenIdle(existing, true)
+  // markStaleWhenIdle is reference-stable, so identity is the change test.
+  return marked === existing ? null : marked
+}
+
+/**
+ * True when the open departure debt accounts for EVERY pending item
+ * (#1396 review a). Each unit of debt is a departure Claude logged (a
+ * `dequeue`, or a content-free `remove`) whose item was not identified. When
+ * those departures number at least the pending items, every one of them has
+ * left, PROVIDED each logged departure is counted once.
+ *
+ * RESIDUAL (review a, round 2): queue-operation records carry no uuid, so a
+ * REDELIVERED `dequeue` (the burst channel can redeliver, see the enqueue
+ * guard in reconcile.ts) is counted twice and can make the debt cover a
+ * genuinely queued item. A key-based guard is not possible: the local Claude
+ * corpus has 99 genuine same-millisecond, same-content `dequeue` repeats
+ * within one file (2,391 dequeues across 606 transcripts), which a
+ * (operation, timestamp) guard would wrongly drop. Redelivery already
+ * over-counts debt for every reducer path; this site inherits it.
+ *
+ * WHY bootstrap-complete needs this proof and the semantic site does not get
+ * it added: the quiet replay timer is not proof that Claude's queue is empty.
+ * A resumed pane's first 150 ms after replay starts from emptyRuntime's idle
+ * values, and settling there without the proof marked a genuinely queued N2
+ * `stale-unattributed`, which nothing un-stales. The semantic site keeps its
+ * existing guard and behaviour; this PR does not widen it.
+ */
+function debtCoversPending(state: ClaudeQueueState): boolean {
+  // EVERY pending item, stale ones included (#1396 review a, round 2): the
+  // reconciler settles debt against all of `pending`, so a stale item is
+  // still a candidate the debt can be spent on. Counting only live items let
+  // one genuine departure of a stale S look like proof that the live N had
+  // left, and settling then stale-marked N.
+  const debt = (state.debt?.count ?? 0) + (state.removeDebt?.count ?? 0)
+  return debt >= state.pending.length
+}
 
 const codexCurrentTurnIdBySession = new Map<SessionId, string>()
 const jsonlProviderStreamBySession = new Map<SessionId, JsonlProviderStreamState>()
@@ -1427,18 +1509,14 @@ export function useIpcSubscriptions(
         // created state and compared it against `undefined` — which read as
         // "changed" on every idle event, wiping queuedMessages to the empty
         // pending list and defeating the no-op bail below.
-        const existingQueue = claudeQueueBySession.get(sessionId)
-        const claudeQueueIdle =
-          sessionKind === 'claude' &&
-          existingQueue !== undefined &&
-          !current.processActive &&
-          streamPhase === 'idle' &&
-          !nextAwaitingAssistant
-        const markedQueue =
-          claudeQueueIdle && existingQueue ? markStaleWhenIdle(existingQueue, true) : null
-        // markStaleWhenIdle is reference-stable, so identity is the change test.
-        const staleChanged = markedQueue !== null && markedQueue !== existingQueue
-        if (staleChanged) pendingStaleQueue = markedQueue
+        const markedQueue = settleClaudeQueueIfIdle(
+          sessionId,
+          sessionKind,
+          !current.processActive && streamPhase === 'idle' && !nextAwaitingAssistant,
+          'idle',
+        )
+        const staleChanged = markedQueue !== null
+        pendingStaleQueue = markedQueue
 
         // A completed turn is the one unambiguous proof that the limit episode
         // is over: the provider answered. `turn_stopped` deliberately does NOT
@@ -2683,6 +2761,8 @@ export function useIpcSubscriptions(
       if (existing) clearTimeout(existing)
       const timer = setTimeout(() => {
         refs.bootstrapTimersRef.current.delete(sessionId)
+        // Captured by the updater, committed after setRuntimes returns (#677).
+        let pendingIdleQueue: ClaudeQueueState | null = null
         setRuntimes(prev => {
           const current = prev[sessionId]
           if (!current || !current.bootstrapping) return prev
@@ -2741,6 +2821,21 @@ export function useIpcSubscriptions(
           const sessionKind = refs.stateRef.current.sessions[sessionId]?.kind
           let next = current
           const reconciled: string[] = []
+
+          // #677: replay can end with Claude queue debt open (the recorded
+          // exact-remove-after-open-dequeue-debt sequence finishes with 3
+          // pending and debt.count = 3), and production bootstrap receives no
+          // replayed semantic events to settle it. awaitingAssistant is NOT
+          // part of idleness here: queue-op replay itself forces it true
+          // (case 1 above), so requiring it false would never settle. Runs
+          // before the awaitingAssistant clear so a queue that settlement
+          // empties lets that clear follow.
+          const idleQueue = settleClaudeQueueIfIdle(sessionId, sessionKind, !hasLiveSignal, 'debt-covers-pending')
+          pendingIdleQueue = idleQueue
+          if (idleQueue !== null) {
+            next = { ...next, queuedMessages: idleQueue.pending }
+            reconciled.push('claudeQueue')
+          }
 
           if (
             !hasLiveSignal &&
@@ -2840,6 +2935,7 @@ export function useIpcSubscriptions(
             ),
           }
         })
+        if (pendingIdleQueue !== null) claudeQueueBySession.set(sessionId, pendingIdleQueue)
       }, 150)
       refs.bootstrapTimersRef.current.set(sessionId, timer)
       closeSpan({
