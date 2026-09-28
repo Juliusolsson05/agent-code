@@ -79,7 +79,7 @@
   },
   "dependencies": {
     "@iarna/toml": "^2.2.5",
-    "@iconify-json/vscode-icons": "1.2.80",
+    "@iconify-json/vscode-icons": "1.2.81",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openai/codex-sdk": "0.144.4",
     "@opentelemetry/api": "^1.9.1",
@@ -139,7 +139,7 @@
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^5.2.0",
     "@vitest/coverage-v8": "^4.1.11",
-    "electron": "^43.7.4",
+    "electron": "^43.7.5",
     "electron-builder": "^26.16.1",
     "electron-updater": "^6.8.9",
     "electron-vite": "^5.0.0",
