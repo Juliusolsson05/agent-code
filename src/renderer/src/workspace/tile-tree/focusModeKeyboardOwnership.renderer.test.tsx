@@ -203,6 +203,31 @@ describe('focus-mode keyboard ownership', () => {
     useRealAppStore.setState(realBefore, true)
   })
 
+  it('a user-assigned chord for any agent command works in the Sidekick, and a fullscreen editor does not swallow ⌘W there (#1517 review)', () => {
+    // The first cut admitted only an id allowlist, so Copy Assistant Message
+    // bound by the user to ⌘⇧C did nothing in the Sidekick; and the
+    // fullscreen-editor guard ate ⌘W before the Sidekick gate although the
+    // Sidekick sits beside the editor, not under it.
+    harness.editorFullscreen = true
+    harness.appState = {
+      ...harness.appState,
+      keyboardRegion: 'sidekick',
+      globalEditorOpen: true,
+      settings: { agentViewMode: 'agent', commandKeybindingOverrides: { 'copy-assistant-message': ['Cmd+Shift+C'] } },
+    }
+    const { workspace } = makeWorkspace('spotlight' as const)
+    const view = render(<KeyboardHarness workspace={workspace} />)
+
+    fireEvent.keyDown(document, { metaKey: true, shiftKey: true, code: 'KeyC', key: 'C' })
+    const closePane = new KeyboardEvent('keydown', { metaKey: true, code: 'KeyW', key: 'w', bubbles: true, cancelable: true })
+    document.body.dispatchEvent(closePane)
+
+    const invoked = (harness.appState.requestCommandInvocation as ReturnType<typeof vi.fn>).mock.calls.map(call => call[0])
+    expect(invoked).toEqual(['copy-assistant-message', 'close-pane'])
+    harness.editorFullscreen = false
+    view.unmount()
+  })
+
   it('Spotlight reaches the Sidekick: ⌥S is routed from its region and Esc leaves Sidekick Spotlight', () => {
     // The region gate above passes only listed commands, so before this the
     // Spotlight chord died there and Sidekick Spotlight had no keyboard exit.
@@ -240,8 +265,12 @@ describe('focus-mode keyboard ownership', () => {
     const escape = new KeyboardEvent('keydown', { code: 'Escape', key: 'Escape', bubbles: true, cancelable: true })
     document.body.dispatchEvent(escape)
 
+    // ⌘W reaches the SIDEKICK's Close since lane parity (#1517): close-pane
+    // acts on the command target, which is the spotlit sidekick
+    // (sidekickLaneParity tests pin that), and asks to remove it. What must
+    // never happen — a hidden lane agent closing — is covered there.
     const invoked = (harness.appState.requestCommandInvocation as ReturnType<typeof vi.fn>).mock.calls.map(call => call[0])
-    expect(invoked).not.toContain('close-pane')
+    expect(invoked).toEqual(['close-pane'])
     expect(setSidekickSpotlight).toHaveBeenCalledWith(false)
     expect(workspace.toggleSpotlight).not.toHaveBeenCalled()
     harness.editorFullscreen = false

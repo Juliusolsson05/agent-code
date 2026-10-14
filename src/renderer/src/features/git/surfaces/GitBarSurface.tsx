@@ -10,9 +10,12 @@ export function GitBarSurface() {
   const workspace = useWorkspaceContext()
   const open = useAppStore(state => state.gitBarOpen)
   const toggle = useAppStore(state => state.toggleGitBar)
-  if (!open) return null
-  // Follows the keyboard into and out of the Sidekick (useCommandTargetInputs WHY).
+  // Follows the keyboard into and out of the Sidekick (useCommandTargetInputs
+  // WHY). ABOVE the early return: this surface stays mounted while closed, so
+  // a hook after `if (!open)` changed the hook count on open and crashed
+  // React ("Rendered more hooks", #1517 review).
   useCommandTargetInputs()
+  if (!open) return null
   const targetId = commandTargetSessionId(workspace)
   return (
     <GitBar

@@ -81,7 +81,10 @@ describe('keyboard region', () => {
 
     // A context menu opened from the panel is portalled under <body>; picking
     // one of its items must not hand the keyboard to the lane (review round 1).
-    for (const wrap of [{ role: 'menu' }, { 'data-radix-popper-content-wrapper': '' }]) {
+    // A docked side panel (Git bar, Agent Status…) describes the commanded
+    // agent; clicking into one must not switch that agent to the lane
+    // (#1517 review).
+    for (const wrap of [{ role: 'menu' }, { 'data-radix-popper-content-wrapper': '' }, { 'data-slot': 'side-panel' }]) {
       const menu = document.createElement('div')
       for (const [name, attr] of Object.entries(wrap)) menu.setAttribute(name, attr)
       const item = document.createElement('div')
