@@ -14,8 +14,9 @@ describe('Agent Code conventions provider targets', () => {
 
     // Contract since grok (#1014): a registered provider MAY declare personal
     // agent skills unsupported; targets resolution must tolerate it — grok
-    // simply never contributes a target row.
-    expect(result.unsupportedProviders).toEqual(['grok'])
+    // simply never contributes a target row. Hermes (#1482) is the second:
+    // its skills live on the user's own server, not in a local root.
+    expect(result.unsupportedProviders).toEqual(['grok', 'hermes'])
     expect(result.targets).toHaveLength(2)
     expect(result.targets.find(target => target.id === 'claude-personal-skills')).toMatchObject({
       providers: ['claude', 'opencode'],

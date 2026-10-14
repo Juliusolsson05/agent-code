@@ -21,11 +21,13 @@ describe('USAGE_SOURCES registry', () => {
     // claude/codex/grok map 1:1; opencode maps through the usage-source
     // selection. A new provider kind without a usage story must still
     // compose (it simply has no source id until one is registered) — Pi is
-    // that case today: enabled, and simply contributing no source.
+    // that case today: enabled, and simply contributing no source. Hermes
+    // (#1482) too: its model usage is billed on the user's own server.
     for (const kind of AGENT_PROVIDER_KINDS) {
-      expect(['claude', 'codex', 'grok', 'opencode', 'pi'].includes(kind)).toBe(true)
+      expect(['claude', 'codex', 'grok', 'opencode', 'pi', 'hermes'].includes(kind)).toBe(true)
     }
     expect(listActiveUsageSourceIds({ enabledKinds: new Set<AgentProviderKind>(['pi']), opencodeUsageSource: 'none' })).toEqual([])
+    expect(listActiveUsageSourceIds({ enabledKinds: new Set<AgentProviderKind>(['hermes']), opencodeUsageSource: 'none' })).toEqual([])
   })
 })
 
