@@ -9,8 +9,8 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
 // commands keep resolving to the focused LANE in v1 (plan ruling, Task 5),
 // so ~150 session commands cannot reach a sidekick by accident — Close,
 // Spotlight, Pin and Merge into Project all assume a project. The panel's
-// own header carries the few actions a sidekick needs (Switch, Reload,
-// Remove, Hide).
+// own column carries the few actions a sidekick needs: its chip strip
+// switches, and a chip's right-click menu has Reload, Remove and Hide.
 
 export const sidekickCommands: CommandDef[] = [
   {
@@ -25,6 +25,15 @@ export const sidekickCommands: CommandDef[] = [
       ui.closePalette()
       const store = useAppStore.getState()
       const open = workspace.state.sidekickPanel?.open === true
+      // Under Settings the panel is retained but hidden (SidekickPanelSurface),
+      // so "show it" has to leave Settings, the way every other way of going
+      // back to work does. Without this ⌘J did nothing visible there.
+      if (store.settingsPageOpen) {
+        store.closeSettingsPage()
+        workspace.setSidekickPanel({ open: true })
+        store.setKeyboardRegion('sidekick')
+        return
+      }
       // Three states, one chord: closed → open + keyboard; open but the
       // keyboard elsewhere → take the keyboard; already typing in it → hide.
       if (!open) {
@@ -47,6 +56,9 @@ export const sidekickCommands: CommandDef[] = [
     keywords: ['sidekick', 'picker', 'switch', 'global', 'agent', 'hermes'],
     run: ({ workspace, ui }) => {
       ui.closePalette()
+      // Leaves Settings for the same reason as `sidekick-panel`: the pick
+      // lands in a panel Settings keeps hidden.
+      useAppStore.getState().closeSettingsPage()
       workspace.setSidekickPanel({ open: true })
       useAppStore.getState().openSidekickPicker('switch')
     },
@@ -60,6 +72,7 @@ export const sidekickCommands: CommandDef[] = [
     keywords: ['new', 'sidekick', 'global', 'agent', 'hermes', 'create', 'home'],
     run: ({ workspace, ui }) => {
       ui.closePalette()
+      useAppStore.getState().closeSettingsPage()
       workspace.setSidekickPanel({ open: true })
       useAppStore.getState().openSidekickPicker('create')
     },

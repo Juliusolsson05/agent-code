@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
+import { RetainedWorkspaceSurface } from '@renderer/app/shell/RetainedWorkspaceSurface'
 import { useSidekickActions } from '@renderer/features/sidekick/actions/useSidekickActions'
 import { useSidekickPersistence } from '@renderer/features/sidekick/actions/useSidekickPersistence'
 import { useSidekickIndexStore } from '@renderer/features/sidekick/state/sidekickIndexStore'
@@ -30,6 +31,7 @@ export function SidekickPanelSurface() {
   const workspace = useWorkspaceContext()
   const actions = useSidekickActions(workspace)
   const open = workspace.state.sidekickPanel?.open === true
+  const settingsPageOpen = useAppStore(state => state.settingsPageOpen)
   const setRegion = useAppStore(state => state.setKeyboardRegion)
 
   // `actions` changes identity with the workspace snapshot; the sync hook
@@ -58,14 +60,34 @@ export function SidekickPanelSurface() {
     if (next !== pointer) workspace.setSidekickPanel({ sidekickId: next })
   }, [holdsPointer, pointer, view, workspace])
 
-  // A hidden panel cannot own the keyboard.
+  // A hidden panel cannot own the keyboard — closed, or retained under
+  // Settings (below). Without the second case, typing into a Settings field
+  // would still have the keyboard gate routing only Sidekick chords.
   useEffect(() => {
-    if (!open) setRegion('workspace')
-  }, [open, setRegion])
+    if (!open || settingsPageOpen) setRegion('workspace')
+  }, [open, settingsPageOpen, setRegion])
 
+  // WHY the panel hides while Settings is open (#1493 follow-up): Settings is
+  // a takeover of the WORKSPACE — MainSurface retains the lanes under
+  // display:none — and the Sidekick is a lane-shaped column beside them. It
+  // used to keep painting next to Settings as if it sat on a layer above the
+  // configuration page. It is hidden the same way the lanes are, through
+  // RetainedWorkspaceSurface, and for the same reason (#752): unmounting would
+  // dispose the sidekick's xterm and replay its PTY on every Settings toggle,
+  // and the terminal visibility provider stops a hidden pane from sending a
+  // zero-sized resize.
+  //
+  // WHY Reader Mode and Spotlight do NOT hide it: those are ways of looking
+  // at the workspace's agents, and the sidekick is the agent kept beside
+  // whatever you are looking at. Settings is the one takeover where the user
+  // is configuring the app, not working with agents.
   return (
     <>
-      {open ? <SidekickPanel workspace={workspace} actions={actions} /> : null}
+      {open ? (
+        <RetainedWorkspaceSurface hidden={settingsPageOpen}>
+          <SidekickPanel workspace={workspace} actions={actions} />
+        </RetainedWorkspaceSurface>
+      ) : null}
       <SidekickPicker workspace={workspace} actions={actions} />
     </>
   )

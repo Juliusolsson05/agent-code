@@ -8,7 +8,8 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SidekickIndexView, SidekickSummary } from '@shared/sidekicks/types'
 
 import { SidekickPanel } from './SidekickPanel'
-import { scrubbedPanelPointer } from './SidekickPanelSurface'
+import { scrubbedPanelPointer, SidekickPanelSurface } from './SidekickPanelSurface'
+import { sidekickCommands } from '@renderer/features/sidekick/commands/sidekickCommands'
 
 // The mounted Sidekick panel (#1493, review round 1 F2/F3/F6). The leaf is the
 // one stand-in: renderWorkspaceLeaf draws a whole TileLeaf, whose own focus
@@ -19,6 +20,16 @@ vi.mock('@renderer/workspace/tile-tree/TileTree', () => ({
   renderWorkspaceLeaf: (sessionId: string) => <textarea aria-label={`leaf ${sessionId}`} />,
 }))
 vi.mock('@renderer/features/hermes-chat/useHermesConnections', () => ({ useHermesConnections: () => null }))
+// The surface test below mounts SidekickPanelSurface; its window-wide duties
+// (index sync over IPC, persistence to main) are not what it is about.
+vi.mock('@renderer/features/sidekick/state/useSidekickIndexSync', () => ({ useSidekickIndexSync: () => {} }))
+vi.mock('@renderer/features/sidekick/actions/useSidekickPersistence', () => ({ useSidekickPersistence: () => {} }))
+const surfaceDeps = vi.hoisted(() => ({ workspace: null as unknown, actions: null as unknown }))
+vi.mock('@renderer/workspace/WorkspaceContext', () => ({ useWorkspaceContext: () => surfaceDeps.workspace }))
+vi.mock('@renderer/features/sidekick/actions/useSidekickActions', async importOriginal => ({
+  ...(await importOriginal<object>()),
+  useSidekickActions: () => surfaceDeps.actions,
+}))
 
 const ID = '00000000-0000-4000-8000-000000000001'
 const HOME = '/home/recorded'
@@ -104,5 +115,59 @@ describe('panel pointer scrub (F4)', () => {
     expect(scrubbedPanelPointer(view([summary(null)]), ID, false)).toBe(ID)
     // The index broadcast can trail this window's own register by a tick.
     expect(scrubbedPanelPointer(view([]), ID, true)).toBe(ID)
+  })
+})
+
+describe('Sidekick column is a native lane (#1493 follow-up)', () => {
+  const second = { ...summary(null), id: '00000000-0000-4000-8000-000000000002', sessionId: 'sk2' }
+
+  it('resizes from a boundary handle that sits in flow, not clipped inside the panel', () => {
+    // The first cut put the handle at left-0 -translate-x-1/2 inside an
+    // overflow-hidden aside: half of it was clipped and the rest sat on the
+    // border, so the panel looked (and mostly was) not resizable.
+    useSidekickIndexStore.getState().accept(view([summary('this-window')]))
+    const workspace = workspaceWith({ sk: { kind: 'claude', cwd: HOME, sidekickId: ID } })
+    render(<SidekickPanel workspace={workspace} actions={actionsWith(vi.fn())} />)
+    const handle = screen.getByRole('separator', { name: 'Resize Sidekick' })
+    expect(handle.parentElement).toBe(screen.getByRole('region', { name: 'Sidekick' }))
+    fireEvent.mouseDown(handle)
+    fireEvent.mouseMove(window, { clientX: window.innerWidth - 500 })
+    fireEvent.mouseUp(window)
+    expect(workspace.setSidekickPanel).toHaveBeenCalledWith({ width: 500 })
+  })
+
+  it('switches sidekicks from the chip strip, with no panel header of its own', () => {
+    useSidekickIndexStore.getState().accept(view([summary('this-window'), second]))
+    const workspace = workspaceWith({ sk: { kind: 'claude', cwd: HOME, sidekickId: ID } })
+    render(<SidekickPanel workspace={workspace} actions={actionsWith(vi.fn())} />)
+    expect(screen.queryByRole('button', { name: 'Hide Sidekick' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /^S2/ }))
+    expect(workspace.setSidekickPanel).toHaveBeenCalledWith({ sidekickId: second.id })
+    expect(useAppStore.getState().keyboardRegion).toBe('sidekick')
+  })
+
+  it('stays mounted but hidden under Settings, and gives the keyboard back to the workspace', () => {
+    useSidekickIndexStore.getState().accept(view([summary('this-window')]))
+    surfaceDeps.workspace = workspaceWith({ sk: { kind: 'claude', cwd: HOME, sidekickId: ID } })
+    surfaceDeps.actions = actionsWith(vi.fn())
+    act(() => { useAppStore.getState().setKeyboardRegion('sidekick') })
+    render(<SidekickPanelSurface />)
+    const leaf = screen.getByLabelText('leaf sk')
+    expect(leaf.closest('[data-testid="retained-workspace-surface"]')?.getAttribute('style')).toContain('contents')
+    act(() => { useAppStore.getState().openSettingsPage() })
+    // Same element: retained, not remounted (an xterm would be disposed).
+    expect(screen.getByLabelText('leaf sk', { selector: 'textarea' })).toBe(leaf)
+    expect(leaf.closest('[data-testid="retained-workspace-surface"]')?.getAttribute('style')).toContain('none')
+    expect(useAppStore.getState().keyboardRegion).toBe('workspace')
+  })
+
+  it('⌘J from Settings leaves Settings and shows the Sidekick', () => {
+    act(() => { useAppStore.getState().openSettingsPage() })
+    const workspace = workspaceWith({})
+    const command = sidekickCommands.find(entry => entry.id === 'sidekick-panel')!
+    command.run({ workspace, ui: { closePalette: vi.fn() } } as never)
+    expect(useAppStore.getState().settingsPageOpen).toBe(false)
+    expect(workspace.setSidekickPanel).toHaveBeenCalledWith({ open: true })
+    expect(useAppStore.getState().keyboardRegion).toBe('sidekick')
   })
 })

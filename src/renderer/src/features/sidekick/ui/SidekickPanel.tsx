@@ -1,23 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { Button } from '@renderer/components/ui/button'
-import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
-import { PanelHeader } from '@renderer/components/ui/panel-header'
-import { SidePanel } from '@renderer/components/ui/side-panel'
-import { useHermesConnections } from '@renderer/features/hermes-chat/useHermesConnections'
 import { SplitHandle } from '@renderer/features/shared/SplitHandle'
 import { useResizableSplitter } from '@renderer/features/shared/useResizableSplitter'
 import { sidekickPlace } from '@renderer/features/sidekick/actions/useSidekickActions'
 import type { SidekickActions } from '@renderer/features/sidekick/actions/useSidekickActions'
-import { useSidekickSummary } from '@renderer/features/sidekick/state/sidekickIndexStore'
+import { useSidekickSummaries } from '@renderer/features/sidekick/state/sidekickIndexStore'
+import { confirmRemoveSidekick } from '@renderer/features/sidekick/ui/confirmRemoveSidekick'
+import { sidekickChipLabel, SidekickStrip } from '@renderer/features/sidekick/ui/SidekickStrip'
 import { KeyboardRegionContext, SIDEKICK_PANEL_ATTRIBUTE } from '@renderer/features/sidekick/ui/KeyboardRegionContext'
 import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
-import { providerChoiceLabel } from '@renderer/workspace/providerChoices'
 import { clampSidekickPanelWidth, DEFAULT_SIDEKICK_PANEL } from '@renderer/workspace/sidekickPanel'
 import { renderWorkspaceLeaf } from '@renderer/workspace/tile-tree/TileTree'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import { isAgentProviderKind } from '@shared/types/providerKind'
 
 /**
  * The tab id renderWorkspaceLeaf requires. NEVER resolved: the panel always
@@ -34,20 +30,20 @@ type Props = { workspace: Workspace; actions: SidekickActions }
 export function SidekickPanel({ workspace, actions }: Props) {
   const panel = workspace.state.sidekickPanel ?? DEFAULT_SIDEKICK_PANEL
   const settings = useAppStore(state => state.settings)
-  const names = useAppStore(state => state.workspaceAgentNames)
   const region = useAppStore(state => state.keyboardRegion)
   const setRegion = useAppStore(state => state.setKeyboardRegion)
   const openPicker = useAppStore(state => state.openSidekickPicker)
   const { showToast } = useGlobalToast()
-  const summary = useSidekickSummary(panel.sidekickId)
+  const summaries = useSidekickSummaries()
   const place = sidekickPlace(workspace.state.sessions, panel.sidekickId)
   const [busy, setBusy] = useState<'attaching' | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
 
   // Width: clamped on every read (sidekickPanel.ts WHY), dragged from the
-  // panel's LEFT edge. The panel is the rightmost column of the main row, so
-  // its width is simply the distance from the pointer to the window's right
-  // edge.
+  // boundary on the panel's LEFT edge. The panel is the rightmost column of
+  // the main row, so its width is simply the distance from the pointer to the
+  // window's right edge — handle and strip included, which is why the stored
+  // width is the whole column.
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth)
   useEffect(() => {
     const onResize = () => setWindowWidth(window.innerWidth)
@@ -126,76 +122,107 @@ export function SidekickPanel({ workspace, actions }: Props) {
     }
   }, [actions, panel.sidekickId, setRegion])
 
-  const remove = useCallback(async () => {
-    if (!panel.sidekickId) return
-    const confirmed = await requestConfirm({
-      title: 'Remove Sidekick',
-      description: 'Its process stops and it leaves the Sidekick index. The conversation stays in Conversations.',
-      confirmLabel: 'Remove',
-      tone: 'danger',
-    })
-    if (!confirmed) return
-    try {
-      await actions.removeSidekick(panel.sidekickId)
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : String(error))
+  // sidekickId → the session holding it in this window, for the strip's
+  // activity colours and the chip menu's Reload.
+  const sessions = workspace.state.sessions
+  const heldSessions = useMemo(() => {
+    const held: Record<string, string> = {}
+    for (const [sessionId, meta] of Object.entries(sessions)) {
+      if (meta.sidekickId) held[meta.sidekickId] = sessionId
     }
-  }, [actions, panel.sidekickId, showToast])
+    return held
+  }, [sessions])
 
-  const meta = place.kind === 'here' ? workspace.state.sessions[place.sessionId] : undefined
-  const kind = meta?.kind ?? summary?.kind ?? null
-  const kindLabel = kind && isAgentProviderKind(kind) ? providerChoiceLabel(kind, (meta?.providerRuntime ?? summary?.providerRuntime ?? undefined) as never) : null
-  const hermes = useHermesConnections(kind === 'hermes')
-  const connectionId = meta?.remoteConnectionId ?? summary?.remoteConnectionId ?? null
-  const connectionName = connectionId ? hermes?.find(entry => entry.id === connectionId)?.name ?? null : null
-  const agentNameId = meta?.agentNameId ?? summary?.agentNameId ?? null
-  const name = settings.agentNamesEnabled && agentNameId ? names[agentNameId] ?? null : null
-  const title = [name ?? meta?.title ?? summary?.title ?? null, kindLabel, connectionName].filter(Boolean).join(' · ')
+  // A chip click is the lane chip's gesture: show that sidekick here. It does
+  // NOT take a sidekick live in another window (unlike a deliberate pick in
+  // the picker, F8): a strip is clicked casually, and stealing an agent out
+  // of the window someone is typing in must stay the explicit "Open here".
+  const select = useCallback((sidekickId: string) => {
+    workspace.setSidekickPanel({ sidekickId })
+    setRegion('sidekick')
+  }, [setRegion, workspace])
 
+  const hide = useCallback(() => {
+    workspace.setSidekickPanel({ open: false })
+    setRegion('workspace')
+  }, [setRegion, workspace])
+
+  // The actions the old panel header carried as buttons (Reload, Remove,
+  // Hide), on the chip's native right-click menu — the same channel and the
+  // same "the renderer maps the id back" contract as the Sessions row menu
+  // (shared/types/popupMenu.ts). Switch needs no item: it is the chip click.
+  const onChipMenu = useCallback(async (sidekickId: string) => {
+    const heldSessionId = heldSessions[sidekickId] ?? null
+    const choice = await window.api.showPopupMenu({
+      items: [
+        { type: 'item', id: 'reload', label: 'Reload Agent', enabled: heldSessionId !== null },
+        { type: 'item', id: 'remove', label: 'Remove Sidekick…' },
+        { type: 'separator' },
+        { type: 'item', id: 'hide', label: 'Hide Sidekick' },
+      ],
+    })
+    if (choice === 'reload' && heldSessionId) void workspace.reloadSessionAgent(heldSessionId)
+    else if (choice === 'remove') await confirmRemoveSidekick(actions, sidekickId, showToast)
+    else if (choice === 'hide') hide()
+  }, [actions, heldSessions, hide, showToast, workspace])
+
+  const chipIndex = summaries.findIndex(entry => entry.id === panel.sidekickId)
+  const paneLabel = chipIndex >= 0 ? sidekickChipLabel(chipIndex) : 'S'
+  const focused = region === 'sidekick'
+
+  // The column is shaped exactly like a lane in TiledDispatchLayout: a
+  // boundary handle in normal flow, the 46px chip strip, then the leaf on the
+  // canvas with the leaf's own PaneHeader as the only header, dimmed like an
+  // unfocused lane while the keyboard is in the workspace.
+  //
+  // WHY the handle is a flex sibling and not absolutely positioned on the
+  // panel's edge (the "not even resizable" bug): the first cut put a 10px
+  // handle at `left-0 -translate-x-1/2` inside the side-panel aside, whose
+  // `overflow-hidden` clipped the outer half. What was left was a 5px strip
+  // whose 4px bar was half clipped too and sat on top of the aside's 1px
+  // border — no visible affordance and a target almost nobody could hit. In
+  // flow, it is the same 10px / 4px boundary every lane-to-lane split uses.
   return (
-    <SidePanel label="Sidekick" className="relative" style={{ width }} {...{ [SIDEKICK_PANEL_ATTRIBUTE]: '' }}>
-      <div className="absolute inset-y-0 left-0 z-10 -translate-x-1/2">
-        <SplitHandle
-          dragging={splitter.dragging}
-          onMouseDown={splitter.onMouseDown}
-          label="Resize Sidekick panel"
-          valueNow={width}
-          onKeyboardDelta={delta => workspace.setSidekickPanel({ width: clampSidekickPanelWidth(width - delta * 16, window.innerWidth) })}
-        />
-      </div>
-      {splitter.cursorLock}
-      <PanelHeader
-        label="Sidekick"
-        title={title || undefined}
-        onClose={() => {
-          workspace.setSidekickPanel({ open: false })
-          setRegion('workspace')
-        }}
-        closeLabel="Hide Sidekick"
-        actions={(
-          <>
-            <Button variant="ghost" size="xs" onClick={() => openPicker('switch')}>Switch</Button>
-            {place.kind === 'here' ? (
-              <Button variant="ghost" size="xs" onClick={() => { void workspace.reloadSessionAgent(place.sessionId) }}>Reload</Button>
-            ) : null}
-            {panel.sidekickId ? <Button variant="ghost" size="xs" onClick={() => { void remove() }}>Remove</Button> : null}
-          </>
-        )}
+    <div
+      role="region"
+      aria-label="Sidekick"
+      className="flex h-full min-h-0 flex-shrink-0 bg-canvas"
+      style={{ width }}
+      {...{ [SIDEKICK_PANEL_ATTRIBUTE]: '' }}
+    >
+      <SplitHandle
+        dragging={splitter.dragging}
+        onMouseDown={splitter.onMouseDown}
+        hitSizePx={10}
+        barSizePx={4}
+        label="Resize Sidekick"
+        valueNow={width}
+        onKeyboardDelta={delta => workspace.setSidekickPanel({ width: clampSidekickPanelWidth(width - delta * 16, window.innerWidth) })}
       />
-      <div className="flex min-h-0 flex-1 flex-col">
+      {splitter.cursorLock}
+      <SidekickStrip
+        sidekicks={summaries}
+        selectedId={panel.sidekickId}
+        heldSessions={heldSessions}
+        focused={focused}
+        onSelect={select}
+        onChipMenu={id => { void onChipMenu(id) }}
+        onNew={() => openPicker('create')}
+      />
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         {place.kind === 'here' ? (
           <KeyboardRegionContext.Provider value="sidekick">
             <div ref={bodyRef} className="flex min-h-0 flex-1 flex-col">
               {renderWorkspaceLeaf(
                 place.sessionId,
-                region === 'sidekick' ? place.sessionId : null,
+                focused ? place.sessionId : null,
                 workspace,
                 SIDEKICK_SURFACE_TAB_ID,
                 settings.agentViewMode,
                 settings.showStatusMode,
                 settings.showWorktreeBadges,
                 () => setRegion('sidekick'),
-                'S',
+                paneLabel,
               )}
             </div>
           </KeyboardRegionContext.Provider>
@@ -208,8 +235,12 @@ export function SidekickPanel({ workspace, actions }: Props) {
             onNew={() => openPicker('create')}
           />
         )}
+        {/* The unfocused-lane dim, verbatim from TiledDispatchLayout. */}
+        {!focused && place.kind === 'here' && (
+          <div className="absolute inset-0 pointer-events-none bg-canvas/34 ring-1 ring-inset ring-border" />
+        )}
       </div>
-    </SidePanel>
+    </div>
   )
 }
 
