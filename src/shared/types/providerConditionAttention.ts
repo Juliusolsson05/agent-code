@@ -57,4 +57,6 @@ export const HERMES_ATTENTION_CONDITION_KINDS = new Set<string>([
   'hermes.clarify',
   'hermes.sudo',
   'hermes.secret',
+  // #1514: the turn waits on a connection card exactly as on an approval.
+  'hermes.connection',
 ])

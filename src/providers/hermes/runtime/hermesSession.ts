@@ -26,6 +26,7 @@ import {
   HermesHeadless,
   HermesPromptError,
   type CommittedRow,
+  type HermesConnectionOperation,
   type HermesConnectionState,
   type HermesRequest,
   type HermesLaneState,
@@ -55,9 +56,12 @@ import { composerCommandsFromCatalog, findComposerCommand } from '@providers/her
 import type { ComposerCommand } from '@shared/composerCommands/types.js'
 import {
   HERMES_ANSWER,
+  HERMES_CONNECTION_RESPOND,
   HERMES_DECLINE,
   clarifyQuestions,
   validateAnswer,
+  connectionRowApprovable,
+  validateConnectionAnswer,
 } from '@providers/hermes/runtime/requestAnswers.js'
 
 /** The `source` Agent Code tags committed rows with: one per conversation. */
@@ -130,6 +134,16 @@ export class HermesSession extends EventEmitter implements AgentSession {
   private readonly laneKey: string | null
   /** Prompts held behind a running phone turn (hermes-headless lane state). */
   private held: Array<{ id: string; text: string }> = []
+  /**
+   * Open connection operations (manage_connections cards) by op id, as the
+   * latest full snapshot Hermes sent. Removed when one settles. Usually one;
+   * a second can open only after the first settles (one per tool call).
+   */
+  private readonly connections = new Map<string, HermesConnectionOperation>()
+  /** Settled op ids: a late, lower-seq frame for one must not reopen its card (review A F5). */
+  private readonly settledConnections = new Set<string>()
+  /** Drops a card whose deadline passed without a settle frame (review A F4 backstop). */
+  private connectionDeadlineTimer: ReturnType<typeof setTimeout> | null = null
   private laneNoticeShown = false
   /** A brand-new pane (no conversation to resume): the only kind a thread lookup preceded. */
   private readonly freshPane: boolean
@@ -192,8 +206,11 @@ export class HermesSession extends EventEmitter implements AgentSession {
     // Open cards can no longer be answered (the socket is gone), and leaving
     // them up kept the pane "blocked on you" with every click failing
     // (round-1 review c1 #2). Hermes fails them closed on its own timeout.
-    if (this.openRequests.length > 0 || this.held.length > 0) {
+    if (this.openRequests.length > 0 || this.held.length > 0 || this.connections.size > 0) {
       this.openRequests.length = 0
+      this.connections.clear()
+      if (this.connectionDeadlineTimer) clearTimeout(this.connectionDeadlineTimer)
+      this.connectionDeadlineTimer = null
       this.requestReceivedAt.clear()
       // Held prompts are taken back, not kept for later (review #1503): the
       // package would otherwise send them automatically after a sign-in,
@@ -293,6 +310,8 @@ export class HermesSession extends EventEmitter implements AgentSession {
     })
     headless.on('lane-error', (error: Error) => console.warn('[hermes] lane refresh failed:', describeError(error)))
     headless.on('request-closed', ({ id }: { id: string }) => this.onRequestClosed(id))
+    headless.on('connection-operation', (operation: HermesConnectionOperation) => this.onConnectionOperation(operation))
+    headless.on('connection-sync', (operation: HermesConnectionOperation | null) => this.onConnectionSync(operation))
     headless.on('connection', (state: HermesConnectionState) => this.onConnection(state))
     service.on('disconnect', this.onServiceDisconnect)
     service.on('signed-in', this.onServiceSignedIn)
@@ -330,6 +349,8 @@ export class HermesSession extends EventEmitter implements AgentSession {
   }
 
   async stop(): Promise<void> {
+    if (this.connectionDeadlineTimer) clearTimeout(this.connectionDeadlineTimer)
+    this.connectionDeadlineTimer = null
     if (this.stopped) return
     this.stopped = true
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
@@ -500,6 +521,20 @@ export class HermesSession extends EventEmitter implements AgentSession {
         return { ok: true }
       } catch (error) {
         return { ok: false, reason: 'aborted', failedAtStep: `held prompt: ${describeError(error)}` }
+      }
+    }
+    if (action.name === HERMES_CONNECTION_RESPOND) {
+      // Same rule as requests: answer only an operation that is STILL open,
+      // with an answer that fits it (validateConnectionAnswer).
+      const opId = typeof payload?.opId === 'string' ? payload.opId : null
+      const operation = opId ? this.connections.get(opId) : undefined
+      const answer = operation ? validateConnectionAnswer(operation, payload?.answer) : null
+      if (!operation || !answer) return { ok: false, reason: 'invalid-payload' }
+      try {
+        await this.headless.respondConnection(operation.opId, answer)
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, reason: 'aborted', failedAtStep: `connection ${operation.opId}: ${describeError(error)}` }
       }
     }
     const requestId = typeof payload?.requestId === 'string' ? payload.requestId : null
@@ -689,6 +724,68 @@ export class HermesSession extends EventEmitter implements AgentSession {
     this.emitConditions()
   }
 
+  private onConnectionOperation(operation: HermesConnectionOperation): void {
+    if (this.stopped || this.signedOut) return
+    if (this.settledConnections.has(operation.opId)) return
+    // Every frame is the full snapshot: replace. An older frame arriving late
+    // (a replayed ring after a reconnect) must not roll the card back.
+    const previous = this.connections.get(operation.opId)
+    if (previous && previous.seq > operation.seq) return
+    if (operation.settled) {
+      this.connections.delete(operation.opId)
+      this.settledConnections.add(operation.opId)
+    } else {
+      // Re-inserted so the most recent operation is the one drawn.
+      this.connections.delete(operation.opId)
+      this.connections.set(operation.opId, operation)
+    }
+    this.armConnectionDeadline()
+    this.emitConditions()
+  }
+
+  /**
+   * A resume/activate snapshot's `pending_connection` (reviews A F4, B F4):
+   * the authority after a reconnect. Replaces what the pane held, so a card
+   * whose operation settled (or died with a gateway restart) while the
+   * socket was down goes away, and one opened while away appears.
+   */
+  private onConnectionSync(operation: HermesConnectionOperation | null): void {
+    if (this.stopped || this.signedOut) return
+    const before = [...this.connections.keys()].join(',')
+    this.connections.clear()
+    if (operation && !operation.settled && !this.settledConnections.has(operation.opId)) this.connections.set(operation.opId, operation)
+    if ([...this.connections.keys()].join(',') === before && before === '') return
+    this.armConnectionDeadline()
+    this.emitConditions()
+  }
+
+  /**
+   * Backstop: Hermes settles an operation at its deadline itself, but if
+   * that frame is never seen (a drop the ring cannot repair), the card would
+   * stay forever with every click refused. 5 s of grace after the deadline.
+   */
+  private armConnectionDeadline(): void {
+    if (this.connectionDeadlineTimer) clearTimeout(this.connectionDeadlineTimer)
+    this.connectionDeadlineTimer = null
+    const deadlines = [...this.connections.values()].map((operation) => operation.deadlineAt).filter((at): at is number => at !== null)
+    if (deadlines.length === 0) return
+    const wait = Math.max(0, Math.min(...deadlines) + 5_000 - Date.now())
+    this.connectionDeadlineTimer = setTimeout(() => {
+      this.connectionDeadlineTimer = null
+      const now = Date.now()
+      let dropped = false
+      for (const [opId, operation] of this.connections) {
+        if (operation.deadlineAt !== null && now > operation.deadlineAt + 5_000) {
+          this.connections.delete(opId)
+          this.settledConnections.add(opId)
+          dropped = true
+        }
+      }
+      if (dropped) this.emitConditions()
+      this.armConnectionDeadline()
+    }, wait)
+  }
+
   private onRequestClosed(id: string): void {
     const index = this.openRequests.findIndex((entry) => entry.id === id)
     this.requestReceivedAt.delete(id)
@@ -731,9 +828,56 @@ export class HermesSession extends EventEmitter implements AgentSession {
       if (pending.length === 0) continue
       conditions[KIND_BY_METHOD[method]] = conditionRecord(pending[0], pending.length - 1, this.requestReceivedAt.get(pending[0].id))
     }
+    const open = [...this.connections.values()].at(-1)
+    if (open) conditions['hermes.connection'] = connectionConditionRecord(open)
     const snapshot: ProviderConditionSnapshot = { provider: 'hermes', conditions, ts: Date.now() }
     this.emit('conditions', snapshot)
   }
+}
+
+/**
+ * The card for one connection operation. One-click answers are authored here
+ * (Skip per row, Continue); an approval with typed credentials is composed by
+ * the view and checked by validateConnectionAnswer.
+ */
+export function connectionConditionRecord(operation: HermesConnectionOperation): ProviderConditionRecord {
+  const respond = (id: string, label: string, answer: unknown): ConditionCustomAction =>
+    ({ kind: 'custom', id: `${operation.opId}:${id}`, label, name: HERMES_CONNECTION_RESPOND, payload: { opId: operation.opId, answer } })
+  const actions: ConditionCustomAction[] = []
+  for (const target of operation.targets) {
+    if (target.resolved) continue
+    // One click only where Hermes acts on it (connectionRowApprovable), and
+    // only when there is nothing to type: a row with requiredEnv is approved
+    // by the view's form. The verb says what it does.
+    const approvable = connectionRowApprovable(target)
+    if (approvable && target.requiredEnv.length === 0) {
+      const verb = approvable === 'retry' ? 'Try again' : target.action === 'enable' ? 'Enable' : target.action === 'authorize' ? 'Authorize' : 'Install'
+      actions.push(respond(`${target.name}:approve`, verb, { targets: [{ name: target.name, status: 'approved' }] }))
+    }
+    actions.push(respond(`${target.name}:skip`, 'Skip', { targets: [{ name: target.name, status: 'skipped' }] }))
+  }
+  actions.push(respond('continue', 'Continue without it', { targets: [], settledBy: 'continue' }))
+  return {
+    kind: 'hermes.connection',
+    state: {
+      visible: true,
+      opId: operation.opId,
+      deadlineAt: operation.deadlineAt,
+      targets: operation.targets.map((target) => ({
+        name: target.name,
+        kind: target.kind,
+        action: target.action,
+        state: target.state,
+        resolved: target.resolved,
+        detail: target.detail,
+        instructions: target.instructions,
+        connectUrl: target.connectUrl,
+        requiredEnv: target.requiredEnv,
+        catalog: target.catalog,
+      })),
+    },
+    actions,
+  } as ProviderConditionRecord
 }
 
 function answerAction(requestId: string, id: string, label: string, result: unknown): ConditionCustomAction {
