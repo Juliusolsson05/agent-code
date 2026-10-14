@@ -21,7 +21,7 @@ import { withVisibleControls } from '@shared/text/visibleControls'
 
 import { useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 
-import { formatToolResult, projectChat, splitReasoning, stabilizeChat, type ChatItem } from './chatProjection'
+import { formatToolResult, groupActivity, projectChat, splitReasoning, stabilizeChat, summarizeActivity, type ChatItem, type ChatRowItem, type ChatStep } from './chatProjection'
 
 // "Near the bottom" for follow-the-conversation: the reader has not scrolled
 // up to read older messages. Matches the feed's sticky-bottom slack.
@@ -81,10 +81,13 @@ export const HermesChatFeed = memo(function HermesChatFeed({
   if (visible) shownItems.current = items
   const source = shownItems.current
   const previousChat = useRef<ChatItem[] | null>(null)
+  const previousRows = useRef<ChatRowItem[] | null>(null)
   const chat = useMemo(() => {
     const next = stabilizeChat(previousChat.current, projectChat(source))
     previousChat.current = next
-    return next
+    const rows = groupActivity(next, previousRows.current)
+    previousRows.current = rows
+    return rows
   }, [source])
   const scroller = useRef<HTMLDivElement | null>(null)
   const following = useRef(true)
@@ -189,18 +192,10 @@ export const HermesChatFeed = memo(function HermesChatFeed({
 // Memoized as well: while a reply streams, `items` changes on every token
 // and projectChat rebuilds the list, but a row whose content did not change
 // renders the same; TextProse below memoizes the expensive part on the text.
-const ChatRow = memo(function ChatRow({ item, connectionName, selected }: { item: ChatItem; connectionName: string | null; selected: boolean }) {
+const ChatRow = memo(function ChatRow({ item, connectionName, selected }: { item: ChatRowItem; connectionName: string | null; selected: boolean }) {
   switch (item.kind) {
     case 'user':
-      return (
-        <div className="flex justify-end" data-chat-role="user">
-          <div className="max-w-[80%] whitespace-pre-wrap break-words rounded-slab bg-user-bg px-3 py-2 text-[13px] leading-[1.55] text-ink">
-            {/* A skill command is persisted as Hermes' expansion of it; show
-                what the user actually ran. */}
-            {item.skill ? <span className="font-code text-[12px] text-ink-dim">/{item.skill}</span> : withVisibleControls(item.text)}
-          </div>
-        </div>
-      )
+      return <UserBubble text={item.text} skill={item.skill} />
     case 'assistant':
       return (
         <div className="flex justify-start" data-chat-role="assistant" data-entry-uuid={item.uuid}>
@@ -227,10 +222,8 @@ const ChatRow = memo(function ChatRow({ item, connectionName, selected }: { item
           </div>
         </div>
       )
-    case 'reasoning':
-      return <ReasoningRow item={item} />
-    case 'tool':
-      return <ToolChip item={item} />
+    case 'activity':
+      return <ActivityRow steps={item.steps} />
     case 'notice':
       return (
         <div className="whitespace-pre-wrap break-words px-1 font-code text-[11px] text-muted" data-chat-role="notice">
@@ -258,10 +251,47 @@ const ChatRow = memo(function ChatRow({ item, connectionName, selected }: { item
   }
 })
 
+// A prompt longer than this folds to LONG_PROMPT_LINES lines behind "Show
+// more". WHY (the owner's real conversation, debug bundle 2026-10-14T16-26-49):
+// they pasted a whole Hermes setup guide as one prompt, and the bubble filled
+// more than a screen, pushing the reply out of view. A chat reader wants the
+// question at a glance and the answer below it; the full text is one click
+// away. Measured in characters as well as lines because a pasted paragraph is
+// often a single very long line.
+const LONG_PROMPT_LINES = 8
+const LONG_PROMPT_CHARS = 700
+
+function UserBubble({ text, skill }: { text: string; skill: string | null }) {
+  const [expanded, setExpanded] = useState(false)
+  const long = skill === null && (text.length > LONG_PROMPT_CHARS || text.split('\n').length > LONG_PROMPT_LINES)
+  return (
+    <div className="flex justify-end" data-chat-role="user">
+      <div className="flex max-w-[80%] flex-col items-end gap-1 rounded-slab bg-user-bg px-3 py-2">
+        <div
+          className={`w-full whitespace-pre-wrap break-words text-[13px] leading-[1.55] text-ink ${long && !expanded ? 'line-clamp-8' : ''}`}
+          data-prompt-folded={long && !expanded ? 'true' : undefined}
+        >
+          {/* A skill command is persisted as Hermes' expansion of it; show
+              what the user actually ran. */}
+          {skill ? <span className="font-code text-[12px] text-ink-dim">/{skill}</span> : withVisibleControls(text)}
+        </div>
+        {long && (
+          // text-ink-dim, not text-muted: this is the only way to reveal the
+          // folded prompt and it sits on the tinted bubble, where muted ink
+          // measured 2.4–3.6:1 (review B6).
+          <button type="button" aria-expanded={expanded} className="font-code text-[11px] text-ink-dim hover:text-ink" onClick={() => setExpanded((value) => !value)}>
+            {expanded ? 'Show less' : 'Show more'}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function ReasoningRow({ item }: { item: Extract<ChatItem, { kind: 'reasoning' }> }) {
   const { headings, prose } = useMemo(() => splitReasoning(item.text), [item.text])
   return (
-    <div className="flex max-w-[88%] flex-col gap-1" data-chat-role="reasoning">
+    <div className="flex min-w-0 flex-col gap-1" data-chat-role="reasoning">
       <LazyDetails
         className="text-[12px] text-ink-dim"
         data-chat-role="reasoning-detail"
@@ -305,22 +335,61 @@ function LazyDetails({ summary, children, className, closedClassName = '', openC
   )
 }
 
-function ToolChip({ item }: { item: Extract<ChatItem, { kind: 'tool' }> }) {
-  const tone = item.status === 'error' ? 'border-danger/60 text-danger' : item.status === 'running' ? 'border-accent/60' : 'border-border'
+/**
+ * One run of the agent's work, folded to a single quiet line (groupActivity
+ * says why). No border, no pill: it is metadata between two messages, and it
+ * must read as quieter than both. Opening it lists every step, each with its
+ * own lazily-built detail, so the 2,000-element closed-body problem (#1499)
+ * stays solved at both levels.
+ */
+function ActivityRow({ steps }: { steps: ChatStep[] }) {
+  const { status, tools, headline, thoughts, failed, progress } = useMemo(() => summarizeActivity(steps), [steps])
+  const counts = [tools, failed > 0 ? `${failed} failed` : '', thoughts > 0 ? `${thoughts} thought${thoughts === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')
+  return (
+    <div className="flex min-w-0 flex-col gap-1" data-chat-role="activity" data-activity-status={status}>
+      <LazyDetails
+        className="group min-w-0 text-[12px] text-muted"
+        openClassName="rounded-slab border border-border px-2 py-1.5"
+        data-chat-role="activity-detail"
+        summary={
+          <span className="flex min-w-0 items-center gap-1.5">
+            {/* A borderless flex <summary> has no marker, so nothing said the
+                line opens (review B7); the chevron does, and turns when open. */}
+            <span aria-hidden className="transition-transform group-open:rotate-90">›</span>
+            <span aria-hidden className={status === 'error' ? 'text-danger' : status === 'running' ? 'motion-safe:animate-pulse text-accent' : ''}>
+              {status === 'running' ? '◌' : status === 'error' ? '✕' : '✓'}
+            </span>
+            {/* The glyph is decorative; a screen reader gets the state as a
+                word (review B5), or a failed run sounds like a clean one. */}
+            {status !== 'done' && <span className="sr-only">{status === 'error' ? 'Failed:' : 'Running:'}</span>}
+            <span className="shrink-0 font-code text-ink-dim">{counts}</span>
+            {headline && <span className="min-w-0 truncate">{withVisibleControls(headline)}</span>}
+          </span>
+        }
+      >
+        <div className="mt-1.5 flex flex-col gap-1">
+          {steps.map((step) => (step.kind === 'tool' ? <ToolLine key={step.key} item={step} /> : <ReasoningRow key={step.key} item={step} />))}
+        </div>
+      </LazyDetails>
+      {progress && (
+        // The agent's latest progress note, kept visible (summarizeActivity).
+        <div className="pl-[18px] text-[12px] italic leading-[1.55] text-ink-dim" data-chat-role="progress">
+          <TextProse text={progress} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ToolLine({ item }: { item: Extract<ChatItem, { kind: 'tool' }> }) {
   return (
     <LazyDetails
-      // Pill-shaped only while CLOSED (one line). The chip radius is 9999px
-      // (--theme-radius-chip), so an opened chip drew its multi-line input and
-      // output inside an oval whose curve cut through the text (owner report,
-      // 2026-10-14). Open, it takes the chat bubble's radius instead.
-      className={`max-w-[88%] border ${tone} bg-canvas px-2 py-1 text-[12px]`}
-      closedClassName="rounded-chip"
-      openClassName="rounded-slab"
+      className="min-w-0 text-[12px]"
       data-chat-role="tool"
       data-tool-status={item.status}
       summary={
         <span className="flex min-w-0 items-center gap-1.5 text-ink-dim">
-          <span aria-hidden>{item.status === 'running' ? '◌' : item.status === 'error' ? '✕' : '✓'}</span>
+          <span aria-hidden className={item.status === 'error' ? 'text-danger' : ''}>{item.status === 'running' ? '◌' : item.status === 'error' ? '✕' : '✓'}</span>
           <span className="font-code text-ink">{item.name}</span>
           {item.label && <span className="min-w-0 truncate font-code text-muted">{withVisibleControls(item.label)}</span>}
         </span>
