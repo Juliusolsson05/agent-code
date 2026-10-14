@@ -28,7 +28,9 @@ function stateLine(connection: HermesConnectionInfo): { text: string; tone: 'ok'
     case 'ready': {
       const who = connection.identity ? `Signed in as ${connection.identity.userId} (${connection.identity.provider})` : 'Signed in'
       if (connection.backend?.compatibility === 'unsupported') {
-        return { text: `${who} · this Hermes is too old for Agent Code (needs a release with server requests, v0.21.7 tested). Run \`hermes update\` on the server.`, tone: 'warn' }
+        // `hermes update` does not work inside a Docker image (the owner's
+        // Hostinger VPS, reference_integrations): say "update", not how.
+        return { text: `${who} · this Hermes is too old for Agent Code. Update Hermes on the server to v0.21.7 or newer (v0.22.0 is tested).`, tone: 'warn' }
       }
       if (connection.backend?.compatibility === 'skew') {
         return { text: `${who} · Hermes contract ${connection.backend.desktopContract} (Agent Code was tested with 8): it should work; update one side if anything looks off.`, tone: 'warn' }
