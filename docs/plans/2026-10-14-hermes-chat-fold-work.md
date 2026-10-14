@@ -40,3 +40,29 @@ The app was not launched (standing rule). The look was judged in the browser pre
 ## Out of scope
 
 Codex and Claude tool rows in the coding feed. Measured findings go to a follow-up PR.
+
+## Review round (one round, two reviewers)
+
+### Fixed
+- **A F1.** A heading inside a thought that is still streaming now sets the live line's headline. Before, the line kept the previous step's heading, or showed nothing.
+- **A F2 / B1.** Pure tests on recorded S4 now cover:
+  - row reuse when nothing changed;
+  - a new row once the running tool finishes;
+  - the headline while the model thinks after a tool.
+- **B2.** Row order is now asserted (user → run → reply). A second test runs the S4 turn twice: two runs, each before its own answer.
+- **B3.**
+  - The `line-clamp-8` class is asserted.
+  - A short prompt gets no button.
+  - A `/skill` expansion never folds.
+- **B4.** The fold button has `aria-expanded`.
+- **B5.** The run's status is spoken as a word for screen readers ("Failed:" / "Running:").
+- **B6.** The fold button uses `text-ink-dim`. The muted ink measured 2.4–3.6:1 on the prompt bubble.
+- **B7.** A chevron marks the run line as something that opens. The pulse animation is now `motion-safe`.
+
+Each guard was mutation-checked: removing reuse, removing the run boundary, gating the headline on finished thoughts, colouring a run red on any error, and letting an error outrank running. Each of these turns a test red.
+
+### Commented, not changed
+- **A F3.** An opened live run closes when its turn commits. The ledger's live key and committed key differ, and every chip already behaved this way before this PR.
+
+### Ruling (UNCONFIRMED, owner call)
+- **A F4.** A run shows ✕ only when its last tool failed. Earlier failures appear as "N failed" in the counts. **Why:** agents often probe, fail and retry, as recorded S4 does. **Cost if wrong:** a run that ended in a correct answer would still need its failure called out.

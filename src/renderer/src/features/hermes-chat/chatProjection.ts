@@ -249,6 +249,12 @@ export type ChatRowItem = Exclude<ChatItem, ChatStep> | { kind: 'activity'; key:
  *
  * The key is the FIRST step's key: a live run grows at its end, so its row
  * keeps its identity (and its open/closed state) while tools stream in.
+ * EXCEPT at the live → committed hand-off (review A F3): the ledger keys a
+ * live step `semantic-block:<turn>:<idx>` and the committed one
+ * `entry:<uuid>:…`, so when the turn commits the row remounts and an opened
+ * run closes. Before folding, every chip did the same; keying by something
+ * that survives the hand-off (turn id, first toolUseId) is possible if that
+ * ever matters, but the ledger key is not it.
  * Steps are the stabilized items (stabilizeChat ran first), so `sameRow`
  * can compare them by identity.
  */
@@ -302,31 +308,45 @@ export function summarizeActivity(steps: readonly ChatStep[]): {
   tools: string
   headline: string
   thoughts: number
+  failed: number
   progress: string
 } {
   const counts = new Map<string, number>()
   let thoughts = 0
+  let failed = 0
   let headline = ''
   let progress = ''
-  let status: ChatToolStatus = 'done'
+  let runningTool: Extract<ChatStep, { kind: 'tool' }> | null = null
+  let thinking = false
+  let lastTool: Extract<ChatStep, { kind: 'tool' }> | null = null
   for (const step of steps) {
     if (step.kind === 'tool') {
       counts.set(step.name, (counts.get(step.name) ?? 0) + 1)
-      if (step.status === 'error' && status !== 'running') status = 'error'
-      if (step.status === 'running') {
-        status = 'running'
-        headline = step.label ? `${step.name} ${step.label}` : step.name
-      }
+      lastTool = step
+      if (step.status === 'error') failed += 1
+      if (step.status === 'running') runningTool = step
     } else {
       thoughts += 1
-      if (step.streaming) status = 'running'
+      if (step.streaming) thinking = true
       const { headings, prose } = splitReasoning(step.text)
-      if (status !== 'running' && headings.length > 0) headline = headings[headings.length - 1]!
+      // A thought sets the headline whether it is finished or still
+      // streaming (review A F1): the usual live shape is "a tool returned,
+      // now the model thinks", and gating on `streaming` left the line on the
+      // PREVIOUS step's heading, or empty, for that whole thought.
+      if (headings.length > 0) headline = headings[headings.length - 1]!
       if (prose) progress = prose
     }
   }
+  // A running tool is what is happening now; it outranks any heading.
+  if (runningTool) headline = runningTool.label ? `${runningTool.name} ${runningTool.label}` : runningTool.name
+  // Ruling (review A F4, owner call UNCONFIRMED): ✕ only when the run's LAST
+  // tool failed. Agents routinely probe, fail, and retry; S4 itself runs a
+  // failing read and then a working one before answering. A run that ends in
+  // a correct answer under a red ✕ reads as "the work failed". Earlier
+  // failures still show, as "N failed" in the counts.
+  const status: ChatToolStatus = runningTool || thinking ? 'running' : lastTool?.status === 'error' ? 'error' : 'done'
   const tools = [...counts].map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(', ')
-  return { status, tools, headline, thoughts, progress }
+  return { status, tools, headline, thoughts, failed, progress }
 }
 
 /**

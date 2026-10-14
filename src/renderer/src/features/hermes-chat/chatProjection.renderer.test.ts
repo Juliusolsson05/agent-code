@@ -12,7 +12,7 @@ import { ledgerToFeedItems } from '@renderer/features/feed/ledger/ledgerFeedItem
 import { providerLedgerFeedContextFromRuntime } from '@renderer/features/feed/ledger/providerLedgerFeedContext'
 import type { Entry } from '@shared/types/transcript'
 
-import { projectChat, type ChatItem } from './chatProjection'
+import { groupActivity, projectChat, stabilizeChat, summarizeActivity, type ChatItem, type ChatRowItem, type ChatStep } from './chatProjection'
 
 // ---------------------------------------------------------------------------
 // The Hermes chat on the REAL pipeline, from a REAL recording (#1482).
@@ -178,5 +178,72 @@ describe('Hermes chat projection on the real pipeline (recorded S4)', () => {
       'tool:call_tools_0_1:error',
       'tool:call_tools_1_0:running',
     ])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Folding a run of work into one row (#1508), on the same recorded S4 turn:
+// three tools, the middle one failing, then the answer. Review A (#1509)
+// found no test pinned the row identity memo relies on or the live summary.
+// ---------------------------------------------------------------------------
+
+const activityOf = (rows: ChatRowItem[]) => rows.filter((row): row is Extract<ChatRowItem, { kind: 'activity' }> => row.kind === 'activity')
+
+describe('a folded run of work (recorded S4)', () => {
+  it('keeps its row object while nothing in it changed, so memo skips it', () => {
+    const { created, events } = s4()
+    const live = liveEvents(created, events)
+    const first = stabilizeChat(null, chat([], live))
+    const rows = groupActivity(first, null)
+    const again = groupActivity(stabilizeChat(first, chat([], live)), rows)
+    expect(activityOf(again)).toHaveLength(1)
+    expect(activityOf(again)[0]).toBe(activityOf(rows)[0])
+  })
+
+  it('is a NEW row once its running tool finishes, and the line stops spinning', () => {
+    const { created, events } = s4()
+    const cut = events.findIndex((event) => event.type === 'tool.start' && (event.payload as { tool_id: string }).tool_id === 'call_tools_1_0')
+    const mid = stabilizeChat(null, chat([], liveEvents(created, events.slice(0, cut + 1))))
+    const midRows = groupActivity(mid, null)
+    const midRun = activityOf(midRows)[0]!
+    expect(summarizeActivity(midRun.steps).status).toBe('running')
+    // While a tool runs, the line says which one.
+    const running = midRun.steps.find((step) => step.kind === 'tool' && step.status === 'running') as Extract<ChatStep, { kind: 'tool' }>
+    expect(summarizeActivity(midRun.steps).headline.startsWith(running.name)).toBe(true)
+
+    const done = groupActivity(stabilizeChat(mid, chat([], liveEvents(created, events))), midRows)
+    const doneRun = activityOf(done)[0]!
+    expect(doneRun.key).toBe(midRun.key)
+    expect(doneRun).not.toBe(midRun)
+    expect(summarizeActivity(doneRun.steps).status).not.toBe('running')
+  })
+
+  it('a failed probe followed by working tools ends ✓ with "1 failed", not a red run', () => {
+    const { created, events } = s4()
+    const run = activityOf(groupActivity(chat([], liveEvents(created, events))))[0]!
+    expect(summarizeActivity(run.steps)).toMatchObject({ status: 'done', failed: 1 })
+  })
+
+  it('while the model thinks after a finished tool, the line shows THAT thought\'s heading', () => {
+    // Reasoning text: the owner's debug bundle (2026-10-14T16-26-49), as
+    // quoted in splitReasoning's header; Hermes stores progress headings
+    // inside `reasoning`. No corpus scenario records a headed thought (their
+    // thinking.delta is Hermes' spinner text), so the S4 tool steps are
+    // followed by that recorded text as a streaming step.
+    const { created, events } = s4()
+    const tools = activityOf(groupActivity(chat([], liveEvents(created, events))))[0]!.steps
+    const thought: ChatStep = { kind: 'reasoning', key: 'live-thought', streaming: true, text: '**Auditing comprehensive Hermes setup** **Checking Gmail watcher cron status** I\'m running a full live audit now' }
+    expect(summarizeActivity([...tools, thought])).toMatchObject({ status: 'running', headline: 'Checking Gmail watcher cron status' })
+  })
+
+  it('ends a run at the reply: two turns are two runs, each before its own answer (review B2)', () => {
+    // Mechanical mutation of the recording: the S4 turn twice in a row, the
+    // second copy re-keyed so the two do not collide.
+    const { created, events } = s4()
+    const turn = chat([], liveEvents(created, events))
+    const twice = [...turn, ...turn.map((item) => ({ ...item, key: `${item.key}#2` }))]
+    const rows = groupActivity(twice)
+    expect(rows.filter((row) => row.kind === 'activity' || row.kind === 'assistant').map((row) => row.kind)).toEqual(['activity', 'assistant', 'activity', 'assistant'])
+    expect(activityOf(rows).map((run) => run.steps.length)).toEqual([3, 3])
   })
 })

@@ -106,6 +106,9 @@ describe('a run of work between two messages', () => {
     expect(runs).toHaveLength(1)
     expect(view.container.querySelectorAll('[data-chat-role="reasoning"], [data-chat-role="tool"]')).toHaveLength(0)
     expect(runs[0]!.querySelector('summary')!.textContent).toContain('terminal')
+    // In place: between the prompt and the answer (review B2).
+    const order = Array.from(view.container.querySelectorAll('[data-chat-role="user"], [data-chat-role="activity"], [data-chat-role="assistant"]')).map((node) => node.getAttribute('data-chat-role'))
+    expect(order).toEqual(['user', 'activity', 'assistant'])
   })
 })
 
@@ -121,10 +124,32 @@ describe('a long prompt', () => {
         : entry)
     const view = render(<Pane runtime={{ ...emptyRuntime(), entries }} draft="" />)
     const prompt = view.container.querySelector('[data-chat-role="user"]')!
-    expect(prompt.querySelector('[data-prompt-folded="true"]')).not.toBeNull()
+    // The clamp class is what folds it on screen; the attribute only marks it.
+    expect(prompt.querySelector('[data-prompt-folded="true"]')!.className).toContain('line-clamp-8')
+    expect(prompt.querySelector('button')!.getAttribute('aria-expanded')).toBe('false')
     fireEvent.click(prompt.querySelector('button')!)
     expect(prompt.querySelector('[data-prompt-folded="true"]')).toBeNull()
     expect(prompt.querySelector('button')!.textContent).toBe('Show less')
+    expect(prompt.querySelector('button')!.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('leaves a short prompt alone (recorded S4, unmodified)', () => {
+    const view = render(<Pane runtime={{ ...emptyRuntime(), entries: recordedEntries('S4') }} draft="" />)
+    expect(view.container.querySelector('[data-chat-role="user"] button')).toBeNull()
+  })
+
+  it('never folds a skill command, whose stored expansion is long (review B3)', () => {
+    // Hermes persists a /skill as its expansion, which starts with this
+    // prefix (mapper.ts hermesSkillInvocation); the bubble shows `/name`.
+    const expansion = `[IMPORTANT: The user has invoked the "deploy" skill]\n${Array.from({ length: 30 }, (_, i) => `Step ${i + 1}.`).join('\n')}`
+    const entries = recordedEntries('S4').map((entry) =>
+      entry.type === 'user' && ((entry as { message?: { content?: unknown } }).message?.content as Array<{ type: string }> | undefined)?.some?.((block) => block.type === 'text')
+        ? { ...entry, message: { role: 'user' as const, content: [{ type: 'text' as const, text: expansion }] } }
+        : entry)
+    const view = render(<Pane runtime={{ ...emptyRuntime(), entries }} draft="" />)
+    const prompt = view.container.querySelector('[data-chat-role="user"]')!
+    expect(prompt.textContent).toBe('/deploy')
+    expect(prompt.querySelector('button')).toBeNull()
   })
 })
 

@@ -276,7 +276,10 @@ function UserBubble({ text, skill }: { text: string; skill: string | null }) {
           {skill ? <span className="font-code text-[12px] text-ink-dim">/{skill}</span> : withVisibleControls(text)}
         </div>
         {long && (
-          <button type="button" className="font-code text-[11px] text-muted hover:text-ink" onClick={() => setExpanded((value) => !value)}>
+          // text-ink-dim, not text-muted: this is the only way to reveal the
+          // folded prompt and it sits on the tinted bubble, where muted ink
+          // measured 2.4–3.6:1 (review B6).
+          <button type="button" aria-expanded={expanded} className="font-code text-[11px] text-ink-dim hover:text-ink" onClick={() => setExpanded((value) => !value)}>
             {expanded ? 'Show less' : 'Show more'}
           </button>
         )}
@@ -340,19 +343,25 @@ function LazyDetails({ summary, children, className, closedClassName = '', openC
  * stays solved at both levels.
  */
 function ActivityRow({ steps }: { steps: ChatStep[] }) {
-  const { status, tools, headline, thoughts, progress } = useMemo(() => summarizeActivity(steps), [steps])
-  const counts = [tools, thoughts > 0 ? `${thoughts} thought${thoughts === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')
+  const { status, tools, headline, thoughts, failed, progress } = useMemo(() => summarizeActivity(steps), [steps])
+  const counts = [tools, failed > 0 ? `${failed} failed` : '', thoughts > 0 ? `${thoughts} thought${thoughts === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')
   return (
     <div className="flex min-w-0 flex-col gap-1" data-chat-role="activity" data-activity-status={status}>
       <LazyDetails
-        className="min-w-0 text-[12px] text-muted"
+        className="group min-w-0 text-[12px] text-muted"
         openClassName="rounded-slab border border-border px-2 py-1.5"
         data-chat-role="activity-detail"
         summary={
           <span className="flex min-w-0 items-center gap-1.5">
-            <span aria-hidden className={status === 'error' ? 'text-danger' : status === 'running' ? 'animate-pulse text-accent' : ''}>
+            {/* A borderless flex <summary> has no marker, so nothing said the
+                line opens (review B7); the chevron does, and turns when open. */}
+            <span aria-hidden className="transition-transform group-open:rotate-90">›</span>
+            <span aria-hidden className={status === 'error' ? 'text-danger' : status === 'running' ? 'motion-safe:animate-pulse text-accent' : ''}>
               {status === 'running' ? '◌' : status === 'error' ? '✕' : '✓'}
             </span>
+            {/* The glyph is decorative; a screen reader gets the state as a
+                word (review B5), or a failed run sounds like a clean one. */}
+            {status !== 'done' && <span className="sr-only">{status === 'error' ? 'Failed:' : 'Running:'}</span>}
             <span className="shrink-0 font-code text-ink-dim">{counts}</span>
             {headline && <span className="min-w-0 truncate">{withVisibleControls(headline)}</span>}
           </span>
