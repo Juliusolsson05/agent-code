@@ -734,10 +734,10 @@ This would get its own issue + plan.
 | L8 | App Stage C: Copy Assistant on Hermes (C0 reproduction first) | blocked | C0 test passes on recorded S4/S12: picker and Copy Last Response work on committed rows. Known gap: the newest reply is copyable only once it commits (right after the turn ends). U6 is asked to the owner. |
 | L9 | App Stage D: lane mode (spawn option `hermesLane`, commands, `hermes:lanes` IPC, chip / notice / divider / busy line, held prompts as a non-blocking condition, `/new` refusal) | doing | a94e2ded3: lane spawn default + hermesLaneKey persisted, the separate-chat command, the held card (non-blocking condition), notices, /new refusal. Owed: tests on T1–T8 once Stage 0 reports; "Change Telegram Thread…" picker (deferred, see R5). |
 | L10 | App Stage E: composer command catalog + picker; `/restart` with confirmation and status polling; side-answer cards | doing | 75a742118: picker from commands.catalog (S17-tested), refusals, /restart with confirmation + status polling, /bg and /btw notices. Side answers render as notice rows (no dedicated card yet). |
-| L11 | Tailscale phase 1 (`tailnet.ts`, `describeError`, Settings tag + help, memory register steps) | doing | 24c362f43 code + tests; the memory register steps are still owed. |
+| L11 | Tailscale phase 1 (`tailnet.ts`, `describeError`, Settings tag + help, memory register steps) | done | 24c362f43 + the memory register has the server steps (owner runs them). |
 | L12 | App tests (startup matrix, first pane, lane, picker, copy); `npx tsc -b`; full vitest once | todo | |
-| L13 | Live matrix workflow in the package; `support/upstream-versions.json` tested releases | todo | |
-| L14 | Read-only VPS probe (U1/U4); record the verdicts | todo | Two GETs, bearer from the app's token store, never printed. |
+| L13 | Live matrix workflow in the package; `support/upstream-versions.json` tested releases | doing | Package live-matrix.yml (both tags, fails on skip) + TESTED_HERMES_RELEASES; the app accepted 0.22.0. Not yet run on GitHub (needs the package PR); lane live cases depend on the Stage 0 harness. |
+| L14 | Read-only VPS probe (U1/U4); record the verdicts | blocked | The REST bearer token lives in Electron safeStorage and cannot be read outside the app without printing a secret. U1/U4 are answered the first time the owner opens a Hermes pane: a refused lookup logs `[hermes] Telegram thread lookup failed` and falls back to a separate chat. |
 | L16 | Bug: the Hermes composer is very slow to type in (owner, 2026-10-14), #1499 | done | Cause: HermesChatFeed was not memoized and every bubble ran react-markdown inline, so each keystroke re-parsed every assistant message. Fail-first: 300 parses for 5 keystrokes on S12, now 0. Fix: memo + TextProse + memoized tool input. |
 | L17 | Bundle bug: a reload during a turn silences the running turn. Rewrite detection fires on a resume-vs-history window mismatch, then the renderer reset gate drops every event until the next `turn_started`. | done | package 7622a6d: rewrite only inside the listing span; an open turn is replayed after a rewrite reset. Both guards proven by reverting. |
 | L18 | Bundle bug: every Hermes send froze the window 2–5.7 s (perf monitor 1s.jsonl, 16:15–16:26) | done | de879dcb4 lazy bodies; e999fd25b hidden Spotlight copy inert + row reuse. Windowing (LazyEntry) is not done; revisit only if still slow. | DOM 3,917 elements: tool inputs (181 KB) and reasoning (213 KB) stay mounted in closed <details>. Render bodies only when open; window long chats; L16 memo already landed. Also slowness in spotlight (agent investigating). |
@@ -749,6 +749,7 @@ This would get its own issue + plan.
 
 ### Progress log
 
+- 2026-10-14: v0.22.0 accepted (90/90 deterministic on the v0.22.0 corpus); the Stage B tests on S18–S25 are committed in the package (35f6457, local until the Stage 0 corpus lands).
 - 2026-10-14: L10 slash picker landed (75a742118). Stage 0: S17–S25 + T1–T8 are being recorded; H2 HOLDS (S23: 0 differing frames).
 - 2026-10-14: L17, L20, L21, L22 done (debug-bundle defects).
 - 2026-10-14: performance in Spotlight and when sending fixed (de879dcb4, e999fd25b); L18/L19 done.
