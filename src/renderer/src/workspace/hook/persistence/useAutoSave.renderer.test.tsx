@@ -339,3 +339,44 @@ describe('workspace autosave durability retry', () => {
     unmount()
   })
 })
+
+describe('sidekick rows never reach the window slice (#1493 plan I1)', () => {
+  it('writes neither the row, its draft nor its pin — but does write the panel pointer', async () => {
+    // A sidekick's durable copy is main's index record. If a window slice
+    // ALSO held it, the next launch would rehydrate a project-less row (a
+    // ghost) and two windows would each persist their own copy.
+    vi.useFakeTimers()
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const sidekickId = '00000000-0000-4000-8000-000000000001'
+    const state: WorkspaceState = {
+      tabs: [{ id: 'tab-a', title: 'recorded' }],
+      activeTabId: 'tab-a',
+      stage: oneLaneStage('lane'),
+      sessions: {
+        lane: { cwd: '/recorded/worktree', kind: 'claude', projectId: 'tab-a', joinedAt: 0 },
+        sidekick: { cwd: '/home/recorded', kind: 'hermes', sidekickId },
+      },
+      pinnedSessionIds: ['lane', 'sidekick'],
+      sidekickPanel: { open: true, width: 420, sidekickId },
+    }
+    const refs = {
+      latestStateRef: ref(state),
+      latestRuntimesRef: ref({
+        lane: { ...emptyRuntime(), draftInput: 'lane draft' },
+        sidekick: { ...emptyRuntime(), draftInput: 'sidekick draft' },
+      }),
+      saveTimerRef: ref<ReturnType<typeof setTimeout> | null>(null),
+    } as unknown as WorkspaceRefs
+    const saveWorkspace = vi.fn(async (_json: string) => undefined)
+    Object.defineProperty(window, 'api', { configurable: true, value: { saveWorkspace } })
+
+    const { unmount } = renderHook(() => useAutoSave(state, 0, refs, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(400) })
+    const saved = JSON.parse(saveWorkspace.mock.calls[0]![0]).workspace
+    expect(Object.keys(saved.sessions)).toEqual(['lane'])
+    expect(saved.drafts).toEqual({ lane: 'lane draft' })
+    expect(saved.pinnedSessionIds).toEqual(['lane'])
+    expect(saved.sidekickPanel).toEqual({ open: true, width: 420, sidekickId })
+    unmount()
+  })
+})

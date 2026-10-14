@@ -284,6 +284,14 @@ const SPOTLIGHT_FOCUS_MODE_COMMAND_IDS: ReadonlySet<string> = new Set([
   // first), so it passes the same visible-owner test as Tail.
   'toggle-browser-pocket',
 ])
+/** While the Sidekick panel owns the keyboard (#1493): its own commands and
+ *  the palette. Exported for the region router test. */
+export const SIDEKICK_REGION_COMMAND_IDS: ReadonlySet<string> = new Set([
+  'sidekick-panel',
+  'sidekick-picker',
+  'new-sidekick',
+  'open-command-palette',
+])
 
 /** Chord -> candidate commands, built once per override change. */
 function buildBindingIndex(
@@ -880,6 +888,25 @@ export function useKeybinds(
           return
         }
         // Other keys fall through, same as the assistant picker.
+      }
+
+      // The Sidekick panel owns the keyboard (#1493, review round 1 F1). Every
+      // routed command below targets the WORKSPACE's focused pane or layout —
+      // ⌘W would close the lane agent the user is not looking at, ⌥J would
+      // move a Dispatch row, Escape would leave Spotlight. Same fail-closed
+      // shape as the Reader/Spotlight lists: only the commands whose visible
+      // owner IS the panel, plus the palette entry point, cross. Everything
+      // else returns WITHOUT preventDefault so the sidekick's own composer or
+      // terminal still receives the key (Escape interrupts the agent there).
+      // Checked before the Escape takeovers on purpose, after the app-modal
+      // and in-pane picker owners above (those are explicit, visible owners).
+      if (useAppStore.getState().keyboardRegion === 'sidekick') {
+        const sidekickCommandId = routedCommandForEvent(e, bindingIndex, GLOBAL_CONTEXT_ONLY)
+        if (sidekickCommandId && SIDEKICK_REGION_COMMAND_IDS.has(sidekickCommandId)) {
+          e.preventDefault()
+          requestCommandInvocation(sidekickCommandId, 'keybinding')
+        }
+        return
       }
 
       if (k === 'Escape' && workspace.spotlight && !fullscreenEditorOwnsWorkspace) {

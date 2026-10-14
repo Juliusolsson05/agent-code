@@ -33,6 +33,7 @@ import { remoteApi } from '@preload/api/remote.js'
 import { providerEnablementApi } from '@preload/api/providerEnablement.js'
 import { userMcpApi } from '@preload/api/userMcp.js'
 import { hermesApi } from '@preload/api/hermes.js'
+import { sidekickApi } from '@preload/api/sidekicks.js'
 import { usageApi } from '@preload/api/usage.js'
 import { cliUpdatesApi } from '@preload/api/cliUpdates.js'
 import { workflowsApi } from '@preload/api/workflows.js'
@@ -103,6 +104,7 @@ export const api = {
   ...providerEnablementApi,
   ...userMcpApi,
   ...hermesApi,
+  ...sidekickApi,
   ...usageApi,
   ...cliUpdatesApi,
   ...workflowsApi,

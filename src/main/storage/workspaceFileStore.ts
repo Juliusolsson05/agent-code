@@ -12,6 +12,7 @@ import {
   readWindowWorkspaceJson,
   serializeWorkspaceFile,
   withoutWindow,
+  withSidekicks,
   withWindowSlice,
   WORKSPACE_FILE_VERSION,
 } from '@main/storage/workspaceFile.js'
@@ -20,6 +21,8 @@ import type {
   WindowBounds,
   WorkspaceFile,
 } from '@main/storage/workspaceFile.js'
+import { EMPTY_PERSISTED_SIDEKICKS } from '@shared/sidekicks/types.js'
+import type { PersistedSidekicks } from '@shared/sidekicks/types.js'
 import { WORKSPACE_READ_ONLY_PREFIX } from '@shared/types/session.js'
 
 // The single writer of `~/.config/agent-code/workspace.json`.
@@ -35,6 +38,8 @@ import { WORKSPACE_READ_ONLY_PREFIX } from '@shared/types/session.js'
 // and the reasoning is kept verbatim below, because it was earned: unique temp
 // names, one admission-ordered tail for reads and writes both, and cleanup that
 // never scans for sibling temp files.
+
+export type WorkspaceObserver = (windows: readonly PersistedWindow[], sidekicks: PersistedSidekicks) => void
 
 export type WindowGeometry = {
   bounds: WindowBounds | null
@@ -91,9 +96,16 @@ export class WorkspaceFileStore {
   // swallowed because the conversation ledger is a projection and must never
   // turn a workspace save into a failure (same invariant as
   // SessionLifecycleJournal: a sink, never a decider).
-  private readonly observers = new Set<(windows: readonly PersistedWindow[]) => void>()
+  //
+  // WHY sidekicks arrive as a SECOND argument instead of a snapshot object
+  // (#1493): the projections that must see sidekicks (conversation ledger,
+  // Agent Activity, the remote projection) opt in by reading it, and every
+  // other listener keeps compiling unchanged. They are never folded into
+  // `windows` as a synthetic window: startup restore iterates `windows()` to
+  // create real BrowserWindows, so a fake entry there would open a window.
+  private readonly observers = new Set<WorkspaceObserver>()
 
-  observe(listener: (windows: readonly PersistedWindow[]) => void): () => void {
+  observe(listener: WorkspaceObserver): () => void {
     this.observers.add(listener)
     return () => { this.observers.delete(listener) }
   }
@@ -184,9 +196,35 @@ export class WorkspaceFileStore {
     return this.readOnlyReason
   }
 
-  /** Union of every window's committed session ids. */
+  /** Union of every window's committed session ids, plus sidekick sessions. */
   sessionIds(): Set<string> {
     return collectSessionIds(this.file)
+  }
+
+  /** The committed Sidekick index (#1493); empty when there are none. */
+  sidekicks(): PersistedSidekicks {
+    return this.file.sidekicks ?? EMPTY_PERSISTED_SIDEKICKS
+  }
+
+  /**
+   * Replace the Sidekick index through the SAME admission-ordered tail as
+   * window saves.
+   *
+   * WHY not a separate queue or file: a sidekick write and a window save both
+   * rewrite this one document. Composing them on two tails would let either
+   * overwrite the other with a stale copy — the read-modify-write race
+   * `commit` exists to prevent (see its comment). `compose` receives the
+   * index as it is at commit time, so SidekickService's lease checks and the
+   * mutation it makes are judged against the same document that is written.
+   *
+   * A read-only store rejects, like `saveSlice`: the renderer must learn the
+   * sidekick did not become durable rather than believe it did.
+   */
+  commitSidekicks(compose: (current: PersistedSidekicks) => PersistedSidekicks): Promise<void> {
+    if (this.readOnlyReason) {
+      return Promise.reject(new Error(`${WORKSPACE_READ_ONLY_PREFIX}${this.readOnlyReason}`))
+    }
+    return this.commit(current => withSidekicks(current, compose(current.sidekicks ?? EMPTY_PERSISTED_SIDEKICKS)))
   }
 
   /**
@@ -363,7 +401,7 @@ export class WorkspaceFileStore {
       this.file = next
       for (const observer of this.observers) {
         try {
-          observer(next.windows)
+          observer(next.windows, next.sidekicks ?? EMPTY_PERSISTED_SIDEKICKS)
         } catch (error) {
           // eslint-disable-next-line no-console
           console.warn('[workspace] observer failed', error)

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { useKeyboardRegionActive } from '@renderer/features/sidekick/ui/KeyboardRegionContext'
 import { focusIsUnowned } from '@renderer/workspace/tile-tree/TileLeaf/useInteractiveOwnership'
 import { useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { Terminal } from '@xterm/xterm'
@@ -96,6 +97,7 @@ export function TerminalLeaf({
   // Declared before the dictation hook so the registration below can gate on
   // it (hook order is call order; the visibility answer must exist first).
   const ownerVisible = useAgentTerminalOwnerVisible()
+  const regionActive = useKeyboardRegionActive()
   useComposerDictation({
     // WHY both flags are visibility-gated (#757 round-4 review): this leaf
     // stays mounted (display:none) while Reader/Spotlight/Settings own the
@@ -105,7 +107,9 @@ export function TerminalLeaf({
     // this INVISIBLE pane's PTY. Both siblings (TileLeaf, AgentTerminalLeaf)
     // already gate the same way; this was the one leaf kind that didn't.
     enabled: dictationEnabled && ownerVisible,
-    focused: focused && ownerVisible,
+    // The keyboard region (#1493): a focused shell lane is not the dictation
+    // target while the user is in the Sidekick panel.
+    focused: focused && ownerVisible && regionActive,
     provider: dictationProvider,
     shortcut: dictationShortcut,
     sink: { kind: 'terminal', sessionId },

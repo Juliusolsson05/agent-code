@@ -133,6 +133,31 @@ describe('focus-mode keyboard ownership', () => {
     }
   })
 
+  it('while the Sidekick panel owns the keyboard, lane and layout chords do nothing (#1493 review round 1, F1)', () => {
+    // ⌘W used to close the focused LANE agent while the user typed in the
+    // Sidekick panel, ⌥↓ moved a Dispatch row, Escape left Spotlight. Only
+    // the panel's own commands and the palette entry point cross, and a
+    // refused chord is NOT prevented: the sidekick's composer still gets it.
+    harness.appState = { ...harness.appState, keyboardRegion: 'sidekick' }
+    const { workspace } = makeWorkspace('spotlight' as const)
+    const view = render(<KeyboardHarness workspace={workspace} />)
+
+    const closePane = new KeyboardEvent('keydown', { metaKey: true, code: 'KeyW', key: 'w', bubbles: true, cancelable: true })
+    document.body.dispatchEvent(closePane)
+    pressOptionArrow('ArrowDown')
+    const escape = new KeyboardEvent('keydown', { code: 'Escape', key: 'Escape', bubbles: true, cancelable: true })
+    document.body.dispatchEvent(escape)
+    fireEvent.keyDown(document, { metaKey: true, code: 'KeyJ', key: 'j' })
+    fireEvent.keyDown(document, { metaKey: true, shiftKey: true, code: 'KeyP', key: 'P' })
+
+    const invoked = (harness.appState.requestCommandInvocation as ReturnType<typeof vi.fn>).mock.calls.map(call => call[0])
+    expect(invoked).toEqual(['sidekick-panel', 'open-command-palette'])
+    expect(closePane.defaultPrevented).toBe(false)
+    expect(escape.defaultPrevented).toBe(false)
+    expect(workspace.toggleSpotlight).not.toHaveBeenCalled()
+    view.unmount()
+  })
+
   it('routes the bare lane arrows to the registered commands on the plain stage', () => {
     // #992 stage 5: the ⌥ grammar became commands. This is the end-to-end
     // proof the router (not a resurrected inline branch) delivers them.

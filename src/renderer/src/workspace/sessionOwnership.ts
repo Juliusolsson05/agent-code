@@ -18,8 +18,16 @@ export type SessionOwnershipInput = {
 }
 
 export type PrunedSessionOwnership = {
+  /** Every OWNED row — the live state's view. Includes sidekick rows. */
   sessions: Record<SessionId, SessionMeta>
+  /**
+   * What may be written into this window's slice: owned rows MINUS sidekick
+   * rows (#1493, plan I1). A sidekick's durable copy is main's index record;
+   * writing it here too would give two windows two copies to drift apart.
+   */
+  persistedSessions: Record<SessionId, SessionMeta>
   stage: TiledDispatchState
+  /** Rows that were NOT owned. Sidekick rows are owned, so never listed. */
   droppedSessionIds: SessionId[]
 }
 
@@ -73,10 +81,41 @@ export function collectOwnedSessionIds(input: SessionOwnershipInput): Set<Sessio
   const owned = new Set<SessionId>()
   for (const id of Object.keys(input.sessions)) {
     if (!hasSessionMeta(input.sessions, id)) continue
-    const projectId = input.sessions[id]!.projectId
+    const meta = input.sessions[id]!
+    const projectId = meta.projectId
     if (projectId !== undefined && projectIds.has(projectId)) owned.add(id)
+    // The second owner (#1493): a sidekick row is owned by main's sidekick
+    // index, so it is owned for as long as this window holds it. WHY this
+    // clause and not "keep sidekick rows out of state.sessions": TileLeaf,
+    // wake, Reload Agent, provider switch and the provider-identity handlers
+    // all read the row from state.sessions, and every one of them gates on
+    // THIS set — replaceSession's canCommit refused a sidekick (a silent
+    // no-op), Reload All DELETED its row, close did nothing. Owned-but-not-
+    // persistable is the whole sidekick contract; see collectPersistable-
+    // SessionIds for the other half.
+    else if (meta.sidekickId !== undefined) owned.add(id)
   }
   return owned
+}
+
+/**
+ * Owned rows that may be written into THIS window's slice: everything owned
+ * except sidekick rows (#1493, plan I1). Lanes are scrubbed against this set
+ * too, so a lane can never point at a sidekick in the file (I5).
+ */
+export function collectPersistableSessionIds(input: SessionOwnershipInput): Set<SessionId> {
+  const persistable = collectOwnedSessionIds(input)
+  for (const id of persistable) {
+    if (input.sessions[id]?.sidekickId !== undefined) persistable.delete(id)
+  }
+  return persistable
+}
+
+/** True when the row is a sidekick (#1493). One predicate, so every guard
+ *  that must keep sidekicks out of lanes, pins and bulk paths asks the same
+ *  question. */
+export function isSidekickSession(meta: SessionMeta | undefined): boolean {
+  return meta?.sidekickId !== undefined
 }
 
 /**
@@ -174,8 +213,12 @@ export function pruneSessionOwnership(
 ): PrunedSessionOwnership {
   const ownedIds = collectOwnedSessionIds(input)
   const sessions = pickOwnedSessions(input.sessions, ownedIds)
-  const liveIds = new Set(Object.keys(sessions))
-  const droppedSessionIds = Object.keys(input.sessions).filter(id => !liveIds.has(id))
+  const droppedSessionIds = Object.keys(input.sessions).filter(id => !ownedIds.has(id))
+  // Lanes and the file see only PERSISTABLE rows: a sidekick row is owned
+  // (kept in memory) but never written, so a lane naming it would be a
+  // pointer into nothing on the next launch (#1493, I5).
+  const persistedSessions = pickOwnedSessions(input.sessions, collectPersistableSessionIds(input))
+  const liveIds = new Set(Object.keys(persistedSessions))
   const stage = scrubGridRowMetadata(
     // Kill/close paths already clear lanes, but corrupt or hand-edited state
     // can reach this guard directly. An unscrubbed lane keeps pointing at a
@@ -190,5 +233,5 @@ export function pruneSessionOwnership(
     new Set(input.tabs.map(tab => tab.id)),
     liveIds,
   )
-  return { sessions, stage, droppedSessionIds }
+  return { sessions, persistedSessions, stage, droppedSessionIds }
 }

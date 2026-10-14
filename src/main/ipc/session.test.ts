@@ -46,6 +46,7 @@ const { registerSessionIpc, classifySpawnFailure } = await import('./session.js'
 const { sessionApi } = await import('@preload/api/session.js')
 const { SessionFeedTap } = await import('@main/sessions/sessionFeedTap.js')
 const { EventEmitter } = await import('node:events')
+const { captureSessionWindowLease } = vi.mocked(await import('@main/window/windowRegistry.js'))
 
 it('sends the prompt\'s committed row before answering its delivery (#1181)', async () => {
   // Claude's acceptance IS main seeing the prompt's JSONL line, and the
@@ -562,5 +563,60 @@ describe('session:spawn rejections', () => {
     const message = await rejectionOf(new Error('Timed out waiting for mitmproxy on 127.0.0.1:51234 with token=abc'), { kind: 'claude', useProxy: true })
     expect(message).toContain('Claude proxy startup failed')
     expect(message).not.toContain('token=abc')
+  })
+})
+
+describe('input from a window that no longer holds the session (#1493 review round 1, C1)', () => {
+  // A sidekick's "Open here" moves its lease to another window and THEN
+  // tells the old one. Until the old renderer processes that notice, its
+  // composer is still mounted; every byte it sends must fail the lease check
+  // in main, or one agent takes typing from two windows.
+  beforeEach(() => {
+    harness.handlers.clear()
+    captureSessionWindowLease.mockReset()
+  })
+
+  it('refuses session:input and session:deliver-prompt from a window the lease moved away from', async () => {
+    const write = vi.fn(() => true)
+    const deliverPromptToAgent = vi.fn(async () => ({ ok: true }))
+    registerSessionIpc({ write, deliverPromptToAgent, isDeliveryInFlight: () => false, recordCodexTranscriptObservation: () => {} } as never, { get: () => null } as never, { flushCommitted: () => {} })
+    captureSessionWindowLease.mockReturnValue({ sessionId: 's1', windowId: 'other-window', rendererGeneration: 0, revision: 2 })
+
+    expect(harness.handlers.get('session:input')!({ sender: {} }, 's1', 'hello')).toBe(false)
+    expect(write).not.toHaveBeenCalled()
+    const reply = await harness.handlers.get('session:deliver-prompt')!({ sender: {} }, 's1', 'hello')
+    expect(reply).toMatchObject({ ok: false, disposition: 'do-not-retry', promptWritten: false })
+    expect(deliverPromptToAgent).not.toHaveBeenCalled()
+
+    // The holder itself (and a session with no lease at all) still writes.
+    captureSessionWindowLease.mockReturnValue({ sessionId: 's1', windowId: 'requesting-window', rendererGeneration: 0, revision: 3 })
+    expect(harness.handlers.get('session:input')!({ sender: {} }, 's1', 'hello')).toBe(true)
+    captureSessionWindowLease.mockReturnValue(null)
+    expect(harness.handlers.get('session:input')!({ sender: {} }, 's1', 'again')).toBe(true)
+    expect(write).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('the spawn observer (#1493 review round 1, C2)', () => {
+  beforeEach(() => harness.handlers.clear())
+
+  it('reports the claimed successor with its predecessor, and a failed spawn by its minted id', async () => {
+    const claimed = vi.fn()
+    const failed = vi.fn()
+    let fail = false
+    const spawn = vi.fn(async (_options: unknown, admit: (id: string) => void) => {
+      admit('s2')
+      if (fail) throw new Error('boom')
+      return { sessionId: 's2' }
+    })
+    registerSessionIpc({ spawn } as never, {} as never, { flushCommitted: () => {} }, undefined, { claimed, failed })
+    const options = { cwd: '/home/test', kind: 'claude', predecessorSessionId: 's1' }
+    await harness.handlers.get('session:spawn')!({ sender: {} }, options)
+    expect(claimed).toHaveBeenCalledWith(options, 's2')
+    expect(failed).not.toHaveBeenCalled()
+
+    fail = true
+    await expect(harness.handlers.get('session:spawn')!({ sender: {} }, options)).rejects.toBeTruthy()
+    expect(failed).toHaveBeenCalledWith('s2')
   })
 })

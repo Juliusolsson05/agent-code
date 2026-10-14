@@ -133,6 +133,27 @@ describe('RemoteWorkspaceProjection', () => {
     }
   })
 
+  it('keeps sidekicks when a late name lands (#1493 review round 1, C7)', async () => {
+    // The name-resolution reproject used to read only the windows, so the
+    // first resolved name made every sidekick vanish from the phone until
+    // the next save.
+    const sidekicks = {
+      version: 1 as const,
+      records: [{ id: '00000000-0000-4000-8000-000000000001', sessionId: 'sk1', createdAt: 1, lastActiveAt: 1, meta: { kind: 'hermes', cwd: '/home', agentNameId: 'name-1' } }],
+    }
+    const store = fakeWorkspaceFileStore([[doc(SESSIONS)]], sidekicks)
+    const projection = new RemoteWorkspaceProjection(store.asStore(), async () => ({ 'name-1': 'Apollo' }))
+    try {
+      expect(projection.snapshot().get('sk1')).toMatchObject({ kind: 'hermes', tabTitle: 'Sidekick' })
+      await vi.waitFor(() => {
+        expect(projection.snapshot().get('s1')?.agentName).toBe('Apollo')
+      })
+      expect(projection.snapshot().get('sk1')).toMatchObject({ kind: 'hermes', tabTitle: 'Sidekick', agentName: 'Apollo' })
+    } finally {
+      projection.dispose()
+    }
+  })
+
   it('stays silent on saves that change nothing', () => {
     const onChange = vi.fn()
     const store = fakeStore({ saves: [[doc(SESSIONS)], [doc(SESSIONS)]] })

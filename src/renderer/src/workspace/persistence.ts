@@ -3,6 +3,7 @@ import type {
   ProjectRef,
   SessionId,
   SessionMeta,
+  SidekickPanelState,
   TabId,
   TiledDispatchState,
 } from '@renderer/workspace/types'
@@ -70,4 +71,10 @@ export type PersistedWorkspace = LegacyWorkspaceV2Fields & {
   /** Draft input text per session. Persisted so in-progress prompts survive
    * crashes and restarts. Only non-empty drafts are saved. */
   drafts?: Record<SessionId, string>
+  /**
+   * This window's Sidekick panel pointer (#1493): open, width, which
+   * sidekick. Never the sidekick itself — that lives in main's index, and a
+   * sidekick row never appears in `sessions` above (plan I1).
+   */
+  sidekickPanel?: SidekickPanelState
 }

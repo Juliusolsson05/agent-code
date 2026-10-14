@@ -1,4 +1,5 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import { isSidekickSession } from '@renderer/workspace/sessionOwnership'
 import type {
   ManagedAgentMessage,
   ManagedAgentProject,
@@ -380,6 +381,11 @@ export function resolveManagedTarget(params: {
 
   const wanted = normalizeAgentName(name!)
   const matches = Object.keys(params.state.sessions).filter(candidate => {
+    // A sidekick (#1493) is never a managed target (assertManagedTarget would
+    // refuse it), so it must not count toward a name match either: sharing a
+    // spoken name with one used to turn a unique lane agent into a false
+    // `name_ambiguous`.
+    if (isSidekickSession(params.state.sessions[candidate])) return false
     const resolved = managedAgentName(params.agentNames, params.state.sessions[candidate])
     return resolved !== null && normalizeAgentName(resolved) === wanted
   })

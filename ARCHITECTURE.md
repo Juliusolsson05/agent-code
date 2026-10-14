@@ -823,6 +823,22 @@ Rendered-view leases are counted per feature. Releasing one feature's lease must
 
 Sources: [display-mode policy](src/renderer/src/workspace/agentDisplayMode.ts), [terminal ownership](src/renderer/src/workspace/terminal/AgentTerminalOwnership.tsx).
 
+#### 5.4.3 Sidekicks: global agents beside the workspace
+
+A sidekick (#1493) is an agent of any kind, Hermes included, started in the user's home folder and shown in the Sidekick panel at the right edge of every window. It belongs to no project, lane or window. That breaks the workspace's founding rule, under which a session is owned only if its `projectId` names a project. So sidekicks add a second owner rather than a parallel session system.
+
+| Question | Answer | Where |
+| --- | --- | --- |
+| What is durable? | One record per sidekick (`id`, current `sessionId`, opaque `meta`, `draft`) in the optional `sidekicks` section of `workspace.json`. Window saves carry the section through untouched, and only `SidekickService` writes it, on the same commit queue. | [workspaceFile](src/main/storage/workspaceFile.ts), [SidekickService](src/main/sidekicks/SidekickService.ts) |
+| Where is the row? | In the `state.sessions` of at most one window, the one holding the router lease for `record.sessionId`, marked by `SessionMeta.sidekickId`. Every existing path (wake, Reload Agent, provider identity, TileLeaf) works on it unchanged. | [types](src/renderer/src/workspace/types.ts) |
+| Why is it not pruned? | `collectOwnedSessionIds` owns rows with `sidekickId`. `collectPersistableSessionIds` excludes them, so autosave never writes one into a slice and lanes are scrubbed against persistable ids. | [sessionOwnership](src/renderer/src/workspace/sessionOwnership.ts) |
+| Who may write the record? | Only the lease holder. `register`, `save`, `attach` and `take` are lease-checked in main. `take` ("Open here") transfers the lease before telling the old window (`sidekick:released`), so the old window's late writes, kills and prompts all fail their existing lease checks. | [SidekickService](src/main/sidekicks/SidekickService.ts) |
+| What happens on window close? | Sidekick leases are released, not bequeathed: the survivor's merge never contains a sidekick row. | [main/index.ts](src/main/index.ts) |
+| Who else sees sidekicks? | The conversation ledger, TLDR/Goal eviction protection, Agent Activity and the remote phone receive the section as the observers' second argument. They are deliberately left out of lanes, pins, Dispatch, bulk closes, the Control observation and the extension session list. | [projections](src/main/agentActivity/workspaceProjection.ts) |
+| Where does the keyboard go? | `uiShell.keyboardRegion` (`workspace` or `sidekick`) joins `useInteractiveOwnership` and the two terminal leaves, so exactly one composer owns Enter, paste and dictation. | [KeyboardRegionContext](src/renderer/src/features/sidekick/ui/KeyboardRegionContext.tsx) |
+
+The panel is one entry in `sidePanelSurfaces`; the lane layout code is unchanged. Design, invariants and rulings: [plan](docs/plans/2026-10-14-sidekick-global-agents.md).
+
 ### 5.5 Commands and the control SDK
 
 #### 5.5.1 Desktop command admission
@@ -1969,6 +1985,7 @@ Several strings called “session IDs” coexist. Treating them as one identifie
 | Window ID | Application window ownership and persistence key | A permanent renderer instance |
 | Control owner generation | Registration lifetime of a control owner | Continued validity after navigation/reload |
 | Agent name ID | User-visible agent identity retained across selected replacements | Native provider identity; duplicates receive a new name identity |
+| Sidekick ID | A global agent's durable identity in main's sidekick index, kept across Reload Agent and provider switch (#1493) | Which window holds it, or the current application `sessionId` (a replacement mints a new one) |
 | Workflow run / task / attempt IDs | Durable workflow execution and retry lineage | Interactive pane process identity |
 | tmux session name | Managed shell host identity | A native agent conversation |
 | MCP bearer token | Authority for one host registration | A portable durable workspace identifier |
@@ -2008,6 +2025,7 @@ Ownership has several independent dimensions:
 
 - Main owns live process handles and admission to lifecycle operations.
 - A window owns workspace placement and receives its session events.
+- Main's sidekick index owns a sidekick's durable record. Only the window holding the session's router lease may write it (§5.4.3).
 - The provider owns execution and native history.
 - The rendering ledger chooses which observation owns each visible content unit.
 - A control registration generation owns the right to answer an invocation.

@@ -315,3 +315,67 @@ describe('refusing to write over a file it could not read', () => {
   })
 })
 
+
+// The Sidekick index (#1493) shares this file and this queue. A sidekick write
+// composed outside the queue, or a window save that forgot to carry the
+// section, would erase one with the other. Both orders are pinned here, plus
+// what observers see, because the conversation ledger and TLDR/Goal eviction
+// read sidekicks only through them.
+describe('sidekick index on the shared write queue', () => {
+  beforeEach(() => {
+    mkdir.mockReset().mockResolvedValue(undefined)
+    readFile.mockReset().mockRejectedValue(enoent())
+    writeFile.mockReset().mockResolvedValue(undefined)
+    rename.mockReset().mockResolvedValue(undefined)
+    unlink.mockReset().mockResolvedValue(undefined)
+  })
+
+  const record = {
+    id: '00000000-0000-4000-8000-000000000001',
+    sessionId: 'sidekick-session',
+    createdAt: 1,
+    lastActiveAt: 1,
+    meta: { kind: 'claude', cwd: '/home' },
+  }
+
+  function lastWritten(): { windows: unknown[]; sidekicks?: { records: Array<{ id: string }> } } {
+    const calls = writeFile.mock.calls.filter(call => String(call[0]).endsWith('.tmp'))
+    return JSON.parse(String(calls.at(-1)![1]))
+  }
+
+  it('keeps a sidekick written before a window save, and a window saved before a sidekick write', async () => {
+    const store = await WorkspaceFileStore.open()
+    await store.commitSidekicks(current => ({ version: 1, records: [...current.records, record] }))
+    await store.saveSlice('w1', slice(['lane-agent']), NO_GEOMETRY)
+    expect(lastWritten().sidekicks?.records.map(entry => entry.id)).toEqual([record.id])
+    expect(lastWritten().windows).toHaveLength(1)
+
+    await store.commitSidekicks(current => ({ version: 1, records: current.records.filter(entry => entry.id !== record.id) }))
+    expect(lastWritten().windows).toHaveLength(1)
+    expect(lastWritten().sidekicks).toBeUndefined()
+  })
+
+  it('composes a sidekick write against the document as it is at commit time, behind an in-flight save', async () => {
+    const publication = deferred()
+    rename.mockImplementationOnce(() => publication.promise)
+    const store = await WorkspaceFileStore.open()
+    const windowSave = store.saveSlice('w1', slice(['lane-agent']), NO_GEOMETRY)
+    await vi.waitFor(() => expect(rename).toHaveBeenCalledOnce())
+    const sidekickWrite = store.commitSidekicks(current => ({ version: 1, records: [...current.records, record] }))
+    publication.resolve()
+    await Promise.all([windowSave, sidekickWrite])
+    const final = lastWritten()
+    expect(final.windows).toHaveLength(1)
+    expect(final.sidekicks?.records.map(entry => entry.id)).toEqual([record.id])
+  })
+
+  it('hands observers the committed sidekicks and counts their sessions as owned', async () => {
+    const store = await WorkspaceFileStore.open()
+    const seen: Array<string[]> = []
+    store.observe((_windows, sidekicks) => { seen.push(sidekicks.records.map(entry => entry.sessionId)) })
+    await store.commitSidekicks(current => ({ version: 1, records: [...current.records, record] }))
+    expect(seen.at(-1)).toEqual(['sidekick-session'])
+    expect(store.sessionIds().has('sidekick-session')).toBe(true)
+    expect(store.sidekicks().records).toHaveLength(1)
+  })
+})

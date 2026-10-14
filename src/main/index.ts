@@ -100,6 +100,9 @@ import {
   sendToFocusedWindow,
   windowForSession,
   sendToWindow,
+  claimSessionForWindow,
+  captureSessionWindowLease,
+  releaseSession,
   sessionsOwnedBy,
   setGeometryObserver,
   setWindowCreationAdmission,
@@ -109,6 +112,7 @@ import {
   windowCount,
 } from '@main/window/windowRegistry.js'
 import { abandonPendingBequest, recordPendingBequest } from '@main/ipc/window.js'
+import { commitDurableOwnership } from '@main/ipc/workspace.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
 import type { SessionForwarderControl } from '@main/sessions/forwarder.js'
 import { SessionFeedTap } from '@main/sessions/sessionFeedTap.js'
@@ -151,6 +155,10 @@ import { createSafeStorageCodec } from '@main/keyVault/safeStorageCodec.js'
 import { UserMcpService } from '@main/userMcp/service.js'
 import { HermesConnectionService } from '@main/hermes/service.js'
 import { setHermesConnectionService } from '@main/hermes/registry.js'
+import { partitionClosedWindowSessions, SidekickService } from '@main/sidekicks/SidekickService.js'
+import { SIDEKICK_CHANNELS } from '@shared/sidekicks/types.js'
+import type { PersistedSidekicks } from '@shared/sidekicks/types.js'
+import { homedir as osHomedir } from 'node:os'
 import { refreshRemoteProviderDetection } from '@main/setup/providerEnablement.js'
 import { sweepStalePrivateMcpConfigs } from '@providers/shared/runtime/builtInMcpLaunch.js'
 import { VaultService } from '@main/keyVault/VaultService.js'
@@ -295,6 +303,9 @@ let remoteWorkspaceProjection: RemoteWorkspaceProjection | null = null
 // The TLDR/Goal stores are built before the workspace file opens; they read
 // the persisted windows through this once it has (see identitiesInUse).
 let reportingWorkspaceWindows: (() => readonly PersistedWindow[]) | null = null
+// Sidekicks (#1493) are read beside the windows for the same TLDR/Goal
+// eviction answer; null until the workspace file has opened.
+let reportingSidekicks: (() => PersistedSidekicks) | null = null
 let tmuxRegistry: TmuxRegistry | null = null
 // The running-app tmux reaper's timer handle, so quit can stop it (#1030).
 let detachedTmuxSweep: DetachedSweepSchedule | null = null
@@ -1247,7 +1258,7 @@ async function startApp(): Promise<void> {
   // the cap. Until the workspace file has opened the answer is unknown, and a
   // store at its cap then refuses new identities for those startup seconds
   // instead of guessing (steering q40).
-  const identitiesInUse = () => tldrIdentitiesInUse(reportingWorkspaceWindows?.() ?? null)
+  const identitiesInUse = () => tldrIdentitiesInUse(reportingWorkspaceWindows?.() ?? null, reportingSidekicks?.())
   const { tldrStore, goalStore } = createReportingStores(STATE_DIR, identitiesInUse)
   const tldrEnforcement = new TldrEnforcement(tldrStore, undefined, goalStore)
   // Before any session can register: the sweep removes every entry, and each
@@ -1432,6 +1443,27 @@ async function startApp(): Promise<void> {
   const workspaceFileStore = await WorkspaceFileStore.open()
   shutdownWorkspaceStore = workspaceFileStore
   reportingWorkspaceWindows = () => workspaceFileStore.windows()
+  reportingSidekicks = () => workspaceFileStore.sidekicks()
+  // Sidekicks (#1493): global agents whose owner is the index in this same
+  // file. Built beside the store because every mutation is a commit on its
+  // queue, and wired to the router through windowRegistry so "which window
+  // may act on a sidekick" is the same lease answer every session uses.
+  const sidekickService = new SidekickService({
+    store: workspaceFileStore,
+    router: {
+      holder: sessionId => windowForSession(sessionId),
+      owner: sessionId => captureSessionWindowLease(sessionId)?.windowId ?? null,
+      claim: (sessionId, windowId) => claimSessionForWindow(sessionId, windowId) !== null,
+      transfer: (sessionId, windowId) => transferSessions([sessionId], windowId),
+      release: sessionId => { releaseSession(captureSessionWindowLease(sessionId)) },
+      sendToWindow: (windowId, channel, payload) => sendToWindow(windowId, channel, payload),
+    },
+    kill: options => manager!.killOwned(options),
+    homeDir: osHomedir(),
+    releasedChannel: SIDEKICK_CHANNELS.released,
+    // C4: a sidekick commit is a durable-ownership commit like a window save.
+    onCommitted: () => { if (manager) commitDurableOwnership(manager, workspaceFileStore) },
+  })
   assertStartupOpen()
   // Conversation ledger (docs/decomposition/conversations.md, Stage 3): a
   // projection of every window's sessions keyed by native id, so the picker
@@ -1444,13 +1476,13 @@ async function startApp(): Promise<void> {
   })
   assertStartupOpen()
   if (conversationLedger) {
-    const projectConversations = (windows: readonly PersistedWindow[]) => {
+    const projectConversations = (windows: readonly PersistedWindow[], sidekicks: PersistedSidekicks) => {
       void readAgentNameAssignments(AGENT_NAMES_FILE)
-        .then(names => conversationLedger.projectWindows(windows, names))
+        .then(names => conversationLedger.projectWindows(windows, names, Date.now(), sidekicks))
         .catch(() => undefined)
     }
     workspaceFileStore.observe(projectConversations)
-    projectConversations(workspaceFileStore.windows())
+    projectConversations(workspaceFileStore.windows(), workspaceFileStore.sidekicks())
   }
   // Agent Analytics (#964): record when each agent works, per tab, repository
   // and agent. Wired here because it needs all three owners it joins — the
@@ -1465,13 +1497,13 @@ async function startApp(): Promise<void> {
     resolveRepoRoot: cwd => resolveRepoRootAfterGit(listWorktreesForCwdDetailed, cwd),
     identityOf: sessionId => builtInMcpHost.sessionTldrIdentity(sessionId),
   })
-  const projectActivity = (windows: readonly PersistedWindow[]) => {
+  const projectActivity = (windows: readonly PersistedWindow[], sidekicks: PersistedSidekicks) => {
     void readAgentNameAssignments(AGENT_NAMES_FILE)
-      .then(names => agentActivityRecorder.updateWorkspace(windows, names))
+      .then(names => agentActivityRecorder.updateWorkspace(windows, names, sidekicks))
       .catch(() => undefined)
   }
   workspaceFileStore.observe(projectActivity)
-  projectActivity(workspaceFileStore.windows())
+  projectActivity(workspaceFileStore.windows(), workspaceFileStore.sidekicks())
   // v2 remote identity projection — constructed beside its only input, once
   // the store has opened. Observed forever (remote disabled costs nothing);
   // RemoteController reads it through getWorkspace at enable time.
@@ -1534,7 +1566,16 @@ async function startApp(): Promise<void> {
     // survivor refuses the merge, or the offer cannot be composed at all, the
     // routing is rolled back rather than left pinned to a window that will
     // never display those sessions.
-    const bequeathedSessionIds = sessionsOwnedBy(closedWindowId)
+    // Sidekick leases are carved out and RELEASED instead (#1493): the
+    // survivor's merge never contains a sidekick row (plan I1), so a
+    // transferred lease would route a sidekick's events into a window that
+    // does not show it. Released, the process keeps running and whichever
+    // window shows the sidekick next claims it (SidekickService.attach).
+    const { bequeathed: bequeathedSessionIds, sidekicks: closedWindowSidekicks } = partitionClosedWindowSessions(
+      sessionsOwnedBy(closedWindowId),
+      sidekickService.sidekickSessionIds(),
+    )
+    sidekickService.releaseForClosedWindow(closedWindowSidekicks)
     transferSessions(bequeathedSessionIds, survivor)
     recordPendingBequest(closedWindowId, survivor, bequeathedSessionIds)
 
@@ -1603,6 +1644,7 @@ async function startApp(): Promise<void> {
     workflowBridge: activeWorkflowBridge,
     agentCodeConventionsService,
     workspaceFileStore,
+    sidekickService,
     conversationService,
     systemSuspension,
     agentActivityRecorder,

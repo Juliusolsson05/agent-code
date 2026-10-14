@@ -336,6 +336,22 @@ export type UiShellState = {
    *  do, so focus changes update what the inspector describes without
    *  persisting an extra "inspected session" source of truth. */
   agentStatusPanelOpen: boolean
+  /**
+   * Which half of the window owns keyboard input: the workspace (lanes,
+   * Spotlight, Reader) or the Sidekick panel (#1493). Window-local and never
+   * persisted — it is where the user's hands are right now.
+   *
+   * WHY a store value read by useInteractiveOwnership instead of passing
+   * `focused={false}` to every lane: lane focus is `stage.focusedLane`, which
+   * must keep its meaning (the lane you return to). Gating "may this focused
+   * leaf own the keyboard" at the one hook every document-level router
+   * consults keeps Enter, paste, type-to-focus and dictation going to exactly
+   * one composer without touching the lane layout code.
+   */
+  keyboardRegion: 'workspace' | 'sidekick'
+  /** Sidekick Picker (#1493). `create` scrolls it to the New Sidekick rows. */
+  sidekickPickerOpen: boolean
+  sidekickPickerMode: 'switch' | 'create'
   performancePanelOpen: boolean
   /** One-shot intent from a palette command (save a report, start a trace).
    *  The monitor performs it so the result, file location and Reveal action

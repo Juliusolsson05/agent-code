@@ -50,6 +50,8 @@ import { registerLifecycleIpc } from '@main/ipc/lifecycle.js'
 import { registerProviderEnablementIpc } from '@main/ipc/providerEnablement.js'
 import { registerUserMcpIpc } from '@main/ipc/userMcp.js'
 import { registerHermesIpc } from '@main/ipc/hermes.js'
+import { registerSidekickIpc } from '@main/ipc/sidekicks.js'
+import type { SidekickService } from '@main/sidekicks/SidekickService.js'
 import type { HermesConnectionService } from '@main/hermes/service.js'
 import type { UserMcpService } from '@main/userMcp/service.js'
 import { registerUsageIpc } from '@main/ipc/usage.js'
@@ -104,6 +106,8 @@ export type IpcDeps = {
   workflowBridge: WorkflowBridge
   agentCodeConventionsService: AgentCodeConventionsService
   workspaceFileStore: WorkspaceFileStore
+  /** Sidekicks (#1493): the global-agent index, owned by main. */
+  sidekickService: SidekickService
   conversationService: ConversationService
   systemSuspension: SystemSuspensionTracker
   agentActivityRecorder: AgentActivityRecorder
@@ -115,7 +119,14 @@ export function registerAllIpc(deps: IpcDeps): void {
   installPerformanceIpcInstrumentation()
   registerEditorFsIpc(editorFsRoots)
   registerEditorFsWatchIpc(editorFsRoots)
-  registerSessionIpc(deps.manager, deps.pasteDebugJournals, deps.sessionFeedTap, deps.appRunJournal)
+  registerSessionIpc(deps.manager, deps.pasteDebugJournals, deps.sessionFeedTap, deps.appRunJournal, {
+    claimed: (options, sessionId) => deps.sidekickService.noteSpawnClaimed(options.predecessorSessionId, sessionId, {
+      kind: options.kind,
+      providerRuntime: options.providerRuntime,
+      cwd: options.cwd,
+    }),
+    failed: sessionId => deps.sidekickService.noteSpawnFailed(sessionId),
+  })
   registerProviderIpc(deps.manager)
   registerLspIpc(deps.lspManager, editorFsRoots, deps.aiWorkspaceRegistry)
   registerFsIpc()
@@ -153,6 +164,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerProviderEnablementIpc()
   registerUserMcpIpc(deps.userMcpService)
   registerHermesIpc(deps.hermesConnections)
+  registerSidekickIpc(deps.sidekickService)
   registerUsageIpc()
   registerCliUpdatesIpc(deps.cliUpdateOrchestrator)
   registerWorkflowIpc(deps.workflowBridge)

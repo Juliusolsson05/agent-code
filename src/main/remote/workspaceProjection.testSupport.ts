@@ -1,5 +1,7 @@
 import type { PersistedWindow } from '@main/storage/workspaceFile.js'
 import type { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
+import { EMPTY_PERSISTED_SIDEKICKS } from '@shared/sidekicks/types.js'
+import type { PersistedSidekicks } from '@shared/sidekicks/types.js'
 
 /**
  * A `WorkspaceFileStore` that hands out prepared saves on demand.
@@ -14,20 +16,26 @@ import type { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
  * `commitNext()` advances to the next prepared document and notifies, exactly
  * as a committed autosave does.
  */
-export function fakeWorkspaceFileStore(saves: readonly (readonly PersistedWindow[])[]) {
+export function fakeWorkspaceFileStore(
+  saves: readonly (readonly PersistedWindow[])[],
+  // The real store's second document section (#1493). Most saves carry no
+  // sidekicks, so the default is the same empty index the real store reports.
+  sidekicks: PersistedSidekicks = EMPTY_PERSISTED_SIDEKICKS,
+) {
   let windows: readonly PersistedWindow[] = saves[0] ?? []
   let cursor = 1
-  const observers = new Set<(next: readonly PersistedWindow[]) => void>()
+  const observers = new Set<(next: readonly PersistedWindow[], sidekicks: PersistedSidekicks) => void>()
   return {
     windows: () => windows,
-    observe(listener: (next: readonly PersistedWindow[]) => void) {
+    sidekicks: () => sidekicks,
+    observe(listener: (next: readonly PersistedWindow[], sidekicks: PersistedSidekicks) => void) {
       observers.add(listener)
       return () => observers.delete(listener)
     },
     commitNext() {
       windows = saves[cursor] ?? windows
       cursor += 1
-      for (const observer of observers) observer(windows)
+      for (const observer of observers) observer(windows, sidekicks)
     },
     /** The projection takes the real interface; the fake is structural. */
     asStore(): WorkspaceFileStore {

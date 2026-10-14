@@ -101,9 +101,14 @@ export function useAutoSave(
     // metadata persists, which let any path that wrote an invisible draft into
     // one (Key Vault insertion did) make that text — a secret — durable in
     // workspace.json with no UI to see or clear it.
+    // Drafts, pins and rows below are all read from `persistedSessions`, not
+    // `sessions`: a sidekick row is owned (kept in memory) but its durable copy
+    // — draft included — is main's index record (#1493, plan I1). Writing it
+    // here as well would hand the next launch a slice row with no project,
+    // which rehydrate drops as a ghost, and a draft keyed by it.
     const drafts: Record<SessionId, string> = {}
     for (const [id, rt] of Object.entries(refs.latestRuntimesRef.current)) {
-      if (pruned.sessions[id] && isAgentSessionKind(pruned.sessions[id].kind) && rt.draftInput) drafts[id] = rt.draftInput
+      if (pruned.persistedSessions[id] && isAgentSessionKind(pruned.persistedSessions[id].kind) && rt.draftInput) drafts[id] = rt.draftInput
     }
     // Filter pins against the pruned `sessions` map so a stale entry
     // (kill-races, hand-edited workspace.json, mid-rehydrate
@@ -113,7 +118,7 @@ export function useAutoSave(
     // to boot the next launch with a phantom row that points at
     // nothing.
     const persistedPinnedSessionIds = s.pinnedSessionIds.filter(
-      id => pruned.sessions[id] !== undefined,
+      id => pruned.persistedSessions[id] !== undefined,
     )
     // v3 ONLY (#992). Nothing of the v2 shape is written any more: no `tabs`
     // with tile trees, no `detachedSessions`, no `buried`, no `dispatchMode`.
@@ -124,7 +129,7 @@ export function useAutoSave(
     // A project that no longer holds a session is not written. It owns nothing
     // (U4), and reading one back would give a header over an empty list.
     const populatedProjectIds = new Set<string>()
-    for (const meta of Object.values(pruned.sessions)) {
+    for (const meta of Object.values(pruned.persistedSessions)) {
       if (meta.projectId !== undefined) populatedProjectIds.add(meta.projectId)
     }
     const projects = s.tabs
@@ -153,7 +158,7 @@ export function useAutoSave(
       // `joinedAt`) — it is ordinary SessionMeta, stamped when the session was
       // filed, so there is nothing to derive here.
       sessions: Object.fromEntries(
-        Object.entries(pruned.sessions).map(([id, meta]) => [
+        Object.entries(pruned.persistedSessions).map(([id, meta]) => [
           id,
           withNormalizedBuiltInMcpDomains(meta),
         ]),
@@ -162,6 +167,10 @@ export function useAutoSave(
         ? persistedPinnedSessionIds
         : undefined,
       drafts: Object.keys(drafts).length > 0 ? drafts : undefined,
+      // This window's Sidekick panel pointer (#1493). Written only once the
+      // panel has been used, so a window that never opened it saves exactly
+      // the document it did before the feature.
+      ...(s.sidekickPanel ? { sidekickPanel: s.sidekickPanel } : {}),
     }
     let json = ''
     const finishSerialize = rendererOperations.begin('persistence.serialize')

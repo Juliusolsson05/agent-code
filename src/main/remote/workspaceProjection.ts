@@ -3,6 +3,7 @@ import {
   projectWorkspace,
 } from '@main/agentActivity/workspaceProjection.js'
 import type { SessionPlacement } from '@main/agentActivity/workspaceProjection.js'
+import type { PersistedSidekicks } from '@shared/sidekicks/types.js'
 import type { PersistedWindow } from '@main/storage/workspaceFile.js'
 import type { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
 
@@ -66,8 +67,8 @@ export class RemoteWorkspaceProjection {
     // Prime from the document the store already holds — a phone that pairs
     // before the first autosave must still see titles from the previous
     // run's persisted workspace.
-    this.reproject(store.windows())
-    this.unobserve = store.observe(windows => this.reproject(windows))
+    this.reproject(store.windows(), store.sidekicks())
+    this.unobserve = store.observe((windows, sidekicks) => this.reproject(windows, sidekicks))
   }
 
   /** Live identity snapshot. Read-only by convention; treat as frozen. */
@@ -91,9 +92,12 @@ export class RemoteWorkspaceProjection {
     this.unobserve()
   }
 
-  private reproject(windows: readonly PersistedWindow[]): void {
+  // Sidekicks (#1493) are listed on the phone like any agent, titled
+  // "Sidekick" through the shared projection — a live sidekick used to reach
+  // the phone's session list with no title, name or TLDR.
+  private reproject(windows: readonly PersistedWindow[], sidekicks: PersistedSidekicks): void {
     if (this.disposed) return
-    const projection = projectWorkspace(windows)
+    const projection = projectWorkspace(windows, sidekicks)
     const next = new Map<string, RemoteSessionIdentity>()
     for (const placement of projection.sessions.values()) {
       const agentName = placement.agentNameId
@@ -135,7 +139,7 @@ export class RemoteWorkspaceProjection {
         if (namesChanged) {
           // Re-project from the CURRENT document — the world may have
           // saved again while the read was in flight.
-          this.reproject(this.store.windows())
+          this.reproject(this.store.windows(), this.store.sidekicks())
         }
       })
       .catch(() => {})

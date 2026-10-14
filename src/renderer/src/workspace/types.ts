@@ -369,6 +369,25 @@ export type SessionMeta = {
    */
   projectId?: TabId
   /**
+   * Sidekick membership (#1493): the SECOND ownership fact, beside
+   * `projectId`. A row with this field is a sidekick — a global agent shown
+   * in the Sidekick panel — and its owner is main's sidekick index
+   * (workspace.json `sidekicks`, SidekickService), not any project.
+   *
+   * Invariants (plan docs/plans/2026-10-14-sidekick-global-agents.md §1):
+   *  - never set together with `projectId`;
+   *  - owned while present (sessionOwnership.collectOwnedSessionIds), so
+   *    Reload Agent, provider switch and Reload All work on it, but NEVER
+   *    persistable: autosave writes no sidekick row into the window slice
+   *    (I1), main's record is the durable copy and useSidekickPersistence
+   *    feeds it;
+   *  - present in at most one window: the one holding the router lease (I2).
+   *    A window drops the row when main moves the sidekick away
+   *    (`sidekick:released`), never through a pane close.
+   *  - no lane, pin, Spotlight or Reader target ever names it (I5).
+   */
+  sidekickId?: string
+  /**
    * Position inside its project's index: ascending, ties broken by the
    * `sessions` map's insertion order. The ONLY ordering key, replacing v2's
    * two-part rule (tree leaves depth-first, then detached by `detachedAt`).
@@ -656,6 +675,23 @@ export type WorkspaceState = {
    * dedicated durable provider-switch protocol owns validation and expiry.
    */
   lastProviderSwitchBatch?: ProviderSwitchBatch | null
+  /**
+   * This window's Sidekick panel (#1493): whether it is open, how wide, and
+   * WHICH sidekick it shows. A POINTER, never an owner — the sidekick itself
+   * is owned by main's index, and the row (if this window holds it) by its
+   * `sidekickId`. Per window because two windows can show different
+   * sidekicks; persisted in the window slice for the same reason the stage
+   * is. Optional so every existing WorkspaceState literal keeps compiling;
+   * absent means closed, default width, no sidekick.
+   */
+  sidekickPanel?: SidekickPanelState
+}
+
+export type SidekickPanelState = {
+  open: boolean
+  /** CSS px. Clamped on read (sidekickPanel.ts), never trusted from disk. */
+  width: number
+  sidekickId: string | null
 }
 
 /**

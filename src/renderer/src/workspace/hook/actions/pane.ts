@@ -1,4 +1,5 @@
 import { DEFAULT_PROVIDER, effectiveProviderRuntime, isRemoteProviderKind } from '@shared/types/providerKind'
+import { isSidekickSession } from '@renderer/workspace/sessionOwnership'
 import { SESSION_START_FAILED_MESSAGE } from '@shared/types/session'
 import { enabledAgentProviderChoices } from '@renderer/workspace/providerChoices'
 import { currentOrchestrationParent } from '@renderer/workspace/hook/actions/successorCarry'
@@ -685,6 +686,8 @@ function applyDispatchSpawnFocus(
   // at a GONE session reads empty to the user and is treated as fillable:
   // that is exactly the shape a mid-operation close leaves behind, and the
   // stale pointer is dropped by the same write that fills the lane.
+  // A sidekick never fills a lane (#1493, plan I5).
+  if (isSidekickSession(state.sessions[sessionId])) return stage
   const occupant = stage.lanes[laneIndex]?.selectedSessionId
   if (occupant !== undefined && state.sessions[occupant] !== undefined) return stage
   const lanes = stage.lanes.map((lane, i) =>
