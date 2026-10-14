@@ -8,7 +8,7 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { SecretCodec } from '@main/keyVault/vaultStore.js'
 import { HermesTokenStore } from '@main/hermes/tokenStore.js'
@@ -77,6 +77,139 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true })
 })
 
+// Races found by review a (2026-10-13). Each holds one async step open with a
+// recorded response (S1 token exchange, S14 refresh) and changes the
+// connection underneath it; before the fix every one of them landed.
+describe('credential races (review a)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('never sends a token read for the old URL to an edited one', async () => {
+    const refresh = recordedExchanges('S14').find((exchange) => exchange.path === '/auth/native/refresh' && exchange.status === 200)!
+    const calls: Array<{ url: string; body: string }> = []
+    const hermes = new HermesConnectionService({
+      stateDir: dir, codec, openExternal: () => undefined, openSocket: async () => ({}) as never,
+      fetchImpl: async (url, init) => {
+        calls.push({ url, body: String(init?.body ?? '') })
+        return new Response(JSON.stringify(refresh.body), { status: refresh.status })
+      },
+    })
+    await hermes.initialize()
+    const connection = await hermes.add({ name: 'VPS', baseUrl: URL_A })
+    await new HermesTokenStore(join(dir, 'hermes', 'tokens'), codec).set(connection.id, URL_A, tokens({ expiresAt: 0 }))
+    // Hold the token READ: it has the old URL's pair in hand when the edit lands.
+    let read!: () => void
+    let release!: () => void
+    const readDone = new Promise<void>((resolve) => { read = resolve })
+    const hold = new Promise<void>((resolve) => { release = resolve })
+    const original = HermesTokenStore.prototype.get
+    vi.spyOn(HermesTokenStore.prototype, 'get').mockImplementation(async function (this: HermesTokenStore, id, url) {
+      const value = await original.call(this, id, url)
+      read()
+      await hold
+      return value
+    })
+    const dial = hermes.dialFor(connection.id)()
+    await readDone
+    await hermes.update(connection.id, { name: 'VPS', baseUrl: 'https://hermes-b.example' })
+    release()
+    await expect(dial).rejects.toBeInstanceOf(HermesSignedOutError)
+    expect(calls.filter((call) => call.body.includes('refresh-1'))).toEqual([])
+  })
+
+  it('does not bring credentials back when a refresh finishes after Sign out', async () => {
+    const refresh = recordedExchanges('S14').find((exchange) => exchange.path === '/auth/native/refresh' && exchange.status === 200)!
+    let requested!: () => void
+    let release!: () => void
+    const started = new Promise<void>((resolve) => { requested = resolve })
+    const hold = new Promise<void>((resolve) => { release = resolve })
+    const opened: string[] = []
+    const hermes = new HermesConnectionService({
+      stateDir: dir, codec, openExternal: () => undefined,
+      openSocket: async (url) => { opened.push(url); return {} as never },
+      fetchImpl: async (url) => {
+        if (new URL(url).pathname === '/auth/native/refresh') {
+          requested()
+          await hold
+          return new Response(JSON.stringify(refresh.body), { status: refresh.status })
+        }
+        // Not reached after the fix; would be the ticket mint (shape from S14).
+        return new Response(JSON.stringify({ ticket: 'never', ttl_seconds: 30 }), { status: 200 })
+      },
+    })
+    await hermes.initialize()
+    const connection = await hermes.add({ name: 'VPS', baseUrl: URL_A })
+    const store = new HermesTokenStore(join(dir, 'hermes', 'tokens'), codec)
+    await store.set(connection.id, URL_A, tokens({ expiresAt: 0 }))
+    const dial = hermes.dialFor(connection.id)()
+    await started
+    await hermes.signOut(connection.id)
+    release()
+    await expect(dial).rejects.toBeInstanceOf(HermesSignedOutError)
+    expect(await store.get(connection.id, URL_A)).toBeNull()
+    expect(opened).toEqual([])
+    expect(hermes.get(connection.id)?.state).toBe('signed-out')
+  })
+
+  it('cancel still wins after the browser came back, while the code exchange is in flight', async () => {
+    const exchange = recordedExchanges('S1').find((entry) => entry.path === '/auth/native/token' && entry.status === 200)!
+    let requested!: () => void
+    let release!: () => void
+    let opened!: (url: string) => void
+    const started = new Promise<void>((resolve) => { requested = resolve })
+    const hold = new Promise<void>((resolve) => { release = resolve })
+    const authorize = new Promise<string>((resolve) => { opened = resolve })
+    const controller = new AbortController()
+    const signingIn = runNativeSignIn(URL_A, {
+      openExternal: opened,
+      fetchImpl: async () => {
+        requested()
+        await hold
+        return new Response(JSON.stringify(exchange.body), { status: exchange.status })
+      },
+    }, controller.signal)
+    const parsed = new URL(await authorize)
+    const redirect = String(parsed.searchParams.get('redirect_uri'))
+    await fetch(`${redirect}?code=review-code&state=${parsed.searchParams.get('state')}`)
+    await started
+    // The callback is consumed: the listener is already closed during the exchange.
+    await expect(fetch(redirect)).rejects.toThrow()
+    controller.abort()
+    release()
+    await expect(signingIn).rejects.toBeInstanceOf(SignInCancelledError)
+  })
+
+  it('ignores a stateless error callback instead of ending the sign-in', async () => {
+    let opened!: (url: string) => void
+    const authorize = new Promise<string>((resolve) => { opened = resolve })
+    const controller = new AbortController()
+    const signingIn = runNativeSignIn(URL_A, { openExternal: opened, fetchImpl: async () => { throw new Error('not reached') } }, controller.signal)
+    const redirect = String(new URL(await authorize).searchParams.get('redirect_uri'))
+    expect((await fetch(`${redirect}?error=access_denied`)).status).toBe(400)
+    controller.abort()
+    // Ended by the cancel, not by the forged error (which would reject with auth-rejected).
+    await expect(signingIn).rejects.toBeInstanceOf(SignInCancelledError)
+  })
+
+  it('treats a refused ticket mint as signed out instead of retrying forever', async () => {
+    // Justified literal: no recording has a 403 on /api/auth/ws-ticket; the
+    // shape is the package's documented refusal (statusError: 401/403 without
+    // `session_expired` → auth-rejected).
+    const store = new HermesTokenStore(dir, codec)
+    await store.set('conn1', URL_A, tokens())
+    const reasons: string[] = []
+    const broker = new HermesTokenBroker({
+      connectionId: 'conn1', baseUrl: URL_A, store,
+      fetchImpl: async () => new Response(JSON.stringify({ detail: 'forbidden' }), { status: 403 }),
+      onSignedOut: (reason) => reasons.push(reason),
+    })
+    await expect(broker.ticket()).rejects.toBeInstanceOf(HermesSignedOutError)
+    expect(await store.get('conn1', URL_A)).toBeNull()
+    expect(reasons).toHaveLength(1)
+  })
+})
+
 describe('HermesTokenStore', () => {
   it('encrypts at rest and returns tokens only for the URL that issued them', async () => {
     const store = new HermesTokenStore(dir, codec)
@@ -109,7 +242,7 @@ describe('HermesTokenBroker (recorded S14: 401 session_expired → refresh → t
     const { fetchImpl, calls } = replay(tail)
     const store = new HermesTokenStore(dir, codec)
     await store.set('conn1', URL_A, tokens())
-    const broker = new HermesTokenBroker({ connectionId: 'conn1', baseUrl: () => URL_A, store, fetchImpl, onSignedOut: () => undefined })
+    const broker = new HermesTokenBroker({ connectionId: 'conn1', baseUrl: URL_A, store, fetchImpl, onSignedOut: () => undefined })
     const ticket = await broker.ticket()
     expect(ticket.length).toBeGreaterThan(10)
     expect(calls.map((call) => call.path)).toEqual(['/api/auth/ws-ticket', '/auth/native/refresh', '/api/auth/ws-ticket'])
@@ -131,7 +264,7 @@ describe('HermesTokenBroker (recorded S14: 401 session_expired → refresh → t
     const store = new HermesTokenStore(dir, codec)
     // About to expire: inside the 60 s refresh margin.
     await store.set('conn1', URL_A, tokens({ expiresAt: Date.now() + 10_000 }))
-    const broker = new HermesTokenBroker({ connectionId: 'conn1', baseUrl: () => URL_A, store, fetchImpl, onSignedOut: () => undefined })
+    const broker = new HermesTokenBroker({ connectionId: 'conn1', baseUrl: URL_A, store, fetchImpl, onSignedOut: () => undefined })
     await Promise.all([broker.ticket(), broker.ticket(), broker.ticket()])
     expect(refreshes).toBe(1)
   })
@@ -145,7 +278,7 @@ describe('HermesTokenBroker (recorded S14: 401 session_expired → refresh → t
     const store = new HermesTokenStore(dir, codec)
     await store.set('conn1', URL_A, tokens({ expiresAt: Date.now() - 1000 }))
     const reasons: string[] = []
-    const broker = new HermesTokenBroker({ connectionId: 'conn1', baseUrl: () => URL_A, store, fetchImpl, onSignedOut: (reason) => reasons.push(reason) })
+    const broker = new HermesTokenBroker({ connectionId: 'conn1', baseUrl: URL_A, store, fetchImpl, onSignedOut: (reason) => reasons.push(reason) })
     await expect(broker.ticket()).rejects.toBeInstanceOf(HermesSignedOutError)
     expect(await store.get('conn1', URL_A)).toBeNull()
     expect(reasons).toHaveLength(1)

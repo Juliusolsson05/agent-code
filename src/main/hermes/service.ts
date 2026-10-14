@@ -118,9 +118,11 @@ export class HermesConnectionService extends EventEmitter {
     await this.persist(this.connections.map((entry) => (entry.id === id ? next : entry)))
     if (baseUrl !== existing.baseUrl) {
       // Tokens are bound to the URL they were issued by (tokenStore.ts); a new
-      // URL is a new backend that must be signed into.
+      // URL is a new backend that must be signed into. Revoke FIRST, so an
+      // in-flight refresh or sign-in for the old URL cannot land afterwards.
+      this.revoke(id)
+      this.signIns.get(id)?.abort()
       await this.tokens.delete(id)
-      this.brokers.delete(id)
       this.setRuntime(id, { state: 'signed-out', identity: null, backend: null, lastError: null })
     }
     this.changed()
@@ -130,9 +132,9 @@ export class HermesConnectionService extends EventEmitter {
   async remove(id: string): Promise<void> {
     this.require(id)
     this.signIns.get(id)?.abort()
+    this.revoke(id)
     await this.persist(this.connections.filter((entry) => entry.id !== id))
     await this.tokens.delete(id)
-    this.brokers.delete(id)
     this.runtime.delete(id)
     this.changed()
   }
@@ -160,8 +162,16 @@ export class HermesConnectionService extends EventEmitter {
     this.patchRuntime(id, { state: 'signing-in', lastError: null })
     try {
       const tokens = await runNativeSignIn(connection.baseUrl, { openExternal: this.deps.openExternal, fetchImpl: this.deps.fetchImpl }, controller.signal)
+      // Commit only if this attempt still owns the connection: it was not
+      // cancelled or superseded, and the connection still exists at the URL
+      // the tokens were issued for (review a #7).
+      const owner = this.connections.find((entry) => entry.id === id)
+      if (controller.signal.aborted || this.signIns.get(id) !== controller || owner?.baseUrl !== connection.baseUrl) {
+        throw new SignInCancelledError()
+      }
       await this.tokens.set(id, connection.baseUrl, tokens)
-      this.brokers.delete(id)
+      // A fresh pair: the old broker (and anything it was refreshing) is stale.
+      this.revoke(id)
       this.patchRuntime(id, { state: 'ready', identity: { userId: tokens.userId, provider: tokens.provider }, lastError: null })
     } catch (error) {
       const tokens = await this.tokens.get(id, connection.baseUrl).catch(() => null)
@@ -185,8 +195,8 @@ export class HermesConnectionService extends EventEmitter {
     // Hermes' bearer tokens have no revoke endpoint for native clients; the
     // password provider's are stateless. Forgetting them locally is what
     // signing out can do.
+    this.revoke(id)
     await this.tokens.delete(id)
-    this.brokers.delete(id)
     this.setRuntime(id, { state: 'signed-out', identity: null, backend: this.runtime.get(id)?.backend ?? null, lastError: null })
   }
 
@@ -217,7 +227,10 @@ export class HermesConnectionService extends EventEmitter {
   dialFor(id: string): HermesDial {
     return async () => {
       const connection = this.require(id)
-      const ticket = await this.broker(connection).ticket()
+      const broker = this.broker(connection)
+      const ticket = await broker.ticket()
+      // Signed out (or URL edited) while the ticket was being minted.
+      broker.assertLive()
       const url = buildWsUrl(connection.baseUrl, ticket)
       return this.deps.openSocket ? this.deps.openSocket(url) : openWs(url)
     }
@@ -225,12 +238,18 @@ export class HermesConnectionService extends EventEmitter {
 
   // ── internals ──────────────────────────────────────────────────────────────
 
+  /** Invalidate everything the current broker has in flight, then drop it. */
+  private revoke(id: string): void {
+    this.brokers.get(id)?.revoke()
+    this.brokers.delete(id)
+  }
+
   private broker(connection: StoredHermesConnection): HermesTokenBroker {
     let broker = this.brokers.get(connection.id)
     if (!broker) {
       broker = new HermesTokenBroker({
         connectionId: connection.id,
-        baseUrl: () => this.require(connection.id).baseUrl,
+        baseUrl: connection.baseUrl,
         store: this.tokens,
         fetchImpl: this.deps.fetchImpl,
         onSignedOut: (reason) => this.setRuntime(connection.id, { state: 'signed-out', identity: null, backend: this.runtime.get(connection.id)?.backend ?? null, lastError: reason }),

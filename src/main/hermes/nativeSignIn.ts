@@ -74,10 +74,12 @@ export async function runNativeSignIn(
       res.writeHead(404).end()
       return
     }
-    // Only the redirect carrying OUR state may complete the flow. A forged
-    // or stale callback (another tab, an old attempt) gets a page and the
-    // wait continues.
-    if (url.searchParams.get('state') !== pkce.state && !url.searchParams.get('error')) {
+    // Only the redirect carrying OUR state may complete the flow, errors
+    // included: Hermes only ever redirects here with `code` + `state`
+    // (dashboard_auth/routes.py _native_redirect), so a stateless `?error=`
+    // can only come from something else on this machine trying to end the
+    // sign-in. A forged or stale callback gets a page and the wait continues.
+    if (url.searchParams.get('state') !== pkce.state) {
       res.writeHead(400, { 'content-type': 'text/html; charset=utf-8' }).end(PAGE('Sign-in link expired', 'Start the sign-in again from Agent Code.'))
       return
     }
@@ -98,6 +100,14 @@ export async function runNativeSignIn(
   const timer = setTimeout(() => settle.reject(new SignInCancelledError('Sign-in timed out after 10 minutes.')), deps.deadlineMs ?? SIGN_IN_DEADLINE_MS)
   const onAbort = () => settle.reject(new SignInCancelledError())
   signal?.addEventListener('abort', onAbort, { once: true })
+  let closed: Promise<void> | null = null
+  const closeListener = () => {
+    closed ??= new Promise<void>((resolve) => {
+      server.closeAllConnections()
+      server.close(() => resolve())
+    })
+    return closed
+  }
 
   try {
     await deps.openExternal(
@@ -109,12 +119,21 @@ export async function runNativeSignIn(
       }),
     )
     const redirected = await callback
+    // The one valid callback is consumed: stop listening NOW rather than
+    // through the token exchange, which can take as long as the VPS does.
+    void closeListener()
     const code = readAuthorizationCode(redirected, pkce.state)
-    return await exchangeCode({ baseUrl, code, codeVerifier: pkce.verifier }, deps.fetchImpl)
+    if (signal?.aborted) throw new SignInCancelledError()
+    const tokens = await exchangeCode({ baseUrl, code, codeVerifier: pkce.verifier }, deps.fetchImpl)
+    // Cancel must still win after the browser came back: the user clicked it
+    // while the exchange was in flight, and resolving here would sign them in
+    // anyway (review a #7). The code is spent either way; the tokens are
+    // simply never returned.
+    if (signal?.aborted) throw new SignInCancelledError()
+    return tokens
   } finally {
     clearTimeout(timer)
     signal?.removeEventListener('abort', onAbort)
-    server.closeAllConnections()
-    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await closeListener()
   }
 }

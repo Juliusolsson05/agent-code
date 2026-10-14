@@ -12,7 +12,15 @@
 //    `session_expired`, one refresh, then a ticket).
 //  - A refresh that answers `session-expired` / `auth-rejected` deletes the
 //    tokens: the connection is signed out and every pane on it says so,
-//    instead of retrying a dead token forever.
+//    instead of retrying a dead token forever. A ticket mint refused the same
+//    way (with a token we just validated or refreshed) means the same thing.
+//  - A broker is bound to ONE base URL for its whole life and can be revoked.
+//    The service revokes it on sign-out, URL edit and removal. Every network
+//    call and every token write re-checks that, because those operations are
+//    async: a refresh that started before Sign out must not write a fresh
+//    pair afterwards (resurrecting the sign-in), and a token read for URL A
+//    must never be sent to URL B after an edit (review a #1, #4). Reading the
+//    URL lazily per call, as the first version did, let exactly that happen.
 
 import {
   HermesAuthError,
@@ -35,8 +43,8 @@ export class HermesSignedOutError extends Error {
 
 export type TokenBrokerDeps = {
   connectionId: string
-  /** Read at every use: a URL edit must re-bind (and so sign out) at once. */
-  baseUrl: () => string
+  /** Fixed for the broker's life; a URL edit revokes this broker instead. */
+  baseUrl: string
   store: HermesTokenStore
   fetchImpl?: FetchLike
   now?: () => number
@@ -46,15 +54,37 @@ export type TokenBrokerDeps = {
 
 export class HermesTokenBroker {
   private refreshing: Promise<HermesTokens> | null = null
+  private revoked = false
 
   constructor(private readonly deps: TokenBrokerDeps) {}
+
+  /** Sign-out, URL edit or removal: nothing this broker started may land. */
+  revoke(): void {
+    this.revoked = true
+  }
+
+  /** Throws once revoked; call before any network use or token write. */
+  assertLive(): void {
+    if (this.revoked) throw new HermesSignedOutError(this.deps.connectionId)
+  }
+
+  /** The refused credentials are dead: forget them and tell the owner. */
+  private async signedOut(error: HermesAuthError, message: string): Promise<never> {
+    if (!this.revoked) {
+      await this.deps.store.delete(this.deps.connectionId)
+      this.deps.onSignedOut(error.message)
+    }
+    throw new HermesSignedOutError(this.deps.connectionId, `${message} ${error.message}`)
+  }
 
   private now(): number {
     return this.deps.now?.() ?? Date.now()
   }
 
   private async current(): Promise<HermesTokens> {
-    const tokens = await this.deps.store.get(this.deps.connectionId, this.deps.baseUrl())
+    this.assertLive()
+    const tokens = await this.deps.store.get(this.deps.connectionId, this.deps.baseUrl)
+    this.assertLive()
     if (!tokens) throw new HermesSignedOutError(this.deps.connectionId)
     return tokens
   }
@@ -62,17 +92,26 @@ export class HermesTokenBroker {
   /** Refresh once, shared by every caller that asks while it runs. */
   private refresh(stale: HermesTokens): Promise<HermesTokens> {
     if (this.refreshing) return this.refreshing
-    const baseUrl = this.deps.baseUrl()
-    this.refreshing = refreshTokens({ baseUrl, refreshToken: stale.refreshToken, provider: stale.provider }, this.deps.fetchImpl)
+    const { baseUrl } = this.deps
+    this.refreshing = Promise.resolve()
+      .then(() => {
+        this.assertLive()
+        return refreshTokens({ baseUrl, refreshToken: stale.refreshToken, provider: stale.provider }, this.deps.fetchImpl)
+      })
       .then(async (fresh) => {
+        this.assertLive()
         await this.deps.store.set(this.deps.connectionId, baseUrl, fresh)
+        // Sign-out can run DURING the write; its delete may land first. Undo
+        // ours so a revoked connection never keeps a usable pair on disk.
+        if (this.revoked) {
+          await this.deps.store.delete(this.deps.connectionId)
+          this.assertLive()
+        }
         return fresh
       })
       .catch(async (error: unknown) => {
         if (error instanceof HermesAuthError && (error.kind === 'session-expired' || error.kind === 'auth-rejected')) {
-          await this.deps.store.delete(this.deps.connectionId)
-          this.deps.onSignedOut(error.message)
-          throw new HermesSignedOutError(this.deps.connectionId, `The Hermes sign-in expired. ${error.message}`)
+          return this.signedOut(error, 'The Hermes sign-in expired.')
         }
         throw error
       })
@@ -91,13 +130,20 @@ export class HermesTokenBroker {
 
   /** A single-use WebSocket ticket (30 s), retrying once through a refresh. */
   async ticket(): Promise<string> {
-    const baseUrl = this.deps.baseUrl()
+    const { baseUrl } = this.deps
     const token = await this.accessToken()
     try {
+      this.assertLive()
       return (await mintWsTicket({ baseUrl, accessToken: token }, this.deps.fetchImpl)).ticket
     } catch (error) {
+      if (error instanceof HermesAuthError && (error.kind === 'session-expired' || error.kind === 'auth-rejected')) {
+        // Not transient: the server refused credentials we hold. Retrying
+        // with backoff would spin forever (review a #6).
+        return this.signedOut(error, 'Hermes refused this sign-in.')
+      }
       if (!(error instanceof HermesAuthError) || error.kind !== 'access-expired') throw error
       const fresh = await this.refresh(await this.current())
+      this.assertLive()
       return (await mintWsTicket({ baseUrl, accessToken: fresh.accessToken }, this.deps.fetchImpl)).ticket
     }
   }
