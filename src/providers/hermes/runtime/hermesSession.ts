@@ -303,8 +303,10 @@ export class HermesSession extends EventEmitter implements AgentSession {
     if (this.laneKey && !this.laneNoticeShown) {
       this.laneNoticeShown = true
       // Plan D6 (owner decision 2026-10-14: no phone delivery). Said once per
-      // pane lifetime, after the history so it is the newest line.
-      this.pendingNotice = 'This pane follows your Telegram thread with Hermes. Messages you send here are part of that conversation, but they do not appear in the Telegram app (a Hermes limitation, NousResearch/hermes-agent#76767).'
+      // pane lifetime. Emitted now, not held for the next history boundary:
+      // start() has already applied the snapshot, so it lands as the newest
+      // line, and a quiet thread may not produce another boundary for hours.
+      this.emitNotice('This pane follows your Telegram thread with Hermes. Messages you send here are part of that conversation, but they do not appear in the Telegram app (a Hermes limitation, NousResearch/hermes-agent#76767).')
     }
     this.emit('started', {})
     return {}
