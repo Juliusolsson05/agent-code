@@ -204,8 +204,14 @@ const ChatRow = memo(function ChatRow({ item, connectionName, selected }: { item
     case 'assistant':
       return (
         <div className="flex justify-start" data-chat-role="assistant" data-entry-uuid={item.uuid}>
+          {/* Replies are plain text on the pane, NOT a filled bubble (owner,
+              2026-10-14): in the dark themes the old `bg-surface` bubble was
+              nearly the same grey as the user's `bg-user-bg`, so prompts and
+              answers read as one wall of boxes. Only the user's prompt is
+              tinted, which is how the coding feed beside it reads too. The
+              picker selection still draws its ring around the reply. */}
           <div
-            className={`max-w-[88%] break-words rounded-slab bg-surface px-3 py-2 text-[13px] leading-[1.6] text-ink ${selected ? 'ring-1 ring-accent' : ''}`}
+            className={`min-w-0 max-w-full break-words rounded-slab px-1 py-1 text-[13px] leading-[1.6] text-ink ${selected ? 'ring-1 ring-accent' : ''}`}
             aria-current={selected ? 'true' : undefined}
           >
             {/* The feed's own prose renderer: memoized on the text string (a
@@ -289,10 +295,10 @@ function ReasoningRow({ item }: { item: Extract<ChatItem, { kind: 'reasoning' }>
  * window for 2–5.7 s (performance monitor). A closed body is never seen, so
  * it is not built; opening one builds just that one.
  */
-function LazyDetails({ summary, children, className, ...rest }: { summary: ReactNode; children: ReactNode; className: string; 'data-chat-role': string; 'data-tool-status'?: string }) {
+function LazyDetails({ summary, children, className, closedClassName = '', openClassName = '', ...rest }: { summary: ReactNode; children: ReactNode; className: string; closedClassName?: string; openClassName?: string; 'data-chat-role': string; 'data-tool-status'?: string }) {
   const [open, setOpen] = useState(false)
   return (
-    <details className={className} {...rest} open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <details className={[className, open ? openClassName : closedClassName].filter(Boolean).join(' ')} {...rest} open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary className="flex cursor-pointer select-none items-center gap-1.5">{summary}</summary>
       {open && children}
     </details>
@@ -303,7 +309,13 @@ function ToolChip({ item }: { item: Extract<ChatItem, { kind: 'tool' }> }) {
   const tone = item.status === 'error' ? 'border-danger/60 text-danger' : item.status === 'running' ? 'border-accent/60' : 'border-border'
   return (
     <LazyDetails
-      className={`max-w-[88%] rounded-chip border ${tone} bg-canvas px-2 py-1 text-[12px]`}
+      // Pill-shaped only while CLOSED (one line). The chip radius is 9999px
+      // (--theme-radius-chip), so an opened chip drew its multi-line input and
+      // output inside an oval whose curve cut through the text (owner report,
+      // 2026-10-14). Open, it takes the chat bubble's radius instead.
+      className={`max-w-[88%] border ${tone} bg-canvas px-2 py-1 text-[12px]`}
+      closedClassName="rounded-chip"
+      openClassName="rounded-slab"
       data-chat-role="tool"
       data-tool-status={item.status}
       summary={

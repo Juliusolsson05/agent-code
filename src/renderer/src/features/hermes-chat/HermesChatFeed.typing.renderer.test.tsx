@@ -86,6 +86,18 @@ describe('collapsed chat rows', () => {
     fireEvent(chips[0]!, new Event('toggle'))
     expect(chips[0]!.querySelectorAll('pre').length).toBeGreaterThan(0)
   })
+
+  // Owner report 2026-10-14: an opened chip drew its multi-line body inside
+  // the pill (9999px radius) and the curve cut through the text.
+  it('is a pill only while closed; opened, it takes the bubble radius', () => {
+    const view = render(<Pane runtime={{ ...emptyRuntime(), entries: recordedEntries('S4') }} draft="" />)
+    const chip = view.container.querySelector<HTMLDetailsElement>('[data-chat-role="tool"]')!
+    expect(chip.className).toContain('rounded-chip')
+    chip.open = true
+    fireEvent(chip, new Event('toggle'))
+    expect(chip.className).not.toContain('rounded-chip')
+    expect(chip.className).toContain('rounded-slab')
+  })
 })
 
 // The owner, 2026-10-14: "as soon as I go into spotlight with Hermes,
@@ -112,5 +124,17 @@ describe('a Hermes pane in Spotlight', () => {
     const mounted = markdown.renders
     view.rerender(<Spotlight runtime={after} />)
     expect(markdown.renders - mounted).toBe(1)
+  })
+})
+
+// Owner report 2026-10-14: replies sat in a filled bubble nearly the same grey
+// as the user's prompts. Only the prompt is tinted now. Rows: recorded S4.
+describe('who said what', () => {
+  it('tints the user prompt and leaves replies on the pane background', () => {
+    const view = render(<Pane runtime={{ ...emptyRuntime(), entries: recordedEntries('S4') }} draft="" />)
+    const user = view.container.querySelector('[data-chat-role="user"] > div')!
+    const reply = view.container.querySelector('[data-chat-role="assistant"] > div')!
+    expect(user.className).toContain('bg-user-bg')
+    expect(reply.className).not.toMatch(/\bbg-/)
   })
 })
