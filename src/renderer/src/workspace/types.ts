@@ -120,8 +120,9 @@ export type SessionSpawnSelection = {
  *
  * WHY on the SESSION and not the lane: lanes are index-keyed
  * (TiledDispatchLayout renders `key={laneIndex}`), spliced by every grid
- * mutation, and projected down to `{ selectedSessionId }` on persist, so a
- * lane field would slide to the wrong agent or vanish. Spotlight holds a
+ * mutation, and rebuilt field by field on load (workspaceShape's projection
+ * copies only `selectedSessionId` and Lane History's `history`), so a lane
+ * field would slide to the wrong agent or vanish. Spotlight holds a
  * session too. SessionMeta already rides autosave, migration, adoption,
  * project merge and removal; only replaceSession's literal and undo's
  * carryDurableMeta need to learn this field. Do NOT copy the

@@ -106,13 +106,19 @@ function dedupeLaneHistory(history: LaneHistoryEntry[]): LaneHistoryEntry[] {
  * and when did I last see each one", and repeated rows for the same agent
  * would push the others out of view for no new information.
  */
+//
+// `arriving` is removed BEFORE the cap is applied: at a full list, trimming
+// first and then dropping the arriving agent cost an unrelated oldest entry
+// and left 49 rows (#1504 review).
 function withDeparture(
   history: LaneHistoryEntry[] | undefined,
   departed: SessionId | undefined,
   at: number,
+  arriving?: SessionId,
 ): LaneHistoryEntry[] | undefined {
-  if (!departed) return history
-  const rest = (history ?? []).filter(entry => entry.sessionId !== departed)
+  const rest = (history ?? []).filter(entry =>
+    entry.sessionId !== departed && entry.sessionId !== arriving)
+  if (!departed) return arriving && history ? rest : history
   return [{ sessionId: departed, at }, ...rest].slice(0, LANE_HISTORY_LIMIT)
 }
 
@@ -143,8 +149,7 @@ export function withLaneSession(
   now: number = Date.now(),
 ): DispatchLane {
   if (lane.selectedSessionId === sessionId) return { ...lane, selectedSessionId: sessionId }
-  const history = withDeparture(lane.history, lane.selectedSessionId, now)
-    ?.filter(entry => entry.sessionId !== sessionId)
+  const history = withDeparture(lane.history, lane.selectedSessionId, now, sessionId)
   const { history: _previous, ...rest } = lane
   return {
     ...rest,
@@ -496,6 +501,8 @@ export function clampTileCount(n: number): number {
  * how it was written) and the one-per-agent rule and cap are re-applied in
  * case the file was edited.
  */
+const MAX_DATE_MS = 8.64e15
+
 export function sanitizeLaneHistory(
   raw: unknown,
   isLive: (id: SessionId) => boolean,
@@ -504,7 +511,11 @@ export function sanitizeLaneHistory(
   const entries = raw.filter((entry): entry is LaneHistoryEntry =>
     typeof entry === 'object' && entry !== null &&
     typeof (entry as LaneHistoryEntry).sessionId === 'string' &&
+    // Finite is not enough: `new Date(1e20)` is an Invalid Date, and the
+    // dialog's toISOString() throws on one — a hand-edited file would crash
+    // Lane History on open (#1504 review). ±8.64e15 ms is the Date range.
     Number.isFinite((entry as LaneHistoryEntry).at) &&
+    Math.abs((entry as LaneHistoryEntry).at) <= MAX_DATE_MS &&
     isLive((entry as LaneHistoryEntry).sessionId),
   ).map(entry => ({ sessionId: entry.sessionId, at: entry.at }))
   const kept = dedupeLaneHistory(entries).slice(0, LANE_HISTORY_LIMIT)

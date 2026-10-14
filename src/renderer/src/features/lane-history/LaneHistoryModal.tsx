@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useAppStore } from '@renderer/app-state/hooks'
 import {
@@ -12,7 +12,7 @@ import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { relativeTime } from '@renderer/lib/relativeTime'
 import { dispatchRowTitle } from '@renderer/workspace/dispatch/rowTitle'
 import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
-import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
+import type { DispatchLane, SessionId, WorkspaceState } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 type Props = {
@@ -67,6 +67,27 @@ export function laneHistoryRows(state: WorkspaceState, laneIndex: number): LaneH
 export function LaneHistoryModal({ laneIndex, workspace, onClose }: Props) {
   const open = laneIndex !== null
   const rows = open ? laneHistoryRows(workspace.state, laneIndex) : []
+  const laneNow: DispatchLane | undefined = open ? workspace.state.stage.lanes[laneIndex] : undefined
+
+  // The dialog is about ONE lane, but uiShell can only hold its flat index.
+  // An index is not an identity: a lane removed or inserted before it (by an
+  // agent through the ac_* tools, a close that removes a lane, Stage Shape)
+  // slides a DIFFERENT lane into that slot, and the dialog would list that
+  // lane's past and put the pick there (#1504 review). Lane objects are
+  // replaced only when that lane itself is written — grid edits and remaps
+  // keep untouched lanes by reference — so "the object at this slot is not
+  // the one we opened on" means the lane changed under us. Closing is the
+  // honest answer: the list on screen no longer describes anything.
+  const openedLane = useRef<DispatchLane | undefined>(undefined)
+  useEffect(() => {
+    openedLane.current = open ? workspace.state.stage.lanes[laneIndex] : undefined
+    // Capture only on open / retarget, never on later lane writes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, laneIndex])
+  const laneChanged = open && openedLane.current !== undefined && laneNow !== openedLane.current
+  useEffect(() => {
+    if (laneChanged) onClose()
+  }, [laneChanged, onClose])
   // Relative ages drift by minutes; a coarse tick keeps them honest without
   // re-rendering continuously (same cadence as Report History).
   const [, setTick] = useState(0)
@@ -77,7 +98,9 @@ export function LaneHistoryModal({ laneIndex, workspace, onClose }: Props) {
   }, [open])
 
   const choose = (sessionId: SessionId) => {
-    if (laneIndex === null) return
+    // Same guard at click time: the close above runs after a render, and a
+    // click can land in between.
+    if (laneIndex === null || laneChanged) return
     onClose()
     // Through selectTiledLaneSession, never the raw lane writer: a hibernated
     // agent has to wake before it is placed (#690).
@@ -105,12 +128,18 @@ export function LaneHistoryModal({ laneIndex, workspace, onClose }: Props) {
         size="sm"
         className="flex max-h-[70vh] flex-col overflow-hidden"
         onOpenAutoFocus={event => {
-          // Land on the first PAST agent when there is one — the current agent
-          // is already on screen, so it is the least likely pick.
-          event.preventDefault()
+          // Land on the most recent PAST agent — the current one is already on
+          // screen, so it is the least likely pick. Skip row 0 only when it IS
+          // the current agent: after Clear Lane there is no "Now" row, and
+          // skipping anyway put Enter on the older agent (#1504 review). With
+          // no rows keep Radix's default (Close), or focus would fall to
+          // <body> and Enter would do nothing.
           const buttons = (event.currentTarget as HTMLElement | null)
             ?.querySelectorAll<HTMLButtonElement>('[data-lane-history-list] button')
-          ;(buttons?.[1] ?? buttons?.[0])?.focus()
+          const target = rows[0]?.at === null ? buttons?.[1] ?? buttons?.[0] : buttons?.[0]
+          if (!target) return
+          event.preventDefault()
+          target.focus()
         }}
       >
         <DialogHeader className="flex-shrink-0">

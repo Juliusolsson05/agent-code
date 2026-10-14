@@ -76,6 +76,41 @@ describe('Lane History dialog', () => {
     expect(onClose).toHaveBeenCalled()
   })
 
+  it('closes, and refuses the pick, when a different lane slides into its slot', () => {
+    // #1504 review: uiShell holds a flat index. Removing lane 0 while the
+    // dialog is open for lane 1 slides old lane 2 into slot 1; listing that
+    // lane's past, or placing the pick there, would act on a lane the user
+    // never opened.
+    const onClose = vi.fn()
+    const target: DispatchLane = { selectedSessionId: S('a'), history: [{ sessionId: S('b'), at: Date.now() }] }
+    const other: DispatchLane = { selectedSessionId: S('c') }
+    const { workspace, selectTiledLaneSession } = workspaceWith([{}, target, other])
+    const view = render(<LaneHistoryModal laneIndex={1} workspace={workspace} onClose={onClose} />)
+    expect(onClose).not.toHaveBeenCalled()
+
+    const button = screen.getByRole('button', { name: /Agent B/ })
+    ;(workspace.state as { stage: { lanes: DispatchLane[] } }).stage.lanes = [{}, other]
+    view.rerender(<LaneHistoryModal laneIndex={1} workspace={workspace} onClose={onClose} />)
+
+    expect(onClose).toHaveBeenCalled()
+    fireEvent.click(button)
+    expect(selectTiledLaneSession).not.toHaveBeenCalled()
+  })
+
+  it('focuses the newest past agent: row 1 when row 0 is "Now", row 0 after Clear Lane', () => {
+    const now = Date.now()
+    const withCurrent = workspaceWith([{ selectedSessionId: S('a'), history: [{ sessionId: S('b'), at: now }] }])
+    const first = render(<LaneHistoryModal laneIndex={0} workspace={withCurrent.workspace} onClose={vi.fn()} />)
+    expect(document.activeElement?.textContent).toContain('Agent B')
+    first.unmount()
+
+    // #1504 review: an emptied lane has no "Now" row; skipping row 0 anyway
+    // put Enter on the OLDER agent.
+    const cleared = workspaceWith([{ history: [{ sessionId: S('b'), at: now }, { sessionId: S('a'), at: now - MIN }] }])
+    render(<LaneHistoryModal laneIndex={0} workspace={cleared.workspace} onClose={vi.fn()} />)
+    expect(document.activeElement?.textContent).toContain('Agent B')
+  })
+
   it('says so when the lane has never held an agent', () => {
     const { workspace } = workspaceWith([{}])
     render(<LaneHistoryModal laneIndex={0} workspace={workspace} onClose={vi.fn()} />)

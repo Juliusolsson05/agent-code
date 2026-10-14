@@ -65,6 +65,21 @@ describe('withLaneSession records the agent it replaces', () => {
     expect(lane.history).toBeUndefined()
   })
 
+  it('bringing back an agent from a full list keeps every other entry', () => {
+    // #1504 review: the arriving agent was removed AFTER the cap trimmed,
+    // costing an unrelated oldest entry.
+    let lane: DispatchLane = {}
+    for (let i = 0; i <= LANE_HISTORY_LIMIT; i++) lane = withLaneSession(lane, S(`${i}`), i)
+    expect(lane.history).toHaveLength(LANE_HISTORY_LIMIT)
+
+    lane = withLaneSession(lane, S('5'), 1000)
+
+    // 50 past agents minus the one that came back, plus the one that left.
+    expect(lane.history).toHaveLength(LANE_HISTORY_LIMIT)
+    expect(ids(lane)).toContain(S('0'))
+    expect(ids(lane)).not.toContain(S('5'))
+  })
+
   it('caps the list at LANE_HISTORY_LIMIT distinct agents, dropping the oldest', () => {
     let lane: DispatchLane = {}
     for (let i = 0; i <= LANE_HISTORY_LIMIT + 1; i++) lane = withLaneSession(lane, S(`${i}`), i)
@@ -157,7 +172,9 @@ describe('history survives a restart', () => {
   it('degrades a corrupt history to none without losing the lane', () => {
     const migrated = migrateWorkspaceToStage(persisted([
       { selectedSessionId: S('a'), history: 'not a list' },
-      { selectedSessionId: S('b'), history: [null, { sessionId: 7, at: 1 }, { sessionId: S('a'), at: 'soon' }, { sessionId: S('a'), at: 3 }] },
+      // `at: 1e20` is finite but outside the Date range; the dialog's
+      // toISOString() threw on it (#1504 review).
+      { selectedSessionId: S('b'), history: [null, { sessionId: 7, at: 1 }, { sessionId: S('a'), at: 'soon' }, { sessionId: S('a'), at: 1e20 }, { sessionId: S('a'), at: 3 }] },
     ]))
     expect(migrated.stage.lanes[0]).toEqual({ selectedSessionId: S('a') })
     expect(migrated.stage.lanes[1]).toEqual({ selectedSessionId: S('b'), history: [{ sessionId: S('a'), at: 3 }] })

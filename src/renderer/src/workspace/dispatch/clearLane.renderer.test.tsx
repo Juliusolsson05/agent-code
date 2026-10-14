@@ -93,6 +93,18 @@ describe('clearTiledLane', () => {
     expect(t.refs.undoStackRef.current.length).toBe(0)
   })
 
+  it('a real selection through the hook records the agent it replaced (Lane History)', async () => {
+    // Drives selectTiledLaneSession, the path the index, strip and ⌥↑/↓ use,
+    // so an inline lane write that skipped withLaneSession would fail here
+    // even though the helper's own unit tests stay green.
+    const t = mount()
+    await act(async () => { await t.hook.result.current.selectTiledLaneSession(1, 'anchor') })
+    expect(t.getState().stage.lanes[1]).toEqual({
+      selectedSessionId: 'anchor',
+      history: [{ sessionId: 'other', at: expect.any(Number) }],
+    })
+  })
+
   it('clears every lane that mirrors the occupant, not just the focused one', () => {
     // Mirrors are one agent in two lanes, not two agents. Clearing one lane
     // must not leave a half-cleared "state" the other lane contradicts — but
