@@ -113,6 +113,8 @@ export type SessionRecoverOptions = {
   /** Remote providers (Hermes): the connection, needed only if recovery has
    *  to START a backend (an adopted live one already holds it). */
   remoteConnectionId?: string
+  /** Hermes: the messaging thread the pane follows (SessionMeta.hermesLaneKey). */
+  hermesLaneKey?: string
   /**
    * Opaque renderer-generated generation for this recovery admission.
    *
@@ -868,6 +870,8 @@ export type SessionOptions = {
    * or a credential, so it is safe to persist and to carry over IPC.
    */
   remoteConnectionId?: string
+  /** Hermes (#1496): follow this gateway routing key (a Telegram thread) instead of one stored conversation. */
+  hermesLaneKey?: string
 }
 
 export type SessionHistoryChunk = {

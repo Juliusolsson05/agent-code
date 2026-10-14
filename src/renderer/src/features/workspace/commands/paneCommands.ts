@@ -314,6 +314,19 @@ export const paneCommands: CommandDef[] = [
       },
     ]
   }),
+  // #1496: a new Hermes pane follows the owner's Telegram thread by default
+  // (plan Decision 3, UNCONFIRMED; sessionActions.spawn looks the thread up).
+  // This is the way out: a desktop-only Hermes conversation, as before.
+  {
+    id: 'hermes-separate-chat',
+    surface: 'app' as const,
+    category: 'create' as const,
+    title: 'New Separate Hermes Chat',
+    when: () => enabledAgentProviderKindsSnapshot().has('hermes'),
+    description: '**What it does:** Starts a **new Hermes conversation** that is not your Telegram thread.\n\n**Use when:** You want a desktop-only chat with your Hermes agent.\n\n**Notes:** **New Hermes** follows your Telegram thread when your Hermes has one.',
+    keywords: ['hermes', 'telegram', 'separate', 'new chat'],
+    run: ({ workspace }: CommandContext) => workspace.splitFocused('hermes', undefined, { hermesLane: 'none' }),
+  },
   // DELETED with the tile tree (#992): nav-left/right/up/down walked
   // `tab.root` grid focus, and the tree no longer renders. Lane movement
   // is ⌥←/⌥→ (focus within the row) and ⌥↑/⌥↓ (index walk), handled in

@@ -54,6 +54,13 @@ export function registerHermesIpc(service: HermesConnectionService): void {
     if (!isId(id)) throw new Error('hermes:sign-out: invalid id')
     return service.signOut(id)
   })
+
+  // The Telegram thread a new pane follows (#1496). Only the routing key
+  // crosses; the REST listing (titles, chat ids of every lane) stays in main.
+  ipcMain.handle('hermes:default-lane', (_evt, id: unknown) => {
+    if (!isId(id)) throw new Error('hermes:default-lane: invalid id')
+    return service.defaultLaneKey(id)
+  })
 }
 
 function isId(value: unknown): value is string {

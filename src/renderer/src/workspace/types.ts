@@ -344,6 +344,15 @@ export type SessionMeta = {
    */
   remoteConnectionId?: string
   /**
+   * Hermes only (#1496): the gateway routing key of the messaging thread this
+   * pane FOLLOWS (the owner's Telegram DM, `agent:main:telegram:dm:<id>`).
+   * Persisted instead of a stored conversation id because the id behind a
+   * Telegram thread changes (Telegram /new, compression); a pane pinned to an
+   * id would keep writing into a dead branch. Not a secret: it names a chat
+   * on the owner's own server.
+   */
+  hermesLaneKey?: string
+  /**
    * Project membership (#992). THE ownership fact: a session belongs to the
    * workspace because it names a live project. It replaces all three ways a
    * v2 session could be owned — "I am a leaf of tabs[i].root", a

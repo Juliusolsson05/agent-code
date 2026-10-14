@@ -3244,6 +3244,7 @@ export class SessionManager extends EventEmitter {
         userMcpServers,
         ...(userMcpCodexShellPolicy ? { userMcpCodexShellPolicy } : {}),
         ...(remote ? { remoteConnectionId: options.remoteConnectionId } : {}),
+        ...(remote && options.hermesLaneKey ? { hermesLaneKey: options.hermesLaneKey } : {}),
         ...(kind === 'codex' && codexReplacementHandoff
           ? {
               // WHY the provider receives execution timing, not policy: Codex

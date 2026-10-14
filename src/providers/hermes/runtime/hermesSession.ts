@@ -28,7 +28,9 @@ import {
   type CommittedRow,
   type HermesConnectionState,
   type HermesRequest,
+  type HermesLaneState,
   type HermesNotice,
+  type LaneMove,
   type HermesSessionState,
   type HermesSideAnswer,
   type HistoryBoundary,
@@ -89,6 +91,10 @@ const BACKOFF_BASE_MS = 300
 const BACKOFF_CAP_MS = 15_000
 const STABLE_AFTER_MS = 5_000
 
+// Actions on the held-prompt card (Telegram-thread mode).
+const HERMES_HELD_SEND = 'hermes.held.send'
+const HERMES_HELD_CANCEL = 'hermes.held.cancel'
+
 const KIND_BY_METHOD: Record<HermesRequest['method'], HermesConditionKind> = {
   approval: 'hermes.approval',
   clarify: 'hermes.clarify',
@@ -119,6 +125,11 @@ export class HermesSession extends EventEmitter implements AgentSession {
   /** Open requests in arrival order; the card shows the oldest per kind. */
   private readonly openRequests: HermesRequest[] = []
   private noticeCounter = 0
+  /** Telegram-thread mode (#1496): the gateway routing key this pane follows. */
+  private readonly laneKey: string | null
+  /** Prompts held behind a running phone turn (hermes-headless lane state). */
+  private held: Array<{ id: string; text: string }> = []
+  private laneNoticeShown = false
   /** commands.catalog for this attach (listComposerCommands). */
   private composerCommands: ComposerCommand[] | null = null
   /**
@@ -205,6 +216,7 @@ export class HermesSession extends EventEmitter implements AgentSession {
     }
     this.connectionId = options.remoteConnectionId
     this.storedSessionId = options.resumeSessionId ?? null
+    this.laneKey = options.hermesLaneKey ?? null
   }
 
   async start(): Promise<{ projectDir?: string } | void> {
@@ -214,7 +226,14 @@ export class HermesSession extends EventEmitter implements AgentSession {
       dial: service.dialFor(this.connectionId),
       // Outlives this session: a Reload Agent keeps every tool output it had.
       toolResults: toolResultCacheFor(this.connectionId),
-      target: this.storedSessionId
+      ...(this.laneKey ? { rest: service.restFor(this.connectionId) } : {}),
+      target: this.laneKey
+        // Follow the Telegram thread: the stored id is re-resolved from the
+        // routing key on open, on every change signal and before every send
+        // (hermes-headless lane/lanes.ts), so a Telegram /new never leaves
+        // this pane writing into a dead conversation.
+        ? { mode: 'lane', sessionKey: this.laneKey }
+        : this.storedSessionId
         ? { mode: 'resume', storedSessionId: this.storedSessionId }
         // `agent-code` marks our conversations in Hermes as self-owned
         // (any non-platform source; session_lifecycle.py) and lets Hermes
@@ -248,6 +267,17 @@ export class HermesSession extends EventEmitter implements AgentSession {
       this.pendingNotice = 'Hermes restarted while it was replying, so that reply was lost. Send your message again if you still need it.'
     })
     headless.on('request', (request: HermesRequest) => this.onRequest(request))
+    headless.on('lane', (state: HermesLaneState) => this.onLane(state))
+    headless.on('lane-moved', (move: LaneMove) => {
+      // Telegram /new (or /resume) replaced the thread's conversation. The
+      // package resets the history as a new conversation; the line says why
+      // the chat just changed under the user. Compression is seamless.
+      if (move.reason === 'new-conversation') this.pendingNotice = 'Telegram started a new conversation; this pane follows it.'
+    })
+    headless.on('hold-failed', ({ text }: { text: string }) => {
+      this.emitNotice(`Could not send your held message: ${text.length > 80 ? `${text.slice(0, 79)}…` : text}`)
+    })
+    headless.on('lane-error', (error: Error) => console.warn('[hermes] lane refresh failed:', describeError(error)))
     headless.on('request-closed', ({ id }: { id: string }) => this.onRequestClosed(id))
     headless.on('connection', (state: HermesConnectionState) => this.onConnection(state))
     service.on('disconnect', this.onServiceDisconnect)
@@ -270,6 +300,12 @@ export class HermesSession extends EventEmitter implements AgentSession {
     }
     service.reportReachability(this.connectionId, true)
     this.openInput()
+    if (this.laneKey && !this.laneNoticeShown) {
+      this.laneNoticeShown = true
+      // Plan D6 (owner decision 2026-10-14: no phone delivery). Said once per
+      // pane lifetime, after the history so it is the newest line.
+      this.pendingNotice = 'This pane follows your Telegram thread with Hermes. Messages you send here are part of that conversation, but they do not appear in the Telegram app (a Hermes limitation, NousResearch/hermes-agent#76767).'
+    }
     this.emit('started', {})
     return {}
   }
@@ -322,6 +358,12 @@ export class HermesSession extends EventEmitter implements AgentSession {
     // `not-ready` is retry-safe: the composer keeps the message for after
     // the re-attach instead of losing it to a dead runtime id.
     if (!this.attached) throw new HermesPromptError('not-ready', 'Hermes is reconnecting; send again in a moment.')
+    if (this.laneKey && /^\/(new|reset|clear)(\s|$)/i.test(text.trim())) {
+      // Plan Decision 5 (UNCONFIRMED): Agent Code cannot reset the GATEWAY's
+      // routing for the thread, and a pane-side /new would quietly leave it.
+      this.emitNotice('To start a new Telegram conversation, type /new in Telegram; this pane will follow it. For a separate desktop-only chat, use “New Separate Hermes Chat”.')
+      return
+    }
     if (/^\/[a-z0-9]/i.test(text.trim())) {
       const typed = text.trim()
       const command = findComposerCommand(this.composerCommands ?? HERMES_APP_COMMANDS_WITH_REFUSALS, typed.slice(1).split(/\s+/)[0] ?? '')
@@ -347,6 +389,10 @@ export class HermesSession extends EventEmitter implements AgentSession {
       return
     }
     const outcome = await this.headless.prompt(text)
+    if (outcome.status === 'held') {
+      this.emit('process-state', { active: true, status: 'Hermes is replying on Telegram; your message sends when it finishes.' })
+      return
+    }
     if (outcome.status === 'queued') {
       // Hermes is still on the previous task and will answer this after it.
       // Without saying so the typing row under the new message read as if
@@ -406,6 +452,23 @@ export class HermesSession extends EventEmitter implements AgentSession {
   > {
     if (!this.headless) return { ok: false, reason: 'no-headless' }
     const payload = asRecord(action.payload)
+    if (action.name === HERMES_HELD_SEND || action.name === HERMES_HELD_CANCEL) {
+      const holdId = typeof payload?.holdId === 'string' ? payload.holdId : null
+      if (!holdId || !this.held.some((hold) => hold.id === holdId)) return { ok: false, reason: 'invalid-payload' }
+      try {
+        if (action.name === HERMES_HELD_SEND) {
+          await this.headless.releaseHeld(holdId)
+        } else {
+          const text = this.headless.cancelHeld(holdId)
+          // Main cannot put text back into the composer; the line keeps it
+          // so the user can copy it.
+          if (text) this.emitNotice(`Not sent: ${text}`)
+        }
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, reason: 'aborted', failedAtStep: `held prompt: ${describeError(error)}` }
+      }
+    }
     const requestId = typeof payload?.requestId === 'string' ? payload.requestId : null
     // Answer only a request that is STILL open: a click racing Hermes'
     // timeout or an interrupt must not reply to a withdrawn request (the
@@ -599,8 +662,28 @@ export class HermesSession extends EventEmitter implements AgentSession {
     this.emitConditions()
   }
 
+  private onLane(state: HermesLaneState): void {
+    if (this.stopped || this.signedOut) return
+    const heldChanged = state.held.length !== this.held.length || state.held.some((hold, index) => hold.id !== this.held[index]?.id)
+    this.held = state.held.map(({ id, text }) => ({ id, text }))
+    if (heldChanged) this.emitConditions()
+    this.emit('process-state', state.busy
+      ? { active: true, status: 'Hermes is replying on Telegram…' }
+      : { active: false, status: undefined })
+  }
+
   private emitConditions(): void {
     const conditions: Record<string, ProviderConditionRecord> = {}
+    if (this.held.length > 0) {
+      conditions['hermes.held'] = {
+        kind: 'hermes.held',
+        state: { visible: true, held: this.held.map((hold) => ({ ...hold })) },
+        actions: this.held.flatMap((hold): ConditionCustomAction[] => [
+          { kind: 'custom', id: `${hold.id}:send`, label: 'Send now', name: HERMES_HELD_SEND, payload: { holdId: hold.id } },
+          { kind: 'custom', id: `${hold.id}:cancel`, label: 'Cancel', name: HERMES_HELD_CANCEL, payload: { holdId: hold.id } },
+        ]),
+      } as ProviderConditionRecord
+    }
     for (const method of Object.keys(KIND_BY_METHOD) as Array<HermesRequest['method']>) {
       const pending = this.openRequests.filter((request) => request.method === method)
       if (pending.length === 0) continue

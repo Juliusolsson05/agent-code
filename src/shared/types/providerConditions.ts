@@ -354,7 +354,21 @@ export type HermesValueConditionState = {
   queued: number
 }
 
+/**
+ * Telegram-thread mode (#1496): prompts the pane is HOLDING, unsent, while a
+ * phone turn runs on the thread (hermes-headless lane/laneBusy.ts says why
+ * sending then would put the prompt into the model's context twice). Not a
+ * request from Hermes and NOT attention-worthy: nothing waits on the user;
+ * the card exists so the user can see what is waiting and send it anyway or
+ * take it back.
+ */
+export type HermesHeldConditionState = {
+  visible: boolean
+  held: Array<{ id: string; text: string }>
+}
+
 export type HermesCondition =
+  | { kind: 'hermes.held'; state: HermesHeldConditionState; actions: ConditionAction[] }
   | { kind: 'hermes.approval'; state: HermesApprovalConditionState; actions: ConditionAction[] }
   | { kind: 'hermes.clarify'; state: HermesClarifyConditionState; actions: ConditionAction[] }
   | { kind: 'hermes.sudo'; state: HermesValueConditionState; actions: ConditionAction[] }

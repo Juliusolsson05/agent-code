@@ -243,6 +243,8 @@ export type SessionSpawnOptions = {
   userMcpOverrides?: Record<string, boolean>
   /** Remote providers (Hermes): the Settings connection this pane uses. */
   remoteConnectionId?: string
+  /** Hermes (#1496): the Telegram thread (gateway routing key) the pane follows. */
+  hermesLaneKey?: string
 }
 
 export type SessionSpawnResult = {

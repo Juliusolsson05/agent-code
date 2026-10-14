@@ -416,6 +416,14 @@ export function useSessionActions(
         builtInMcpDomains?: BuiltInMcpDomain[]
         /** Remote providers: the connection to open the conversation on. */
         remoteConnectionId?: string
+        /** Hermes (#1496): follow this Telegram thread instead of one conversation. */
+        hermesLaneKey?: string
+        /**
+         * Hermes (#1496, plan Decision 3, UNCONFIRMED): a NEW pane follows the
+         * connection's Telegram DM thread when it has one ('default'), unless
+         * the user asked for a separate chat ('none').
+         */
+        hermesLane?: 'default' | 'none'
       },
     ): Promise<SessionId> => {
       const kind: SessionKind = opts?.kind ?? DEFAULT_PROVIDER
@@ -427,6 +435,13 @@ export function useSessionActions(
       const remoteConnectionId = isRemoteProviderKind(kind)
         ? await resolveRemoteConnectionId(kind, opts?.remoteConnectionId)
         : undefined
+      // Only a brand-new Hermes pane looks the thread up: a resume (Reload
+      // Agent, recovery) carries its own identity, lane or not.
+      const hermesLaneKey = opts?.hermesLaneKey ?? (
+        kind === 'hermes' && remoteConnectionId && !opts?.resumeSessionId && opts?.hermesLane !== 'none'
+          ? (await window.api.hermesDefaultLane(remoteConnectionId).catch(() => null)) ?? undefined
+          : undefined
+      )
       const dangerousMode =
         opts?.dangerousMode ??
         (isAgentSessionKind(kind) ? refs.dangerousAgentsRef.current : undefined)
@@ -482,6 +497,7 @@ export function useSessionActions(
             // secrets and support itself (#1143, spec Revision 2 §4).
             ...(isAgentProviderKind(kind) ? { userMcpOverrides: userMcpOverridesFrom(builtInMcpOverrides) } : {}),
             ...(remoteConnectionId ? { remoteConnectionId } : {}),
+            ...(remoteConnectionId && hermesLaneKey ? { hermesLaneKey } : {}),
           })
           sessionId = result.sessionId
           tmuxName = result.tmuxName
@@ -560,6 +576,7 @@ export function useSessionActions(
             : {}),
           ...(isAgentProviderKind(kind) ? { userMcpServerIds: startedUserMcpServerIds ?? [] } : {}),
           ...(remoteConnectionId ? { remoteConnectionId } : {}),
+          ...(remoteConnectionId && hermesLaneKey ? { hermesLaneKey } : {}),
         }
         setState(prev => ({
           ...prev,
@@ -763,6 +780,7 @@ export function useSessionActions(
             builtInMcpDomains,
             ...(isAgentProviderKind(kind) ? { userMcpOverrides: userMcpOverridesFrom(builtInMcpOverrides) } : {}),
             ...(meta.remoteConnectionId ? { remoteConnectionId: meta.remoteConnectionId } : {}),
+            ...(meta.hermesLaneKey ? { hermesLaneKey: meta.hermesLaneKey } : {}),
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
             dangerousMode: isAgentSessionKind(kind) ? refs.dangerousAgentsRef.current : undefined,
             useProxy: isAgentSessionKind(kind) ? refs.useProxyStreamingRef.current : undefined,
@@ -1333,6 +1351,10 @@ export function useSessionActions(
         ...(nextKind === oldMeta.kind && oldMeta.remoteConnectionId
           ? { remoteConnectionId: oldMeta.remoteConnectionId }
           : {}),
+        // A Telegram-thread pane stays on the thread across Reload Agent.
+        ...(nextKind === oldMeta.kind && oldMeta.hermesLaneKey
+          ? { hermesLaneKey: oldMeta.hermesLaneKey }
+          : {}),
       })
       // WHY a finally, and why it wraps EVERY exit path including the bail-outs:
       // a stranded reservation would leave that pane permanently unnamed, which is
@@ -1720,6 +1742,7 @@ export function useSessionActions(
             builtInMcpDomains,
             ...(isAgentProviderKind(kind) ? { userMcpOverrides: userMcpOverridesFrom(builtInMcpOverrides) } : {}),
             ...(meta.remoteConnectionId ? { remoteConnectionId: meta.remoteConnectionId } : {}),
+            ...(meta.hermesLaneKey ? { hermesLaneKey: meta.hermesLaneKey } : {}),
           })
         } catch (err) {
           // WHY only a curated sentence survives (#1252 review, #1324 review

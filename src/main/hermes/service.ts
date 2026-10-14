@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import {
   HermesAuthError,
+  HermesHeadless,
   HermesRest,
   HermesStartError,
   backendCompatibility,
@@ -301,6 +302,21 @@ export class HermesConnectionService extends EventEmitter {
       accessToken: (options) => this.broker(connection).restAccessToken(options),
       fetchImpl: this.deps.fetchImpl,
     })
+  }
+
+  /**
+   * The Telegram DM thread a new Hermes pane follows by default (#1496, plan
+   * Decision 3, UNCONFIRMED), as its gateway routing key; null when the
+   * server has none or cannot be asked. Never throws: a failed lookup means
+   * a separate chat, not a failed pane.
+   */
+  async defaultLaneKey(id: string): Promise<string | null> {
+    try {
+      return (await HermesHeadless.defaultLane(this.restFor(id)))?.sessionKey ?? null
+    } catch (error) {
+      console.warn('[hermes] Telegram thread lookup failed:', describeError(error))
+      return null
+    }
   }
 
   /** Unauthenticated `/api/status`: is the messaging gateway running? Null when unreachable. */
