@@ -535,6 +535,10 @@ export const WAKE_CALLERS = [
   // above — not a direct human gesture, but always downstream of one
   // (a palette action), and rare enough that a storm means a stuck loop.
   'session-text-delivery',
+  // The Sidekick panel showing a sidekick this window just became the holder
+  // of (#1493): attach of a sleeping one, or Open here moving it in. Its own
+  // tag so a storm reads as "the panel keeps re-attaching", not lane churn.
+  'sidekick.attach',
 ] as const
 
 export type WakeCaller = (typeof WAKE_CALLERS)[number]

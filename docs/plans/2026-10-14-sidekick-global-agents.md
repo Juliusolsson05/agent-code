@@ -553,3 +553,8 @@ Each task names what it hands to the next. Every commit gets thick WHY comments;
     | persistable filter | killed |
 
   - **Workspace and app-API renderer suites:** 1557/1557.
+- **2026-10-14, Task 4.**
+  - **Ruling: "live here" is derived from this window's own `state.sessions`** (plan I2), never from a window id. The renderer has no API for its own window id, and the row is the authoritative fact anyway. `liveWindowId` from main only answers whether *some* window holds the sidekick.
+  - **Ruling: persistence schedules a save only if none is pending,** at most every 400 ms, instead of a restarting debounce. The app store changes on every streamed token, so a restarting debounce would never fire while the agent is talking.
+  - New wake caller: `sidekick.attach`.
+  - The filing-order mutant (filing after register) is killed.
