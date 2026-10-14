@@ -93,6 +93,7 @@ export type SettingDefinition =
   | { id: string; category: SettingCategoryId; title: string; description: string; keywords: string[]; metadata?: SettingMetadata; control: { type: 'external-control' } }
   | { id: string; category: SettingCategoryId; title: string; description: string; keywords: string[]; metadata?: SettingMetadata; control: { type: 'performance-monitor' } }
   | { id: string; category: SettingCategoryId; title: string; description: string; keywords: string[]; metadata?: SettingMetadata; control: { type: 'providers-enablement' } }
+  | { id: string; category: SettingCategoryId; title: string; description: string; keywords: string[]; metadata?: SettingMetadata; control: { type: 'hermes-connections' } }
   | {
       id: string
       category: SettingCategoryId
@@ -1143,10 +1144,24 @@ export function getSettingsRegistry(
       title: 'Providers',
       description:
         'Choose which coding agents Agent Code offers. Detected CLIs start on; turning a provider off hides it from pickers, switching, and usage — running sessions keep running. Reset returns a provider to detection.',
-      keywords: ['provider', 'providers', 'enable', 'disable', 'claude', 'codex', 'opencode', 'grok', 'pi', 'usage', 'hide'],
+      keywords: ['provider', 'providers', 'enable', 'disable', 'claude', 'codex', 'opencode', 'grok', 'pi', 'hermes', 'usage', 'hide'],
       // Main's setup.json is the truth (storage: 'setup'); the row mirrors it.
       metadata: { scope: 'app', apply: 'new-session', storage: 'setup' },
       control: { type: 'providers-enablement' },
+    },
+    {
+      // Hermes (#1482) is remote: instead of a CLI to detect, it needs a
+      // connection to the user's own `hermes serve`. Lives next to Providers
+      // because that is where a user looks for "how do I get Hermes panes".
+      id: 'hermes-connections',
+      category: 'providers',
+      title: 'Hermes Connections',
+      description:
+        'Your Hermes servers. Add the URL of a running `hermes serve`, sign in through your browser (password or Nous), and Hermes panes open a chat with that agent. Agent Code keeps the sign-in encrypted on this Mac.',
+      keywords: ['hermes', 'nous', 'vps', 'server', 'telegram', 'connection', 'remote', 'sign in', 'gateway'],
+      // Main's connections.json + safeStorage are the truth; the row mirrors it.
+      metadata: { scope: 'app', apply: 'new-session', storage: 'setup' },
+      control: { type: 'hermes-connections' },
     },
     {
       // Kept in the experimental category alongside proxy-streaming for

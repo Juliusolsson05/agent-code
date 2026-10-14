@@ -1,7 +1,7 @@
 import { sessionIsWorking } from '@renderer/session-runtime/working'
 import { useMonitorCommit } from '@renderer/performance/useMonitorCommit'
 import { useUsageLimitActions } from '@renderer/features/usage-limit/useUsageLimitActions'
-import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentProviderKind, isChatSurfaceProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
@@ -13,6 +13,8 @@ import { agentFollowEnabled } from '@renderer/workspace/agentFollow'
 import { focusIsUnowned, useInteractiveOwnership } from '@renderer/workspace/tile-tree/TileLeaf/useInteractiveOwnership'
 import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 import { AgentFeed } from '@renderer/features/feed/agent/AgentFeed'
+import { HermesChatFeed } from '@renderer/features/hermes-chat/HermesChatFeed'
+import { useHermesConnections } from '@renderer/features/hermes-chat/useHermesConnections'
 import { useAgentFeedModel } from '@renderer/features/feed/agent/useAgentFeedModel'
 import { StarterHintCard, starterCardVisibleForAgent } from '@renderer/features/workspace/ui/StarterHintCard'
 import type { ScrollInfo } from '@renderer/features/feed/ui/Feed'
@@ -549,6 +551,11 @@ export function TileLeaf({
   // same ledger rows Feed paints.
   const feedModel = useAgentFeedModel(runtime, provider, sessionId)
   const { ledgerFeedPlan } = feedModel
+  const remoteConnectionId = workspace.state.sessions[sessionId]?.remoteConnectionId
+  const hermesConnections = useHermesConnections(isChatSurfaceProviderKind(provider))
+  const hermesConnectionName = remoteConnectionId
+    ? hermesConnections?.find((connection) => connection.id === remoteConnectionId)?.name ?? null
+    : null
 
   const workflowCwd = workspace.state.sessions[sessionId]?.cwd ?? null
   const transcriptWorkflowReferences = useMemo(() => collectWorkflowRunReferences({
@@ -907,7 +914,7 @@ export function TileLeaf({
           (history replayed into entries) never shows one. Terminal views
           (AgentTerminalLeaf) never mount this component at all: a raw PTY is
           the provider's canvas and we do not paint over its welcome screen. */}
-      {starterCardVisibleForAgent(
+      {!isChatSurfaceProviderKind(provider) && starterCardVisibleForAgent(
         workspace.state.sessions[sessionId],
         runtime.entries,
       ) && <StarterHintCard variant="fresh-agent" />}
@@ -921,6 +928,14 @@ export function TileLeaf({
             reference={selectedWorkflow.reference}
             cwd={selectedWorkflow.cwd}
             onReferenceChange={workflowViews.replaceReference}
+          />
+        ) : isChatSurfaceProviderKind(provider) ? (
+          // Chat-surface providers (Hermes, #1482) draw the SAME ledger rows
+          // as a chat; everything else in this pane is unchanged.
+          <HermesChatFeed
+            sessionId={sessionId}
+            items={ledgerFeedPlan.items}
+            connectionName={hermesConnectionName}
           />
         ) : (
           <AgentFeed

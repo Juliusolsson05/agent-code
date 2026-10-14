@@ -20,6 +20,7 @@ import type { SessionId, SessionKind, SessionMeta, WorkspaceState } from '@rende
 import type { BuiltInMcpDomain, BuiltInMcpOverrides } from '@mcp/shared/types'
 import { resolveSessionBuiltInMcpDomains, sessionMcpOverrides, spawnMcpOverrides } from '@renderer/workspace/mcpDomains'
 import { userMcpOverridesFrom } from '@shared/userMcp/types'
+import { resolveRemoteConnectionId } from '@renderer/workspace/remoteConnection'
 import {
   remapTiledLanes,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
@@ -412,9 +413,12 @@ export function useSessionActions(
         tldrIdentity?: string
         builtInMcpOverrides?: BuiltInMcpOverrides
         builtInMcpDomains?: BuiltInMcpDomain[]
+        /** Remote providers: the connection to open the conversation on. */
+        remoteConnectionId?: string
       },
     ): Promise<SessionId> => {
       const kind: SessionKind = opts?.kind ?? DEFAULT_PROVIDER
+      const remoteConnectionId = await resolveRemoteConnectionId(kind, opts?.remoteConnectionId)
       const dangerousMode =
         opts?.dangerousMode ??
         (isAgentSessionKind(kind) ? refs.dangerousAgentsRef.current : undefined)
@@ -469,6 +473,7 @@ export function useSessionActions(
             // Only the pane's explicit choices cross; main applies Settings,
             // secrets and support itself (#1143, spec Revision 2 §4).
             ...(isAgentProviderKind(kind) ? { userMcpOverrides: userMcpOverridesFrom(builtInMcpOverrides) } : {}),
+            ...(remoteConnectionId ? { remoteConnectionId } : {}),
           })
           sessionId = result.sessionId
           tmuxName = result.tmuxName
@@ -546,6 +551,7 @@ export function useSessionActions(
             ? { builtInMcpDomains, builtInMcpOverrides }
             : {}),
           ...(isAgentProviderKind(kind) ? { userMcpServerIds: startedUserMcpServerIds ?? [] } : {}),
+          ...(remoteConnectionId ? { remoteConnectionId } : {}),
         }
         setState(prev => ({
           ...prev,
@@ -748,6 +754,7 @@ export function useSessionActions(
             resumeSessionId,
             builtInMcpDomains,
             ...(isAgentProviderKind(kind) ? { userMcpOverrides: userMcpOverridesFrom(builtInMcpOverrides) } : {}),
+            ...(meta.remoteConnectionId ? { remoteConnectionId: meta.remoteConnectionId } : {}),
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
             dangerousMode: isAgentSessionKind(kind) ? refs.dangerousAgentsRef.current : undefined,
             useProxy: isAgentSessionKind(kind) ? refs.useProxyStreamingRef.current : undefined,
@@ -1696,6 +1703,7 @@ export function useSessionActions(
             useProxy: isAgentSessionKind(kind) ? refs.useProxyStreamingRef.current : undefined,
             builtInMcpDomains,
             ...(isAgentProviderKind(kind) ? { userMcpOverrides: userMcpOverridesFrom(builtInMcpOverrides) } : {}),
+            ...(meta.remoteConnectionId ? { remoteConnectionId: meta.remoteConnectionId } : {}),
           })
         } catch (err) {
           // WHY only a curated sentence survives (#1252 review, #1324 review
