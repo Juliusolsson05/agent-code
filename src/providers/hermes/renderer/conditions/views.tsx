@@ -22,12 +22,14 @@ import { useEffect, useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
 import { Input } from '@renderer/components/ui/input'
-import { HERMES_ANSWER } from '@providers/hermes/runtime/requestAnswers'
+import { HERMES_ANSWER, HERMES_CONNECTION_RESPOND } from '@providers/hermes/runtime/requestAnswers'
+import { useRendererHost } from '@renderer/features/rendererHost/RendererHostContext'
 import { defineView, eraseRegistry } from '@shared/conditions-core/view'
 import type { ConditionView } from '@shared/conditions-core/view'
 import type { ConditionAction, ConditionCustomAction } from '@shared/conditions-core/contract'
 import type {
   HermesApprovalConditionState,
+  HermesConnectionConditionState,
   HermesClarifyConditionState,
   HermesClarifyQuestion,
   HermesHeldConditionState,
@@ -37,6 +39,7 @@ import { withVisibleControls } from '@shared/text/visibleControls'
 
 type HermesStateByKind = {
   'hermes.held': HermesHeldConditionState
+  'hermes.connection': HermesConnectionConditionState
   'hermes.approval': HermesApprovalConditionState
   'hermes.clarify': HermesClarifyConditionState
   'hermes.sudo': HermesValueConditionState
@@ -44,7 +47,11 @@ type HermesStateByKind = {
 }
 
 function isDecline(action: ConditionAction): boolean {
-  return action.kind === 'custom' && action.name !== HERMES_ANSWER
+  if (action.kind !== 'custom') return false
+  // Connection actions are keyed by their id suffix, never their label
+  // (review B F9): ":approve"/":composed" go forward, the rest decline.
+  if (action.name === HERMES_CONNECTION_RESPOND) return !/:(approve|composed)$/.test(action.id)
+  return action.name !== HERMES_ANSWER
 }
 
 function Card({ title, queued, children }: { title: string; queued: number; children: React.ReactNode }) {
@@ -316,6 +323,216 @@ export const hermesSecretView = defineView<'hermes.secret', HermesValueCondition
     ) : null,
 })
 
+// What Hermes is asking for, in words (target.kind × target.action, the
+// vocabulary of tui_gateway/contracts/connectors_operation.py).
+function connectionHeadline(target: HermesConnectionConditionState['targets'][number]): string {
+  const name = target.catalog?.display ?? target.name
+  if (target.kind === 'connector') return target.action === 'reconnect' ? `Reconnect your ${name} account` : `Connect your ${name} account`
+  if (target.kind === 'mcp') return target.action === 'authorize' ? `Authorize the ${name} MCP server` : `Install the ${name} MCP server`
+  if (target.kind === 'plugin') return target.action === 'enable' ? `Enable the ${name} plugin` : `Install the ${name} plugin`
+  if (target.kind === 'skill') return `Install the ${name} skill`
+  return `Set up ${name}`
+}
+
+// Row states in words. `initiated` WITHOUT a link is Hermes working (an
+// install running on the server, recorded S28); WITH a link it is waiting on
+// the user's browser (review A F2).
+function stateText(target: HermesConnectionConditionState['targets'][number]): string | null {
+  switch (target.state) {
+    case 'pending': return null
+    case 'initiated': return target.connectUrl ? 'waiting for you to finish signing in…' : 'working…'
+    case 'connected': return 'connected'
+    case 'skipped': return 'skipped'
+    case 'failed': return 'failed'
+    case 'expired': return 'the link expired'
+    case 'not_connected': return 'not connected'
+    default: return target.state
+  }
+}
+
+/** http(s) only, again at the click (review B F3): the phone hands this to window.open. */
+function safeLink(url: string | null): string | null {
+  if (!url) return null
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? parsed.toString() : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * One row of the connection card. Typed values live only in this component:
+ * kept until the answer is handed off (a refused send would otherwise make
+ * the user retype a long secret, review B F6) and dropped once the row moves
+ * on. They never enter condition state, logs or persistence.
+ */
+function ConnectionTargetRow({
+  opId,
+  target,
+  actions,
+  dispatch,
+}: {
+  opId: string
+  target: HermesConnectionConditionState['targets'][number]
+  actions: ConditionAction[]
+  dispatch: (action: ConditionAction) => Promise<void>
+}) {
+  const host = useRendererHost()
+  // A secret's `default` is never pre-filled (review B F7; Hermes' own card does the same).
+  const initial = () => Object.fromEntries(target.requiredEnv.map((field) => [field.name, field.secret ? '' : field.default]))
+  const [values, setValues] = useState<Record<string, string>>(initial)
+  const [sending, setSending] = useState(false)
+  const [linkProblem, setLinkProblem] = useState<string | null>(null)
+  useEffect(() => {
+    // The row moved on (installing, connected, skipped): the draft is spent.
+    if (target.state !== 'pending' && target.state !== 'failed' && target.state !== 'expired') setValues(initial())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target.state])
+  const mine = actions.filter((action) => action.kind === 'custom' && action.id.startsWith(`${opId}:${target.name}:`))
+  const send = (action: ConditionAction) => {
+    setSending(true)
+    void dispatch(action).finally(() => setSending(false))
+  }
+  const approve = mine.find((action) => action.kind === 'custom' && action.id.endsWith(':approve'))
+  const formOpen = !target.resolved && target.requiredEnv.length > 0 && (target.state === 'pending' || target.state === 'failed' || target.state === 'expired') && target.kind !== 'connector' && target.catalog?.scan?.status !== 'failed'
+  const missing = target.requiredEnv.some((field) => field.required && !values[field.name]?.trim())
+  const link = safeLink(target.connectUrl)
+  const status = stateText(target)
+  const scan = target.catalog?.scan ?? null
+  return (
+    <div className="mt-1.5 rounded-control border border-border bg-canvas px-2.5 py-2" data-connection-target={target.name}>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="font-medium text-ink">{connectionHeadline(target)}</span>
+        {status && <span className={`text-[11px] ${target.state === 'failed' || target.state === 'expired' ? 'text-danger' : 'text-muted'}`}>{status}</span>}
+      </div>
+      {target.detail && <p className="mt-0.5 text-[11px] text-ink-dim">{withVisibleControls(target.detail)}</p>}
+      {target.catalog && (
+        // Third-party code on the user's server: what it is and what Hermes'
+        // scan said, before any button (review B F1).
+        <div className="mt-1 flex flex-col gap-0.5 text-[11px] text-ink-dim" data-connection-catalog>
+          {target.catalog.description && <span>{withVisibleControls(target.catalog.description)}</span>}
+          <span className="font-code text-muted">
+            {[target.catalog.tier, target.catalog.repo && `${target.catalog.repo}${target.catalog.sha ? `@${target.catalog.sha.slice(0, 7)}` : ''}`].filter(Boolean).join(' · ')}
+          </span>
+          {scan && (
+            <span className={scan.status === 'failed' ? 'text-danger' : scan.status === 'warnings' ? 'text-ink' : 'text-muted'}>
+              Security scan {scan.status}{scan.summary ? `: ${scan.summary}` : ''}
+            </span>
+          )}
+          {scan?.status === 'failed' && <span className="text-danger">Not installable from here. If you trust it anyway, install it from the terminal on your Hermes server.</span>}
+        </div>
+      )}
+      {target.instructions && (
+        // Hermes' own setup text: long, so folded; the buttons stay in reach.
+        <details className="mt-1 text-[11px] text-ink-dim">
+          <summary className="cursor-pointer select-none text-muted">How to set it up</summary>
+          <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words font-code">{withVisibleControls(target.instructions)}</pre>
+        </details>
+      )}
+      {!target.resolved && (
+        <>
+          {formOpen ? (
+            <form
+              className="mt-1.5 flex flex-col gap-1.5"
+              onSubmit={(event) => {
+                event.preventDefault()
+                if (missing || sending) return
+                send({ kind: 'custom', id: `${opId}:${target.name}:composed`, label: 'Connect', name: HERMES_CONNECTION_RESPOND, payload: { opId, answer: { targets: [{ name: target.name, status: 'approved', env: values }] } } })
+              }}
+            >
+              {target.requiredEnv.map((field) => (
+                // The visible prompt IS the accessible name (review B F8);
+                // the variable name is shown, not announced instead of it.
+                <label key={field.name} className="flex flex-col gap-0.5 text-[11px] text-ink-dim">
+                  <span>{field.prompt ?? field.name}{field.required ? '' : ' (optional)'}</span>
+                  <Input
+                    type={field.secret ? 'password' : 'text'}
+                    autoComplete="off"
+                    required={field.required}
+                    aria-required={field.required}
+                    value={values[field.name] ?? ''}
+                    onChange={(event) => setValues((current) => ({ ...current, [field.name]: event.target.value }))}
+                  />
+                  <span className="font-code text-[10px] text-muted">{field.name}</span>
+                </label>
+              ))}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Button type="submit" size="sm" disabled={missing || sending}>{target.state === 'pending' ? 'Connect' : 'Try again'}</Button>
+                {mine.filter(isDecline).map((action) => (
+                  <Button key={action.kind === 'custom' ? action.id : 'skip'} type="button" size="sm" variant="ghost" disabled={sending} onClick={() => send(action)}>{action.label}</Button>
+                ))}
+                {missing && <span className="text-[11px] text-muted">Fill in the required field{target.requiredEnv.filter((field) => field.required).length === 1 ? '' : 's'} to connect.</span>}
+              </div>
+            </form>
+          ) : (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              {link && (
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => {
+                    setLinkProblem(null)
+                    // modifierHeld: the system browser, never the lane's
+                    // pocket — a sign-in belongs where the user's accounts are.
+                    void host.openExternalUrl({ url: link, sessionId: '', modifierHeld: true }).then((outcome) => {
+                      if (outcome !== 'opened') setLinkProblem('The sign-in link could not be opened. Copy it below.')
+                    })
+                  }}
+                >
+                  Open sign-in
+                </Button>
+              )}
+              {approve && <Button type="button" size="sm" disabled={sending} onClick={() => send(approve)}>{approve.label}</Button>}
+              {mine.filter(isDecline).map((action) => (
+                <Button key={action.kind === 'custom' ? action.id : 'skip'} type="button" size="sm" variant="ghost" disabled={sending} onClick={() => send(action)}>{action.label}</Button>
+              ))}
+            </div>
+          )}
+          {link && (
+            <>
+              {/* Visible and selectable (review B F9): when the browser cannot be opened, the user copies it. */}
+              <p className="mt-1 select-all break-all font-code text-[10px] text-muted">{link}</p>
+              <p className="mt-0.5 text-[11px] text-muted">
+                {target.kind === 'connector'
+                  ? 'Sign in in your browser; this card updates when Hermes sees the account.'
+                  // A catalog OAuth link redirects to 127.0.0.1 ON THE HERMES
+                  // HOST (mcp_oauth.py): from this Mac it completes only if
+                  // Hermes runs here or that port is tunnelled (review A F3).
+                  : `This sign-in finishes on your Hermes server. If Hermes runs on a VPS, run \`hermes mcp login ${target.name}\` there instead, or tunnel its callback port.`}
+              </p>
+            </>
+          )}
+          {linkProblem && <p className="mt-1 text-[11px] text-danger">{linkProblem}</p>}
+        </>
+      )}
+    </div>
+  )
+}
+
+export const hermesConnectionView = defineView<'hermes.connection', HermesConnectionConditionState>({
+  kind: 'hermes.connection',
+  layout: 'strip',
+  attention: (state) => (state?.visible ? 'ACTION' : null),
+  Component: ({ state, actions, dispatch }) => {
+    if (!state?.visible) return null
+    const first = state.targets.find((target) => !target.resolved) ?? state.targets[0]
+    const continueAction = actions.filter((action) => action.kind === 'custom' && action.id === `${state.opId}:continue`)
+    return (
+      // Titled by what is asked (review B F9): an MCP install is not "an account".
+      <Card title={first ? `Hermes asks: ${connectionHeadline(first)}` : 'Hermes needs something set up'} queued={0}>
+        <p className="text-[11px] text-muted">
+          The reply is paused until you answer.{state.deadlineAt ? <> <Countdown until={state.deadlineAt} /></> : null}
+        </p>
+        {state.targets.map((target) => (
+          <ConnectionTargetRow key={`${state.opId}:${target.name}`} opId={state.opId} target={target} actions={actions} dispatch={dispatch} />
+        ))}
+        <ActionRow actions={continueAction} dispatch={dispatch} />
+      </Card>
+    )
+  },
+})
+
 export const hermesHeldView = defineView<'hermes.held', HermesHeldConditionState>({
   kind: 'hermes.held',
   layout: 'strip',
@@ -337,6 +554,7 @@ export const hermesHeldView = defineView<'hermes.held', HermesHeldConditionState
 
 export const HERMES_VIEWS: Record<string, ConditionView> = eraseRegistry<HermesStateByKind>({
   'hermes.held': hermesHeldView,
+  'hermes.connection': hermesConnectionView,
   'hermes.approval': hermesApprovalView,
   'hermes.clarify': hermesClarifyView,
   'hermes.sudo': hermesSudoView,
