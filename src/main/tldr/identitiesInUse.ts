@@ -1,5 +1,6 @@
 import { projectWorkspace } from '@main/agentActivity/workspaceProjection.js'
 import type { PersistedWindow } from '@main/storage/workspaceFile.js'
+import type { PersistedSidekicks } from '@shared/sidekicks/types.js'
 
 /**
  * The TLDR/Goal identities the persisted workspace names, which the stores may
@@ -19,10 +20,15 @@ import type { PersistedWindow } from '@main/storage/workspaceFile.js'
  */
 export function tldrIdentitiesInUse(
   windows: readonly PersistedWindow[] | null,
+  // Sidekicks (#1493): a parked sidekick has no backend either, and its panel
+  // reads its TLDR/Goal by the same identity — so it is "in use" exactly like
+  // a parked lane agent. Without this the stores could evict a sidekick's
+  // status at their cap.
+  sidekicks?: PersistedSidekicks,
 ): ReadonlySet<string> | null {
   if (windows === null) return null
   const inUse = new Set<string>()
-  for (const placement of projectWorkspace(windows).sessions.values()) {
+  for (const placement of projectWorkspace(windows, sidekicks).sessions.values()) {
     if (placement.tldrIdentity) inUse.add(placement.tldrIdentity)
     // WHY the session id as well, for every session (#1328 round 2, all
     // three reviewers): the renderer reads a session with no explicit

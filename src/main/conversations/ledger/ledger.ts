@@ -3,6 +3,7 @@ import { dirname } from 'node:path'
 
 import { conversationKey } from '@shared/conversations/types.js'
 import { isAgentProviderKind } from '@shared/types/providerKind.js'
+import type { PersistedSidekicks } from '@shared/sidekicks/types.js'
 import type { PersistedWindow } from '@main/storage/workspaceFile.js'
 import type { LedgerRow } from './types.js'
 
@@ -109,11 +110,22 @@ export class ConversationLedger {
   /** Upsert every agent session with a native id across all windows; close
    *  rows whose native id no longer appears anywhere. Serialised on a tail so
    *  two quick saves cannot interleave their appends. */
-  projectWindows(windows: readonly PersistedWindow[], agentNames: Readonly<Record<string, string>>, now = Date.now()): Promise<void> {
+  projectWindows(
+    windows: readonly PersistedWindow[],
+    agentNames: Readonly<Record<string, string>>,
+    now = Date.now(),
+    // Sidekicks (#1493) are never in a window slice. Without them here every
+    // save marked a sidekick's conversation CLOSED (it "no longer appears
+    // anywhere"), and Conversations would list a live sidekick as finished.
+    // Each record is read as a one-session pseudo-slice; it is marked closed
+    // only when Remove Sidekick drops the record.
+    sidekicks?: PersistedSidekicks,
+  ): Promise<void> {
     const run = this.tail.then(async () => {
       const seen = new Set<string>()
       const changed: LedgerRow[] = []
-      for (const window of windows) {
+      const sidekickSlices = (sidekicks?.records ?? []).map(record => ({ workspace: { sessions: { [record.sessionId]: record.meta } } }))
+      for (const window of [...windows, ...sidekickSlices]) {
         if (!isRecord(window.workspace) || !isRecord(window.workspace.sessions)) continue
         const sessions = window.workspace.sessions
         for (const [localId, metaRaw] of Object.entries(sessions)) {

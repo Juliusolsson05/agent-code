@@ -642,6 +642,15 @@ export const KILL_CALLERS = [
   'reload.orphaned-successor',
   // Dangerous-mode toggle reloading every running agent.
   'reload.agent-sessions',
+  // ── sidekicks (#1493) ──────────────────────────────────────────────────
+  // Remove Sidekick: main kills with its own authority from whichever window
+  // the user is in (SidekickService.remove). Its own tag because a sidekick
+  // is not a lane agent, and "the user removed their Hermes sidekick" must
+  // not read as a pane close in a journal.
+  'sidekick.remove',
+  // A sidekick whose spawn succeeded but whose registration with main failed
+  // (e.g. a read-only workspace.json): the renderer retires the orphan.
+  'sidekick.register-failed',
 ] as const
 
 export type KillCaller = (typeof KILL_CALLERS)[number]

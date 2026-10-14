@@ -1,4 +1,5 @@
 import type { PersistedWindow } from '@main/storage/workspaceFile.js'
+import type { PersistedSidekicks } from '@shared/sidekicks/types.js'
 
 // Where each session lives, read from the persisted workspace (#964).
 //
@@ -97,7 +98,17 @@ function collectLeaves(
   }
 }
 
-export function projectWorkspace(windows: readonly PersistedWindow[]): WorkspaceProjection {
+/** The tab title every sidekick placement carries. Sidekicks belong to no
+ *  project; this label is what Agent Activity, TLDR's in-use set and the
+ *  remote phone show instead of a project name (#1493). */
+export const SIDEKICK_PLACEMENT_TITLE = 'Sidekick'
+
+export function projectWorkspace(
+  windows: readonly PersistedWindow[],
+  // WHY optional: most callers (and their tests) predate sidekicks; omitting
+  // it must mean "none", never a throw. Main's real callers always pass it.
+  sidekicks?: PersistedSidekicks,
+): WorkspaceProjection {
   const sessions = new Map<string, SessionPlacement>()
   const openTabTitles = new Set<string>()
 
@@ -171,6 +182,27 @@ export function projectWorkspace(windows: readonly PersistedWindow[]): Workspace
         tabTitle: tabId ? (tabTitleById.get(tabId) || null) : null,
       })
     }
+  }
+  // Sidekicks (#1493) are never in a window slice (plan I1), so without this
+  // every reader of the projection treated them as non-existent: Agent
+  // Activity lost their titles, TLDR/Goal could evict their identities, the
+  // phone showed them nameless. Same defensive read as a slice row — `meta`
+  // is the renderer's opaque SessionMeta.
+  for (const record of sidekicks?.records ?? []) {
+    const meta = isRecord(record.meta) ? record.meta : {}
+    if (sessions.has(record.sessionId)) continue
+    sessions.set(record.sessionId, {
+      sessionId: record.sessionId,
+      kind: str(meta.kind) ?? 'claude',
+      cwd: str(meta.cwd),
+      title: str(meta.title),
+      agentNameId: str(meta.agentNameId),
+      tldrIdentity: str(meta.tldrIdentity),
+      pinned: false,
+      orchestration: false,
+      tabId: null,
+      tabTitle: SIDEKICK_PLACEMENT_TITLE,
+    })
   }
   return { sessions, openTabTitles }
 }

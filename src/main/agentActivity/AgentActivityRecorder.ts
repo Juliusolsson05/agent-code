@@ -1,6 +1,7 @@
 import { basename } from 'node:path'
 
 import type { SessionManager } from '@main/sessionManager.js'
+import type { PersistedSidekicks } from '@shared/sidekicks/types.js'
 import type { PersistedWindow } from '@main/storage/workspaceFile.js'
 import type { AgentActivityRange, AgentActivitySummary } from '@shared/agentActivity/summaryTypes.js'
 import {
@@ -119,8 +120,13 @@ export class AgentActivityRecorder {
   }
 
   /** Follow the persisted workspace: tabs, titles, names, orchestration links. */
-  updateWorkspace(windows: readonly PersistedWindow[], agentNames: Readonly<Record<string, string>>): void {
-    this.projection = projectWorkspace(windows)
+  updateWorkspace(
+    windows: readonly PersistedWindow[],
+    agentNames: Readonly<Record<string, string>>,
+    // Sidekicks (#1493) get placements too, titled "Sidekick"; see projectWorkspace.
+    sidekicks?: PersistedSidekicks,
+  ): void {
+    this.projection = projectWorkspace(windows, sidekicks)
     this.agentNames = agentNames
     // Join provisional keys to the identity the projection now shows (#1302,
     // see AgentActivityStore.appendAliases): the session id, for intervals a

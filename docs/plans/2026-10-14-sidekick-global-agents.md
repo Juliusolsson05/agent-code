@@ -525,3 +525,13 @@ Each task names what it hands to the next. Every commit gets thick WHY comments;
 ## Execution notes
 
 (Append-only, dated, during the build.)
+
+- **2026-10-14, Task 1 done** (`6b6f673e`):
+  - the file section plus the store queue;
+  - a new sanitized capture of the real `workspace.json`, which includes the first real Hermes row, and a documented sidekick mutation of it;
+  - the carry mutant is killed by 2 tests.
+- **2026-10-14, Task 2.**
+  - **Ruling: `attach` claims the router lease itself** (`claimSessionForWindow`) instead of leaving the claim to the renderer's `session:recover`. Why: two windows opening the same sleeping sidekick at once would otherwise both insert the row and race the recover, and the loser would show a raw "owned by another window" error in its pane. Claiming in `attach` makes exactly one winner, and the other gets `owned-elsewhere`. Cost if wrong: a window that wins `attach` but fails to recover keeps the lease, so the sidekick shows as "here" in that window until it retries or the window closes. That is visible and recoverable.
+  - **Ruling: observers get sidekicks as a second argument** (`(windows, sidekicks)`), not as a snapshot object. The four projections opt in, and every other listener compiles unchanged.
+  - The shared fake store in `remote/workspaceProjection.testSupport.ts` gained `sidekicks()`, so it matches the real store interface.
+  - New kill callers: `sidekick.remove` and `sidekick.register-failed`.
