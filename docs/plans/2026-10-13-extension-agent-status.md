@@ -2,7 +2,7 @@
 
 Fixes #1479. Refs Juliusolsson05/agent-code-extension-api#7, Juliusolsson05/agent-code-skitgubbe#6.
 Branch `feat/extension-agent-status` · Worktree `.worktrees/extension-agent-status` · Base `origin/main` @ `1bcba637` (2026-10-13)
-Status: approved 2026-10-13 (owner: "all defaults", full build, publish the SDK when done). Merges need explicit approval.
+Status: implemented; PRs agent-code#1480, agent-code-extension-api#8, agent-code-skitgubbe#7. Owner approved merging all three and a Skitgubbe release (2026-10-13).
 
 This plan covers three repositories, because the feature is one contract that crosses them:
 
@@ -248,17 +248,22 @@ Skitgubbe, `tests/agent-panel.test.mjs` (node:test, same runner as the other tes
 
 ## Tasks
 
-- [ ] 1. Host: move the badge rule, add `sessionStatus.ts`, project + subscribe in
+- [x] 1. Host: move the badge rule, add `sessionStatus.ts`, project + subscribe in
   `createAppHostApi`, nudge in `viewBridge`, types, disclosure, authoring doc, tests.
-- [ ] 2. SDK: fields, exports, docs, CHANGELOG, version, dist; PR; one review round.
-- [ ] 3. Skitgubbe: panel, API widening, manifest, SDK bump, tests, build, browser
+- [x] 2. SDK: fields, exports, docs, CHANGELOG, version, dist; PR; one review round.
+- [x] 3. Skitgubbe: panel, API widening, manifest, SDK bump, tests, build, browser
   check; PR.
-- [ ] 4. Review round (one) across the three PRs; fix valid findings.
+- [x] 4. Review round (one) across the three PRs; fix valid findings.
 - [ ] 5. Publish SDK v0.11.0 (merge SDK PR, tag, GitHub release); bump the host
   submodule to the tagged commit; Skitgubbe pins `#v0.11.0`.
 - [ ] 6. Report; host and Skitgubbe merges wait for explicit approval.
 
 ## Execution notes
+
+- 2026-10-13 task 1: `7347ea80` (badge rule move), `97b66e2f` (projection + nudge), `1cbf4d20` (SDK pointer). tsc -b clean; apps suite 45/45; four mutations caught (confirm-red observed).
+- 2026-10-13 task 2: SDK `2dcd691`; npm test 3/3, check:dist clean; required-`activity` mutation caught (TS2578).
+- 2026-10-13 task 3: Skitgubbe `7dec2e0`; verify 3/3 + 45/45, test:browser and test:lan-browser pass; screenshots of both modals.
+- 2026-10-13 task 4: six Claude reviewers (two per PR). Fixes: host `beb2f71a`, SDK `7b43bcd`, Skitgubbe `5f43419`. Every reviewer-surviving mutation re-run and now caught (9 host, 2 SDK type pins, 2 Skitgubbe loop).
 
 ## Rulings
 
@@ -268,6 +273,40 @@ Skitgubbe, `tests/agent-panel.test.mjs` (node:test, same runner as the other tes
   existing permission — cost if wrong: a privacy-minded user sees more than they
   approved (working/idle and a badge word, no content); fix would be a permission
   version bump.
+- Ruling: the Skitgubbe panel gets its own `AgentStatusApi = AgentCodeApiV1['sessions']`
+  instead of widening `SkitgubbeApi` as the Design section said — the game code
+  has no reason to read sessions — cost if wrong: none (DRIFT from Design, intended).
+- Ruling: keep the field name `notification` (sdk-a suggested `badge` because the SDK
+  also has a `notifications.show` toast API) — it is the owner's own word for the
+  feature, and the JSDoc/README now say it needs `sessions.observe`, not
+  `notifications.*` — cost if wrong: a rename after v0.11.0 is a breaking change.
+- Ruling: the frame nudge lives in `apps/host/observeNudges.ts`, not inline in
+  viewBridge — review showed the inline block could not be tested and every
+  mutation of it survived — cost if wrong: none.
 - Ruling: Skitgubbe lists agent kinds only, not shell terminals or extension panes —
   the owner asked for "working agents"; Dispatch badges shells, but a shell's
   "command finished" is noise beside a card table — cost if wrong: one filter line.
+
+## Review (2026-10-13, one round)
+
+| Finding | Verdict | Disposition |
+|---|---|---|
+| host-a/host-b: frame nudge path untested, every viewBridge mutation survives | valid | fixed in `beb2f71a` (observeNudges.ts + fake-timer test) |
+| host-a/host-b: badge-only status change never asserted (signature without badge survives) | valid | fixed in `beb2f71a` |
+| host-a/host-b: precedence (live prompt vs stale unread / leftover error) unpinned | valid | fixed in `beb2f71a` |
+| host-b: unsubscribe untested | valid | fixed in `beb2f71a` |
+| host-a: same-realm subscribe fires twice on a session add | valid (nit) | fixed in `beb2f71a` (one selector) |
+| host-b/host-a: consent wording omits unseen output / viewing signal | valid | fixed in `beb2f71a` |
+| host-b: host type comments not updated | valid | fixed in `beb2f71a` |
+| sdk-a/sdk-b/host-b: "clears when the user looks" true only for `output` | valid | fixed in SDK `7b43bcd` + authoring.md |
+| sdk-a: "widening is additive" is backwards for a host-written union | valid | fixed in SDK `7b43bcd` |
+| sdk-a/sdk-b: contract fixture pins only part of the new surface | valid | fixed in SDK `7b43bcd` (two mutations re-run: caught) |
+| sdk-b: CHANGELOG host version placeholder before tag | valid | fixed: names "the first Agent Code release after 0.1.4 (#1480)" |
+| sdk-b/sdk-a: README "of SDK 0.11.0", "never fires" too strong | valid (nit) | fixed in SDK `7b43bcd` |
+| sdk-a: rename `notification` → `badge` | owner-vocabulary call | declined, see Rulings |
+| sg-a: read loop discards answers under steady nudges, can freeze | valid | fixed in Skitgubbe `5f43419` (+ regression tests, mutation caught) |
+| sg-a: ordering test does not pin attention > NEW | valid | fixed in `5f43419` |
+| sg-a: deny-list trade-off undocumented | valid | documented in `5f43419` |
+| sg-a: untitled agents don't match Dispatch names | valid, needs host | follow-up agent-code#1483; provider names fixed in `5f43419` |
+| sg-a: panel shrinks the table on narrow windows | valid trade-off | accepted; recorded here and in the Skitgubbe PR |
+| sg-a: focus comment wrong, idle dot invisible, no live region | valid (nits) | fixed in `5f43419` |
