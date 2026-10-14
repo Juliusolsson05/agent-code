@@ -8,12 +8,12 @@ import {
   claimSessionForWindow,
   createAppWindow,
   captureSessionWindowLease,
-  focusedWindowId,
   isWindowRendererReady,
   listWindowIds,
   releaseSession,
   sendToWindow,
   transferSession,
+  windowIdsByRecentFocus,
   windowIdFor,
   windowRendererGeneration,
 } from '@main/window/windowRegistry.js'
@@ -160,12 +160,12 @@ export function registerWindowIpc(
   // picker name windows identically.
   ipcMain.handle('window:move-targets', (evt): SessionMoveTarget[] => {
     const sourceWindowId = windowIdFor(evt.sender)
-    const focused = focusedWindowId()
+    const lastFocused = windowIdsByRecentFocus().find(windowId => windowId !== sourceWindowId)
     return listWindowIds().flatMap((windowId, index) => windowId === sourceWindowId ? [] : [{
       windowId,
       number: index + 1,
       ...store.describeWindow(windowId),
-      focused: windowId === focused,
+      lastFocused: windowId === lastFocused,
     }])
   })
 

@@ -66,5 +66,7 @@ export type SessionMoveTarget = {
   /** Project titles from the window's last saved workspace, in tab order. */
   projectTitles: string[]
   sessionCount: number
-  focused: boolean
+  /** The other window the user was in most recently. The picker starts on it,
+   *  because that is usually where they want to send the work. */
+  lastFocused: boolean
 }

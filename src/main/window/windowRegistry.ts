@@ -515,6 +515,21 @@ export function windowIdForWebContentsId(webContentsId: number): WindowId | null
 }
 
 /** The focused window, else the most recently focused one that still exists. */
+/**
+ * Window ids, most recently focused first (live, non-closing windows only).
+ *
+ * Exported for the Send to Window picker (#1481): the window a person was in
+ * just before this one is the likeliest place they want to send work, and
+ * `focusedWindowId()` cannot say which that is, since while the picker is
+ * open the focused window is always the one sending.
+ */
+export function windowIdsByRecentFocus(): WindowId[] {
+  return focusOrder.filter(id => {
+    const entry = windows.get(id)
+    return Boolean(entry && !entry.closing && !entry.window.isDestroyed())
+  })
+}
+
 export function focusedWindowId(): WindowId | null {
   const native = BrowserWindow.getFocusedWindow()
   if (native && !native.isDestroyed()) {

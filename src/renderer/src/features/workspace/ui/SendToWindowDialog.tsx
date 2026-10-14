@@ -48,9 +48,9 @@ export function SendToWindowDialog({ open, sessionLabel, relatedCount, targets, 
   if (!open) committingRef.current = false
   const rows = targets ?? []
   const keys = rows.map(target => target.windowId)
-  // The OS-focused other window is the likeliest destination (the user just
-  // came from it), so it starts highlighted; otherwise the first.
-  const focusedIndex = rows.findIndex(target => target.focused)
+  // The other window the user was in most recently is the likeliest
+  // destination, so it starts highlighted; otherwise the first.
+  const focusedIndex = rows.findIndex(target => target.lastFocused)
   const nav = useListNavigation({
     count: rows.length,
     keys,
