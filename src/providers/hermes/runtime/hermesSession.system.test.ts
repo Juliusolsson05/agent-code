@@ -131,6 +131,40 @@ describe('HermesSession (AgentSession contract on recorded frames)', () => {
     expect(cleared.conditions['hermes.approval']).toBeUndefined()
   })
 
+  it('removes a card Hermes withdraws (recorded S5 request.cancel on timeout)', async () => {
+    const { of, socket } = await startedSession('S3')
+    // S5 recorded four approvals; the one Hermes withdrew is the one whose
+    // id the cancel names. Its session id is retargeted to the live pane
+    // (mechanical mutation: the pane was created from S3).
+    const frames = inboundFrames(latestRecording('S5'))
+    const recordedCancel = frames.find((frame) => frame.method === 'event' && (frame.params as { type: string }).type === 'request.cancel')!.params as Record<string, unknown>
+    const cancelledId = (recordedCancel.payload as { id: string }).id
+    const approval = frames.find((frame) => frame.method === 'approval' && frame.id === cancelledId)!
+    const liveSid = recorded('S3').sid
+    socket.push({ ...approval, params: { ...(approval.params as object), session_id: liveSid } })
+    expect((of('conditions').at(-1) as ProviderConditionSnapshot).conditions['hermes.approval']).toMatchObject({ state: { requestId: cancelledId } })
+    const cancel = { ...recordedCancel, session_id: liveSid }
+    socket.push(eventFrame(cancel))
+    await flush()
+    expect((of('conditions').at(-1) as ProviderConditionSnapshot).conditions['hermes.approval']).toBeUndefined()
+  })
+
+  it('shows one card per request id and counts the others waiting behind it', async () => {
+    const { of, socket } = await startedSession('S3')
+    const approval = inboundFrames(latestRecording('S5')).find((frame) => frame.method === 'approval')!
+    // The same request delivered twice (live, then again from a replay ring)
+    // is ONE request, not "+1 more waiting".
+    socket.push(approval)
+    socket.push(approval)
+    const once = (of('conditions').at(-1) as ProviderConditionSnapshot).conditions['hermes.approval']!
+    expect(once.state).toMatchObject({ requestId: approval.id, queued: 0 })
+    // Mechanical mutation of the recording: a second, distinct request id.
+    socket.push({ ...approval, id: `${String(approval.id)}-second` })
+    const twice = (of('conditions').at(-1) as ProviderConditionSnapshot).conditions['hermes.approval']!
+    // The OLDEST stays on screen; the new one waits behind it.
+    expect(twice.state).toMatchObject({ requestId: approval.id, queued: 1 })
+  })
+
   it('refuses an answer the request did not offer, and one for a request that is gone', async () => {
     const { socket, session } = await startedSession('S3')
     const approval = inboundFrames(latestRecording('S5')).find((frame) => frame.method === 'approval')!

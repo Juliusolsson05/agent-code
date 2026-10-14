@@ -66,4 +66,19 @@ describe('Hermes condition cards', () => {
     expect(validateAnswer(req, (action.payload as { result: unknown }).result)).toEqual({ value: 'typed-secret' })
     expect(input.value).toBe('')
   })
+
+  it('clarify: a NEW question never inherits the previous one\'s choices', () => {
+    // Mechanical mutation of S6: the same questions under a new request id,
+    // as when Hermes asks again after a timeout.
+    const req = request('clarify', 'S6')
+    const record = conditionRecord(req, 0)
+    const View = hermesClarifyView.Component as React.ComponentType<{ state: unknown; actions: ConditionAction[]; dispatch: (action: ConditionAction) => Promise<void>; interactionActive: boolean }>
+    const dispatch = vi.fn(async (_action: ConditionAction) => undefined)
+    const { rerender } = render(<View state={record.state} actions={record.actions} dispatch={dispatch} interactionActive />)
+    fireEvent.click(screen.getByRole('button', { name: 'blue' }))
+    expect(screen.getByRole('button', { name: 'blue' }).getAttribute('aria-pressed')).toBe('true')
+    const next = conditionRecord({ ...req, id: `${req.id}-again` }, 0)
+    rerender(<View state={next.state} actions={next.actions} dispatch={dispatch} interactionActive />)
+    expect(screen.getByRole('button', { name: 'blue' }).getAttribute('aria-pressed')).toBe('false')
+  })
 })

@@ -377,6 +377,10 @@ export class HermesSession extends EventEmitter implements AgentSession {
   }
 
   private onRequest(request: HermesRequest): void {
+    // Backstop only: hermes-headless already drops a repeated request id
+    // (ConversationReconciler.openRequest, its own tests), so no app test can
+    // reach this line today. It stays because a duplicate here would show as
+    // "+1 more waiting" for a request that does not exist.
     if (this.openRequests.some((entry) => entry.id === request.id)) return
     this.openRequests.push(request)
     this.emitConditions()
