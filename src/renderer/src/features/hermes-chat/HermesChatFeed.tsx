@@ -21,7 +21,7 @@ import { withVisibleControls } from '@shared/text/visibleControls'
 
 import { useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 
-import { projectChat, splitReasoning, stabilizeChat, type ChatItem } from './chatProjection'
+import { formatToolResult, projectChat, splitReasoning, stabilizeChat, type ChatItem } from './chatProjection'
 
 // "Near the bottom" for follow-the-conversation: the reader has not scrolled
 // up to read older messages. Matches the feed's sticky-bottom slack.
@@ -321,14 +321,15 @@ function ToolChip({ item }: { item: Extract<ChatItem, { kind: 'tool' }> }) {
 
 function ToolBody({ item }: { item: Extract<ChatItem, { kind: 'tool' }> }) {
   const input = useMemo(() => JSON.stringify(item.input, null, 2), [item.input])
+  const result = useMemo(() => (item.result === null ? null : withVisibleControls(formatToolResult(item.result))), [item.result])
   return (
     <div className="mt-1 flex flex-col gap-1">
       <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-control bg-surface px-2 py-1 font-code text-[11px] text-ink-dim">
         {input}
       </pre>
-      {item.result !== null && (
+      {result !== null && (
         <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-control bg-surface px-2 py-1 font-code text-[11px] text-ink">
-          {withVisibleControls(item.result)}
+          {result}
         </pre>
       )}
       {item.result === null && item.status !== 'running' && (

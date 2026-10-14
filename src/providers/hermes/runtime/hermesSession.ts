@@ -48,6 +48,7 @@ import type {
 } from '@shared/types/providerConditions.js'
 import { HERMES_SIGNED_OUT_MESSAGE, type AgentSession, type SessionOptions } from '@shared/types/session.js'
 import { classifyHermesStartFailure } from '@providers/hermes/runtime/startFailure.js'
+import { toolResultCacheFor } from '@providers/hermes/runtime/toolResultCache.js'
 import {
   HERMES_ANSWER,
   HERMES_DECLINE,
@@ -197,6 +198,8 @@ export class HermesSession extends EventEmitter implements AgentSession {
     const service = getHermesConnectionService()
     const headless = new HermesHeadless({
       dial: service.dialFor(this.connectionId),
+      // Outlives this session: a Reload Agent keeps every tool output it had.
+      toolResults: toolResultCacheFor(this.connectionId),
       target: this.storedSessionId
         ? { mode: 'resume', storedSessionId: this.storedSessionId }
         // `agent-code` marks our conversations in Hermes as self-owned

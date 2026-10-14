@@ -249,3 +249,34 @@ export function splitReasoning(text: string): { headings: string[]; prose: strin
   }
   return { headings, prose: headings.length > 0 ? rest.trim() : '' }
 }
+
+/**
+ * A tool result as a person reads it. Hermes' tools answer JSON envelopes
+ * (owner's debug bundle: `{"output":"…","exit_code":0,"error":null}` for
+ * terminal, `{"content":"1|…","total_lines":2670,…}` for read_file), which
+ * the chip showed as one escaped line with `\n` everywhere. The common
+ * envelopes show their text; anything else is pretty-printed JSON; non-JSON
+ * is shown as is.
+ */
+export function formatToolResult(raw: string): string {
+  const trimmed = raw.trim()
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return raw
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(trimmed)
+  } catch {
+    return raw
+  }
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    const record = parsed as Record<string, unknown>
+    const body = typeof record.output === 'string' ? record.output : typeof record.content === 'string' ? record.content : null
+    if (body !== null) {
+      const notes: string[] = []
+      if (typeof record.exit_code === 'number' && record.exit_code !== 0) notes.push(`exit code ${record.exit_code}`)
+      if (typeof record.error === 'string' && record.error) notes.push(`error: ${record.error}`)
+      if (record.truncated === true) notes.push('truncated')
+      return notes.length > 0 ? `${body}\n\n(${notes.join(' · ')})` : body
+    }
+  }
+  return JSON.stringify(parsed, null, 2)
+}

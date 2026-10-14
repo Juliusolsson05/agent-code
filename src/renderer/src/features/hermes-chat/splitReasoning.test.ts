@@ -32,3 +32,18 @@ describe('stabilizeChat', () => {
     expect(second[1]).not.toBe(first[1])
   })
 })
+
+import { formatToolResult } from './chatProjection'
+
+// Shapes copied from the owner's debug bundle (terminal / read_file results).
+describe('formatToolResult', () => {
+  it('shows a terminal envelope as its output, with a failing exit code noted', () => {
+    expect(formatToolResult('{"output":"github_rest_http=401\\nmessage= Bad credentials","exit_code":0,"error":null}')).toBe('github_rest_http=401\nmessage= Bad credentials')
+    expect(formatToolResult('{"output":"boom","exit_code":2,"error":null}')).toBe('boom\n\n(exit code 2)')
+  })
+  it('shows a read_file envelope as its content and pretty-prints anything else', () => {
+    expect(formatToolResult('{"content":"1|a\\n2|b","total_lines":2,"truncated":true}')).toBe('1|a\n2|b\n\n(truncated)')
+    expect(formatToolResult('{"a":1}')).toBe('{\n  "a": 1\n}')
+    expect(formatToolResult('plain text')).toBe('plain text')
+  })
+})
