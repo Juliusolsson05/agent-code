@@ -41,6 +41,8 @@ The workspace is a stage: ragged rows of lanes over a pool of sessions grouped b
 
 Linked and orchestration children nest under their parent in every index that lists them. A navigation request should normally reuse an existing view of the target; opening it in a specifically chosen lane is a different intent and deliberately creates another view.
 
+Each window has its own stage and pool; one agent belongs to one window. agents.moveToWindow (the Send to Window… command) moves an agent, with its children, to another window without restarting it: it joins a same-folder project there (or a new project tab), appears in that window's focused lane, and keeps its session ID. Moving is a placement change, so it needs a request that names that outcome, like any other rearrangement.
+
 Parked, off-screen, hibernated and closed are different states. A parked agent with no backend wakes on selection or first send; reading its history does not wake it. Search the inventory and inspect placement before deciding to restore, wake or recreate anything.`,
   },
   {
