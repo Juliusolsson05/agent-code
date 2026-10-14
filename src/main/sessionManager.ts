@@ -205,7 +205,7 @@ type ManagerEvents = {
   'proxy-transport-gap': [SessionTransportGapEvent]
   /** Durable-history generation boundary (grok). Never completion or idle;
    *  consumers apply renderer/session-runtime/historyBoundary.ts decisions. */
-  'history-boundary': [{ sessionId: string; type: 'reset' | 'caught-up'; generation: number; snapshotByteLength: number; byteOffset?: number; complete?: boolean; file: string }]
+  'history-boundary': [{ sessionId: string; type: 'reset' | 'caught-up'; generation: number; snapshotByteLength: number; byteOffset?: number; complete?: boolean; conversationChanged?: boolean; file: string }]
   'transcript-diagnostic': [{ sessionId: string; diagnostic: unknown }]
   /** The provider session this pane runs changed without a respawn (Pi /new,
    *  /resume, /fork). See AgentSessionEvents['provider-session-changed']. */

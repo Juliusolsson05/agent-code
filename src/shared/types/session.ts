@@ -469,6 +469,15 @@ export type ProviderHistoryBoundaryEvent = {
   snapshotByteLength: number
   byteOffset?: number
   complete?: boolean
+  /**
+   * On a reset: the snapshot that follows is a DIFFERENT conversation (Hermes
+   * `/new`, or a conversation deleted on the server). The renderer then also
+   * drops the archived live turns, which an ordinary reset keeps because the
+   * same conversation's committed rows re-claim them; nothing re-claims turns
+   * of a conversation that is gone, so they stayed on screen as orphaned
+   * assistant bubbles (round-1 review x1 #1).
+   */
+  conversationChanged?: boolean
 }
 
 export type AgentSessionEvents = {

@@ -33,6 +33,10 @@ describe('Hermes pane predicates', () => {
     // No persisted choice: the first signed-in connection, then any.
     Object.defineProperty(window, 'api', { configurable: true, value: { hermesList: async () => [{ id: 'a', state: 'signed-out' }, { id: 'b', state: 'ready' }] } })
     expect(await resolveRemoteConnectionId('hermes', undefined)).toBe('b')
+    // A signed-in server that is briefly unreachable still beats a
+    // signed-out one (round-1 review x2 #4).
+    Object.defineProperty(window, 'api', { configurable: true, value: { hermesList: async () => [{ id: 'old', state: 'signed-out' }, { id: 'my-vps', state: 'unreachable' }] } })
+    expect(await resolveRemoteConnectionId('hermes', undefined)).toBe('my-vps')
     // A local kind never has one.
     expect(await resolveRemoteConnectionId('claude', 'mine')).toBeUndefined()
   })

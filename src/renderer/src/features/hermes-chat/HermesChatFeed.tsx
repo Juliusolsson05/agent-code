@@ -28,28 +28,87 @@ const REMARK_PLUGINS = [remarkGfm]
 // "Near the bottom" for follow-the-conversation: the reader has not scrolled
 // up to read older messages. Matches the feed's sticky-bottom slack.
 const STICKY_SLACK_PX = 48
+// Same trigger distance as Feed's older-history load (Feed.tsx loadOlderNearTop).
+const LOAD_OLDER_WITHIN_PX = 160
+
+/**
+ * The pane controls TileLeaf hands every agent surface. The chat honours the
+ * same ones AgentFeed does, because the commands that drive them (Jump to
+ * Latest, Auto-follow, Copy Assistant Message, scrolling up through a long
+ * conversation) stay enabled for Hermes panes; round-1 review x1 #2 / x2 #1-2
+ * found them silently inert here, older history included.
+ */
+export type HermesChatControls = {
+  hasOlderHistory?: boolean
+  onLoadOlderHistory?: () => Promise<void>
+  scrollToLatestRequest?: number
+  tailMode?: boolean
+  pickerSelectedUuid?: string | null
+  onUserEngagement?: () => void
+}
 
 export function HermesChatFeed({
   sessionId,
   items,
   connectionName,
+  hasOlderHistory = false,
+  onLoadOlderHistory,
+  scrollToLatestRequest = 0,
+  tailMode = false,
+  pickerSelectedUuid = null,
+  onUserEngagement,
 }: {
   sessionId: string
   items: readonly FeedRenderItem[]
   /** The Settings connection this pane talks to, for the empty state. */
   connectionName: string | null
-}) {
+} & HermesChatControls) {
   const chat = useMemo(() => projectChat(items), [items])
   const scroller = useRef<HTMLDivElement | null>(null)
   const following = useRef(true)
+  const loadingOlder = useRef(false)
 
   useEffect(() => {
     const node = scroller.current
-    // Follow new messages only while the reader is at the bottom: jumping a
-    // reader who scrolled up to an older answer is the one thing a chat must
-    // never do.
-    if (node && following.current) node.scrollTop = node.scrollHeight
-  }, [chat])
+    // Follow new messages only while the reader is at the bottom (or the
+    // pane is tailing): jumping a reader who scrolled up to an older answer
+    // is the one thing a chat must never do.
+    if (node && (following.current || tailMode)) node.scrollTop = node.scrollHeight
+  }, [chat, tailMode])
+
+  useEffect(() => {
+    // Jump to Latest: a monotonic request counter (0 = never asked).
+    if (scrollToLatestRequest === 0) return
+    const node = scroller.current
+    if (!node) return
+    node.scrollTop = node.scrollHeight
+    following.current = true
+  }, [scrollToLatestRequest])
+
+  useEffect(() => {
+    if (!pickerSelectedUuid) return
+    scroller.current
+      ?.querySelector(`[data-entry-uuid="${CSS.escape(pickerSelectedUuid)}"]`)
+      ?.scrollIntoView({ block: 'nearest' })
+  }, [pickerSelectedUuid])
+
+  const loadOlderNearTop = (node: HTMLDivElement) => {
+    if (node.scrollTop >= LOAD_OLDER_WITHIN_PX || !hasOlderHistory || tailMode || loadingOlder.current || !onLoadOlderHistory) return
+    loadingOlder.current = true
+    const beforeHeight = node.scrollHeight
+    const beforeTop = node.scrollTop
+    void onLoadOlderHistory()
+      .then(() => {
+        // Prepending rows must not move what the reader is looking at.
+        requestAnimationFrame(() => {
+          const next = scroller.current
+          if (next) next.scrollTop = beforeTop + Math.max(0, next.scrollHeight - beforeHeight)
+        })
+      })
+      .finally(() => {
+        loadingOlder.current = false
+      })
+  }
 
   return (
     <div
@@ -59,18 +118,30 @@ export function HermesChatFeed({
       data-quote-scope={sessionId}
       onScroll={(event) => {
         const node = event.currentTarget
+        if (tailMode) {
+          node.scrollTop = node.scrollHeight
+          following.current = true
+          return
+        }
         following.current = node.scrollHeight - node.scrollTop - node.clientHeight < STICKY_SLACK_PX
+        loadOlderNearTop(node)
       }}
+      onPointerDown={onUserEngagement}
       className="h-full min-h-0 overflow-y-auto px-3 py-3"
     >
       <div className="mx-auto flex max-w-3xl flex-col gap-2">
-        {chat.map((item) => <ChatRow key={item.key} item={item} connectionName={connectionName} />)}
+        {hasOlderHistory && (
+          <div className="py-1 text-center font-code text-[11px] text-muted" data-chat-role="older">Scroll up for earlier messages</div>
+        )}
+        {chat.map((item) => (
+          <ChatRow key={item.key} item={item} connectionName={connectionName} selected={item.kind === 'assistant' && item.uuid !== undefined && item.uuid === pickerSelectedUuid} />
+        ))}
       </div>
     </div>
   )
 }
 
-function ChatRow({ item, connectionName }: { item: ChatItem; connectionName: string | null }) {
+function ChatRow({ item, connectionName, selected }: { item: ChatItem; connectionName: string | null; selected: boolean }) {
   switch (item.kind) {
     case 'user':
       return (
@@ -84,8 +155,11 @@ function ChatRow({ item, connectionName }: { item: ChatItem; connectionName: str
       )
     case 'assistant':
       return (
-        <div className="flex justify-start" data-chat-role="assistant">
-          <div className="prose-theme max-w-[88%] break-words rounded-slab bg-surface px-3 py-2 text-[13px] leading-[1.6] text-ink">
+        <div className="flex justify-start" data-chat-role="assistant" data-entry-uuid={item.uuid}>
+          <div
+            className={`prose-theme max-w-[88%] break-words rounded-slab bg-surface px-3 py-2 text-[13px] leading-[1.6] text-ink ${selected ? 'ring-1 ring-accent' : ''}`}
+            aria-current={selected ? 'true' : undefined}
+          >
             <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>
               {item.text}
             </ReactMarkdown>

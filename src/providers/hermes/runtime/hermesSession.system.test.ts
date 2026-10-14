@@ -333,6 +333,10 @@ describe('HermesSession (AgentSession contract on recorded frames)', () => {
       expect.objectContaining({ providerSessionId: next.stored_session_id, reason: 'hermes-new-conversation' }),
     ])
     expect(session.getProviderSessionId()).toBe(next.stored_session_id)
+    // The reset that follows tells the renderer it is a different
+    // conversation, so the old one's live turns are dropped too.
+    const resets = (of('history-boundary') as Array<{ type: string; conversationChanged?: boolean }>).filter((entry) => entry.type === 'reset')
+    expect(resets.map((entry) => entry.conversationChanged === true)).toEqual([false, true])
   })
 
   it('stops redialling once the connection is signed out, and says what to do', async () => {

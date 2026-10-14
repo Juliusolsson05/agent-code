@@ -19,7 +19,9 @@ export type ChatToolStatus = 'running' | 'done' | 'error'
 
 export type ChatItem =
   | { kind: 'user'; key: string; text: string; skill: string | null }
-  | { kind: 'assistant'; key: string; text: string; streaming: boolean }
+  // `uuid`: the committed entry's id, which the Copy Assistant Message picker
+  // selects by (runtime.assistantPicker.selectedUuid). Live blocks have none.
+  | { kind: 'assistant'; key: string; text: string; streaming: boolean; uuid?: string }
   | { kind: 'reasoning'; key: string; text: string; streaming: boolean }
   | { kind: 'tool'; key: string; toolUseId: string; name: string; label: string; status: ChatToolStatus; input: Record<string, unknown>; result: string | null }
   | { kind: 'notice'; key: string; text: string }
@@ -101,7 +103,7 @@ function entryItems(entry: Entry, key: string, results: Map<string, { text: stri
       if (text.trim()) out.push({ kind: 'reasoning', key: `${key}:r${index}`, text, streaming: false })
     } else if (block.type === 'text') {
       const text = (block as { text: string }).text.trim()
-      if (text) out.push({ kind: 'assistant', key: `${key}:t${index}`, text, streaming: false })
+      if (text) out.push({ kind: 'assistant', key: `${key}:t${index}`, text, streaming: false, ...(entry.uuid ? { uuid: entry.uuid } : {}) })
     } else if (block.type === 'tool_use') {
       const tool = block as { id: string; name: string; input?: unknown }
       const input = asRecord(tool.input)

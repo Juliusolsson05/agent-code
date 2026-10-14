@@ -80,9 +80,25 @@ function ConnectionCard({ connection }: { connection: HermesConnectionInfo }) {
           <Input aria-label="Connection name" value={name} onChange={(event) => setName(event.target.value)} />
           <Input aria-label="Hermes URL" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} />
           <p className="text-[11px] text-muted">Changing the URL signs this connection out: tokens only ever go to the server that issued them.</p>
+          {/* A refused Save keeps the form open, so its reason must show HERE
+              (round-1 review x1 #3: it only rendered outside the form). */}
+          {problem && <p className="text-danger" role="alert">{problem}</p>}
           <div className="flex gap-1.5">
             <Button type="submit" size="sm" disabled={busy}>Save</Button>
-            <Button type="button" size="sm" variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                // Cancel discards the edit and its error together.
+                setEditing(false)
+                setProblem(null)
+                setName(connection.name)
+                setBaseUrl(connection.baseUrl)
+              }}
+            >
+              Cancel
+            </Button>
           </div>
         </form>
       ) : (
@@ -117,6 +133,9 @@ function ConnectionCard({ connection }: { connection: HermesConnectionInfo }) {
     </div>
   )
 }
+
+/** Exported for its renderer test; Settings mounts HermesConnectionsRow. */
+export { ConnectionCard }
 
 export function HermesConnectionsRow() {
   const connections = useHermesConnections()

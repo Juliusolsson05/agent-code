@@ -30,7 +30,15 @@ export async function resolveRemoteConnectionId(
   if (preferred) return preferred
   try {
     const connections = await window.api.hermesList()
-    return (connections.find((connection) => connection.state === 'ready') ?? connections[0])?.id
+    // Signed in first: `ready`, then `unreachable`, which is still signed in
+    // (a transient network failure; shared/hermes/types.ts). Preferring any
+    // connection over it sent new panes to a signed-out server while the
+    // user's own VPS was briefly down (round-1 review x2 #4).
+    return (
+      connections.find((connection) => connection.state === 'ready')
+      ?? connections.find((connection) => connection.state === 'unreachable')
+      ?? connections[0]
+    )?.id
   } catch {
     return undefined
   }

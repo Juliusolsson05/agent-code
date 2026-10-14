@@ -936,6 +936,12 @@ export function TileLeaf({
             sessionId={sessionId}
             items={ledgerFeedPlan.items}
             connectionName={hermesConnectionName}
+            hasOlderHistory={runtime.hasOlderHistory}
+            onLoadOlderHistory={loadOlderHistory}
+            scrollToLatestRequest={runtime.scrollToLatestRequest}
+            tailMode={effectiveTailMode}
+            pickerSelectedUuid={runtime.assistantPicker?.selectedUuid ?? null}
+            onUserEngagement={acknowledgeSession}
           />
         ) : (
           <AgentFeed

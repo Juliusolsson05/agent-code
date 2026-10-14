@@ -77,11 +77,12 @@ describe('provider feature matrix', () => {
         switchTargets: ['claude', 'codex', 'opencode', 'grok'],
         verifiedExternalResumeCommand: true,
       },
-      // Remote chat (#1482): only in-app resume; nothing transcript-shaped.
+      // Remote chat (#1482): in-app resume and View Prompts (in-memory rows);
+      // nothing that writes a transcript.
       hermes: {
         transcriptRewind: false,
         transcriptDuplicate: false,
-        promptHistoryExtraction: false,
+        promptHistoryExtraction: true,
         inAppResume: true,
         switchTargets: [],
         verifiedExternalResumeCommand: false,

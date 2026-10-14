@@ -319,6 +319,7 @@ export class HermesSession extends EventEmitter implements AgentSession {
       generation: this.generationBase + boundary.generation,
       snapshotByteLength: 0,
       complete: boundary.type === 'caught-up',
+      ...(boundary.type === 'reset' && boundary.reason === 'new-conversation' ? { conversationChanged: true } : {}),
       file: hermesTranscriptSource(this.connectionId, this.storedSessionId ?? ''),
     })
   }

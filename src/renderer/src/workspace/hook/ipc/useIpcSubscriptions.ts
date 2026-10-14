@@ -1027,7 +1027,11 @@ export function useIpcSubscriptions(
           totalEntries: 0,
           historyOldestMarker: null,
           queuedMessages: [],
-          semantic: { ...current.semantic, currentTurn: null },
+          // A different conversation keeps none of the old one's turns; see
+          // ProviderHistoryBoundaryEvent.conversationChanged.
+          semantic: boundary.conversationChanged
+            ? { ...current.semantic, currentTurn: null, history: [] }
+            : { ...current.semantic, currentTurn: null },
         })
         return { ...prev, [sessionId]: next }
       })
