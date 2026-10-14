@@ -1,0 +1,153 @@
+import { describe, expect, it, vi } from 'vitest'
+
+import { ConversationReconciler, type CommittedRow, type SemanticEvent } from 'hermes-headless'
+import { inboundFrames, latestRecording } from 'hermes-headless/testing/corpus'
+import type { SessionResumeResult, TranscriptMessage } from 'hermes-headless'
+import { createHermesTranscriptEntryMapper } from '@providers/hermes/renderer/transcript/mapper'
+import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/state'
+import { foldSemanticEvent } from '@renderer/session-runtime/semantic/foldEvent'
+import { createLedgerInputAdapter } from '@renderer/rendering/adapter/collectLedgerInput'
+import { createSessionLedger } from '@renderer/rendering/model/ledger'
+import { ledgerToFeedItems } from '@renderer/features/feed/ledger/ledgerFeedItems'
+import { providerLedgerFeedContextFromRuntime } from '@renderer/features/feed/ledger/providerLedgerFeedContext'
+import type { Entry } from '@shared/types/transcript'
+
+import { projectChat, type ChatItem } from './chatProjection'
+
+// ---------------------------------------------------------------------------
+// The Hermes chat on the REAL pipeline, from a REAL recording (#1482).
+//
+// Fixture: hermes-headless research/corpus/S4, a turn with three tool calls
+// (one failing) recorded against `hermes serve` v0.21.7. The live side is
+// that recording's event stream folded by hermes-headless's reconciler into
+// fold events, then by the production semantic reducer; the committed side is
+// the same conversation's resume rows through the Hermes mapper. Both go
+// through the adapter → ledger → provider bridge that useLedgerFeedItems runs
+// (the Reader Mode test's pattern), then the chat projection.
+//
+// What this pins: the chat shows every unit ONCE whichever owner holds it,
+// live, committed or both, because ownership is decided by the ledger and
+// the projection only restyles it. A duplicate bubble or chip here is the
+// bug class the decomposition isolated the ledger to prevent.
+// ---------------------------------------------------------------------------
+
+const T = 1_791_944_000_000
+
+function s4() {
+  const frames = inboundFrames(latestRecording('S4'))
+  const created = frames.map((frame) => frame.result as Record<string, unknown> | undefined)
+    .find((result) => result && typeof result.stored_session_id === 'string' && result.message_count === 0) as unknown as SessionResumeResult
+  const sid = created.session_id
+  const events = frames.filter((frame) => frame.method === 'event' && (frame.params as { session_id?: string }).session_id === sid)
+    .map((frame) => frame.params as { type: string; session_id: string; payload?: unknown; seq?: number })
+  const resumed = frames.map((frame) => frame.result as Record<string, unknown> | undefined)
+    .filter((result) => Array.isArray(result?.messages) && (result!.messages as unknown[]).length > 0).at(-1) as unknown as SessionResumeResult
+  return { created, events, resumed }
+}
+
+/** hermes-headless reconciler over recorded events → fold events. */
+function liveEvents(created: SessionResumeResult, events: ReturnType<typeof s4>['events']): SemanticEvent[] {
+  const out: SemanticEvent[] = []
+  const reconciler = new ConversationReconciler({
+    semantic: (event) => out.push(event),
+    committed: () => undefined,
+    historyReset: () => undefined,
+    historyCaughtUp: () => undefined,
+    activity: () => undefined,
+    session: () => undefined,
+    requestOpened: () => undefined,
+    requestClosed: () => undefined,
+    turnSettled: () => undefined,
+    reclaimed: () => undefined,
+    unknown: () => undefined,
+  })
+  reconciler.applySnapshot(created, 'snapshot')
+  for (const event of events) reconciler.applyEvent(event)
+  return out
+}
+
+/** Committed rows through the Hermes mapper, keyed as hermes-headless keys them. */
+function committedEntries(rows: TranscriptMessage[], stored: string): Entry[] {
+  const mapper = createHermesTranscriptEntryMapper()
+  return rows.flatMap((row, index) => {
+    const key = typeof row.row_id === 'number' ? `row:${row.row_id}` : typeof row.tool_call_id === 'string' ? `tool:${row.tool_call_id}` : `idx:${index}`
+    const payload: CommittedRow & { hermes: 1 } = { hermes: 1, key, storedSessionId: stored, row }
+    return mapper.map(payload as unknown as Record<string, unknown>).entries
+  })
+}
+
+function chat(entries: Entry[], semanticEvents: SemanticEvent[]): ChatItem[] {
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(T)
+  try {
+    let runtime: SessionRuntime = { ...emptyRuntime(), entries }
+    let semantic = runtime.semantic
+    for (const event of semanticEvents) semantic = foldSemanticEvent(semantic, event, 'hermes')
+    runtime = { ...runtime, semantic }
+    const ledger = createSessionLedger()(createLedgerInputAdapter()({
+      provider: 'hermes',
+      sessionId: 'hermes-pane',
+      entries: runtime.entries,
+      semanticCurrent: runtime.semantic.currentTurn,
+      semanticHistory: runtime.semantic.history,
+      ghosts: runtime.ghosts,
+      streamPhase: runtime.streamPhase,
+      lastJsonlEntryAtMs: runtime.lastJsonlEntryAt,
+    }).input)
+    const { context } = providerLedgerFeedContextFromRuntime(runtime, 'hermes')
+    return projectChat(ledgerToFeedItems(ledger, context).items)
+  } finally {
+    clock.mockRestore()
+  }
+}
+
+const shape = (items: ChatItem[]) => items.filter((item) => item.kind !== 'empty' && item.kind !== 'typing').map((item) =>
+  item.kind === 'tool' ? `tool:${item.toolUseId}:${item.status}` : item.kind === 'assistant' || item.kind === 'user' ? `${item.kind}:${item.text}` : item.kind)
+
+describe('Hermes chat projection on the real pipeline (recorded S4)', () => {
+  it('a live turn: three chips with Hermes\' call ids (the missing file one failed) and the answer once', () => {
+    const { created, events } = s4()
+    const items = chat([], liveEvents(created, events))
+    expect(shape(items)).toEqual([
+      'tool:call_tools_0_0:done',
+      'tool:call_tools_0_1:error',
+      'tool:call_tools_1_0:done',
+      'assistant:All three tools ran.',
+    ])
+  })
+
+  it('live turn PLUS its committed rows: every unit still appears exactly once', () => {
+    const { created, events, resumed } = s4()
+    const items = chat(committedEntries(resumed.messages, String(resumed.stored_session_id ?? '')), liveEvents(created, events))
+    const tools = items.filter((item) => item.kind === 'tool').map((item) => (item as { toolUseId: string }).toolUseId)
+    expect(new Set(tools).size).toBe(tools.length)
+    expect(tools.sort()).toEqual(['call_tools_0_0', 'call_tools_0_1', 'call_tools_1_0'])
+    expect(items.filter((item) => item.kind === 'assistant').map((item) => (item as { text: string }).text)).toEqual(['All three tools ran.'])
+    expect(items.filter((item) => item.kind === 'user').map((item) => (item as { text: string }).text)).toEqual(['[[hh:tools]] Run the tools.'])
+  })
+
+  it('after a reload (committed rows only): the same conversation, tools shown as finished', () => {
+    const { resumed } = s4()
+    const items = chat(committedEntries(resumed.messages, String(resumed.stored_session_id ?? '')), [])
+    expect(shape(items)).toEqual([
+      'user:[[hh:tools]] Run the tools.',
+      'tool:call_tools_0_0:done',
+      'tool:call_tools_0_1:done',
+      'tool:call_tools_1_0:done',
+      'assistant:All three tools ran.',
+    ])
+    // Hermes' resume projection carries no tool output (recorded); the chip
+    // says so instead of showing an empty result.
+    expect(items.filter((item) => item.kind === 'tool').every((item) => (item as { result: string | null }).result === null)).toBe(true)
+  })
+
+  it('mid-turn: finished chips done, the running one running, no answer yet', () => {
+    const { created, events } = s4()
+    const cut = events.findIndex((event) => event.type === 'tool.start' && (event.payload as { tool_id: string }).tool_id === 'call_tools_1_0')
+    const items = chat([], liveEvents(created, events.slice(0, cut + 1)))
+    expect(shape(items)).toEqual([
+      'tool:call_tools_0_0:done',
+      'tool:call_tools_0_1:error',
+      'tool:call_tools_1_0:running',
+    ])
+  })
+})
