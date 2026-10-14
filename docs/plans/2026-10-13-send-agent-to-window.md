@@ -1,6 +1,19 @@
 # Send an agent to another open window (#1481)
 
-Status: in progress. Branch `feat/send-lane-to-window`.
+Status: implemented on branch `feat/send-lane-to-window`, PR pending.
+
+## Accepted residuals
+
+- If the source or the target window CLOSES mid-move, the window-close bequest
+  may offer a slice that lists the moving session to a window that also lists
+  it. `adoptWorkspace` refuses the collision, and that slice comes back on the
+  next launch as its own window: a duplicate row, never a lost agent.
+- A crash between the target's save and the source's save leaves a duplicate
+  row as well (see Protocol).
+- A child moved without its parent keeps its `linkedParentId` /
+  `orchestrationParentId`. The index shows it as a top-level row (the orphan
+  rule in dispatchSelectors). The parent's orchestration tools no longer reach
+  it from the old window.
 
 ## Outcome
 
@@ -25,9 +38,15 @@ Defaults I chose (UNCONFIRMED, listed in the PR):
 - The moved agent appears in the target window's focused lane. The target
   window is NOT raised, because the person sending usually keeps working where
   they are. The source shows a toast naming the target.
-- The command is titled **Send Agent to Window…**, with "lane" as a keyword.
-  It acts on the focused lane's agent from the palette and on the clicked
-  agent from the right-click menu, so "Agent" is accurate for both.
+- The command is titled **Send to Window…** (id `send-to-window`), with
+  "lane" as a keyword. It acts on the focused lane's session from the palette
+  and on the clicked row from the right-click menu. Terminals move too: their
+  process routes exactly like an agent's. Extension views are excluded, since
+  they have no backend and would need the extension running in the other
+  window.
+- With no other window open, the command still runs: the picker says so and
+  names New Window. The renderer cannot know the window count synchronously,
+  because that is main's.
 - Each window in the picker is labelled `Window N`, followed by its project
   titles and agent count, read from that window's saved workspace (at most one
   autosave old).
@@ -131,7 +150,9 @@ drop rows (no kill), clear lanes
     normalized MCP domains as autosave writes them)
   - `receiveMovedSessions` (collision refusal, per-source-project resolution
     to a same-folder tab or a fresh tab, appended `joinedAt`, pins appended)
-  - `removeMovedSessions` (source drop and target cancel)
+  - Dropping rows (source drop, target cancel) reuses `workspaceWithoutSessions`
+    as is. It already clears lanes and scrubs row metadata, so the first draft's
+    `removeMovedSessions` wrapper was deleted as a duplicate.
 - Shared seeding: the adoption seed block (runtimes from snapshots, condition
   re-seed, history for live sessions) moves to `hook/ipc/seedIncomingSessions.ts`
   and is used by both adoption and move receipt.
@@ -139,16 +160,26 @@ drop rows (no kill), clear lanes
   - receives moves (queued until bootstrap completes, like adoption)
   - applies moved-out, failed and cancelled messages
   - resolves the promise the sending action awaits
-- `hook/actions/windowMove.ts`: `sendSessionToWindow(sessionId, targetWindowId)`
-  returns `{ ok, moved, targetWindowNumber } | { ok: false, reason }`.
+  - exposes `sendSessionToWindow(sessionId, targetWindowId)` on Workspace. It
+    returns `{ ok, movedSessionIds, targetWindowNumber }` or
+    `{ ok: false, message, reportedByEvent?, uncertain? }`. It lives in the
+    hook, not in a separate actions file, because it shares the outgoing-move
+    map that main's verdict events settle.
 - `refs.pendingSessionMoveIdsRef`, drained by `useAutoSave` beside adoptions.
 - UI:
   - uiShell `sendToWindowSessionId` with open and close
   - `SendToWindowSurface` and `SendToWindowDialog` (list of target windows,
     keyboard-first)
-  - command `send-agent-to-window` with `contextMenu` placement
+  - command `send-to-window` with `contextMenu` placement (group `agent`,
+    order 70)
 - Control: `agents.moveToWindow`, execution `window`, targeted at the session,
-  effect `mutation`. It returns after the source has dropped the rows.
+  effect `mutation`. It returns after the source has dropped the rows. A
+  failure is `not_started` (refused, or rolled back by main). It is `unknown`
+  only when this renderer stopped waiting (its 30 s settle timeout, or an
+  unmount) without hearing a verdict.
+- `forgetSessionViewState` (formerly `forgetClosedSessionDebugState`) now also
+  releases a pending bootstrap timer. Close and move-out both end this window's
+  view of a session.
 - Copy:
   - the Root management dialog no longer says attach / detach / bury
   - `rootManagementInstructions` counts moving between windows as placement
