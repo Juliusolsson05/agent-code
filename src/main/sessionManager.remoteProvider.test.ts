@@ -62,6 +62,35 @@ describe('SessionManager remote provider spawn', () => {
     expect(options.userMcpServers).toEqual([])
   })
 
+  it('never runs the local managed-skills reconcile for a remote agent', async () => {
+    // Hermes' skills live on its own server; reconciling this Mac's skill
+    // folders before a remote spawn is pure delay and a failure source. The
+    // first remote test cannot see this: it installs no pre-start hook.
+    const { SessionManager } = await import('./sessionManager')
+    const reconcile = vi.fn(async () => [])
+    const manager = new SessionManager(null, null, null, reconcile)
+    await manager.spawn({ kind: 'hermes', cwd: '/tmp/project', remoteConnectionId: 'conn-1' })
+    expect(reconcile).not.toHaveBeenCalled()
+  })
+
+  it('recovers a Hermes chat whose local folder is gone (the folder is never used)', async () => {
+    // The real directory check, not the always-ok mock above: review a #5
+    // found the remote suite hid exactly this dependency behind that mock.
+    const actual = await vi.importActual<typeof import('@main/workspaceDirectory.js')>('@main/workspaceDirectory.js')
+    const mocked = await import('@main/workspaceDirectory.js')
+    vi.mocked(mocked.assertWorkspaceDirectoryExists).mockImplementation(actual.assertWorkspaceDirectoryExists)
+    try {
+      const { SessionManager } = await import('./sessionManager')
+      const manager = new SessionManager()
+      const missing = `/tmp/hermes-deleted-worktree-${process.pid}-${Date.now()}`
+      await expect(manager.spawn({ kind: 'hermes', cwd: missing, remoteConnectionId: 'conn-1' })).resolves.toHaveProperty('sessionId')
+      // A local provider in the same folder is still refused, by the same check.
+      await expect(manager.spawn({ kind: 'codex', cwd: missing })).rejects.toBeInstanceOf(actual.MissingWorkspaceDirectoryError)
+    } finally {
+      vi.mocked(mocked.assertWorkspaceDirectoryExists).mockImplementation(async () => {})
+    }
+  })
+
   it('refuses a Hermes spawn without a connection, naming where to add one', async () => {
     const { SessionManager } = await import('./sessionManager')
     const manager = new SessionManager()

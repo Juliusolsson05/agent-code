@@ -97,7 +97,7 @@ export type UserMcpResolver = (params: {
 }>
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { SessionLifecycleJournal } from '@main/lifecycle/SessionLifecycleJournal.js'
-import { PROVIDER_CLI_NOT_FOUND_SUFFIX, SESSION_START_FAILED_MESSAGE, type PromptGateState } from '@shared/types/session.js'
+import { HERMES_NOT_CONNECTED_MESSAGE, PROVIDER_CLI_NOT_FOUND_SUFFIX, SESSION_START_FAILED_MESSAGE, curatedRemoteProviderMessage, type PromptGateState } from '@shared/types/session.js'
 import {
   isCodexTranscriptObservationEventName,
   isCodexTranscriptObservationSessionId,
@@ -415,7 +415,10 @@ class RecoveryCancelledError extends Error {
  */
 export class RemoteProviderNotConnectedError extends Error {
   constructor(kind: string) {
-    super(`${kind} needs a connection. Add and sign in to one in Settings → Hermes.`)
+    // Hermes is the only remote kind; the sentence is a shared constant so
+    // both launderers (recover() below, the renderer's curatedSpawnMessage)
+    // can let it through.
+    super(kind === 'hermes' ? HERMES_NOT_CONNECTED_MESSAGE : `${kind} needs a connection.`)
     this.name = 'RemoteProviderNotConnectedError'
   }
 }
@@ -2249,9 +2252,12 @@ export class SessionManager extends EventEmitter {
         // renderer receives one stable, actionable message with no payload.
         // The missing-directory case is the deliberate exception — its
         // message is curated and its payload is a path the UI already shows.
+        // A remote provider's curated connection sentences (sign in / add a
+        // connection / unreachable) are the same kind of exception: fixed
+        // text that names the fix (review a #8).
         message: error instanceof MissingWorkspaceDirectoryError
           ? error.message
-          : SESSION_START_FAILED_MESSAGE,
+          : curatedRemoteProviderMessage(error instanceof Error ? error.message : String(error)) ?? SESSION_START_FAILED_MESSAGE,
       }
     } finally {
       if (this.recoveriesInFlight.get(options.sessionId) === claim) {
@@ -3021,7 +3027,11 @@ export class SessionManager extends EventEmitter {
     // spawn reservation so a missing folder leaves no half-claimed session
     // behind, and it is in spawnWithId rather than in spawn()/recover()
     // separately because this is the one funnel both of them pass through.
-    await assertWorkspaceDirectoryExists(options.cwd)
+    //
+    // Not for a remote kind: Hermes never uses the local folder (the session
+    // never sends it), so a chat opened beside a since-deleted worktree must
+    // still recover. Its conversation lives on the server (review a #5).
+    if (!isRemoteProviderKind(kind)) await assertWorkspaceDirectoryExists(options.cwd)
     if (
       this.sessions.has(sessionId) ||
       this.spawningSessionGenerations.has(sessionId) ||

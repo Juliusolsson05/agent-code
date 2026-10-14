@@ -135,6 +135,52 @@ describe('HermesSession (AgentSession contract on recorded frames)', () => {
     expect(await session.resolveCondition(stale)).toEqual({ ok: false, reason: 'invalid-payload' })
   })
 
+  it('answers a recorded sudo/secret request only with a string value', async () => {
+    // Review a: the value validator had a surviving mutant (accept anything).
+    // An object or an oversized value must never reach Hermes, which would
+    // write it to the server's .env (secret) or a sudo prompt.
+    const { socket, session } = await startedSession('S3')
+    for (const method of ['sudo', 'secret'] as const) {
+      const request = inboundFrames(latestRecording('S6')).find((frame) => frame.method === method)!
+      socket.push(request)
+      const answer = (result: unknown): ConditionCustomAction => ({ kind: 'custom', id: 'v', label: 'Send', name: HERMES_ANSWER, payload: { requestId: request.id, result } })
+      expect(await session.resolveCondition(answer({ value: { nested: true } }))).toEqual({ ok: false, reason: 'invalid-payload' })
+      expect(await session.resolveCondition(answer({ value: 'x'.repeat(4001) }))).toEqual({ ok: false, reason: 'invalid-payload' })
+      expect(await session.resolveCondition(answer({ value: 'typed' }))).toEqual({ ok: true })
+      expect(socket.sent.at(-1)).toEqual({ jsonrpc: '2.0', id: request.id, result: { value: 'typed' } })
+    }
+  })
+
+  // Review a #2: a renderer reload adopts the live session in main and asks
+  // the shared history loader for the conversation. With no Hermes source it
+  // got an empty chunk and the rebuilt pane showed nothing. Driven through
+  // the real loader entry point (it imports the main registry, hence the
+  // generous timeout).
+  it('serves the conversation to a renderer that reloads while the pane lives', async () => {
+    const { session, socket, events, frames, created, of } = await startedSession('S4')
+    for (const event of events) socket.push(eventFrame(event))
+    const history = await socket.nextSent((frame) => frame.method === 'session.history')
+    const resumed = frames.map((frame) => frame.result as Record<string, unknown> | undefined)
+      .filter((result) => Array.isArray(result?.messages) && (result!.messages as unknown[]).length > 0).at(-1)!
+    socket.push({ jsonrpc: '2.0', id: history.id, result: { count: (resumed.messages as unknown[]).length, messages: resumed.messages } })
+    await flush()
+    const emitted = of('jsonl-entry') as HermesEntryPayload[]
+    const { loadInitialHistoryChunk, loadOlderHistoryChunk } = await import('@main/sessions/historyLoader.js')
+    const stored = String(created.stored_session_id)
+    const all = await loadInitialHistoryChunk({ kind: 'hermes', cwd: '/Users/someone/project', providerSessionId: stored, limit: 120 })
+    // Exactly what the renderer folded the first time, in the same order.
+    expect(all.entries).toEqual(emitted)
+    // Paging by the mapper's marker (the row key) walks back without gaps.
+    const newest = await loadInitialHistoryChunk({ kind: 'hermes', cwd: '/', providerSessionId: stored, limit: 2 })
+    expect(newest).toMatchObject({ hasMore: true, entries: emitted.slice(-2) })
+    // The renderer's cursor is the oldest row's key, as the mapper reports it.
+    const older = await loadOlderHistoryChunk({ kind: 'hermes', cwd: '/', providerSessionId: stored, beforeMarker: emitted[3]!.key, limit: 10 })
+    expect([...older.entries, ...newest.entries]).toEqual(emitted)
+    // A stopped pane serves nothing: its next spawn resumes from the server.
+    await session.stop()
+    expect((await loadInitialHistoryChunk({ kind: 'hermes', cwd: '/', providerSessionId: stored, limit: 120 })).entries).toEqual([])
+  }, 30_000)
+
   it('runs a slash command and shows its output as a local notice (recorded S13)', async () => {
     const { of, socket, session } = await startedSession('S3')
     const s13 = inboundFrames(latestRecording('S13'))

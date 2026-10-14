@@ -1325,6 +1325,14 @@ export function useSessionActions(
         // same-rollout handoff) or the renderer (every other swap) does it.
         predecessorKillCaller: 'replace.predecessor',
         ...(builtInMcpDomains !== undefined ? { builtInMcpDomains, builtInMcpOverrides } : {}),
+        // A remote pane continues on the SAME server. Without this, spawn
+        // re-resolves "first signed-in connection" and Reload Agent could
+        // carry the pane's stored id to another Hermes, which then starts a
+        // new conversation there (review a #3). A provider switch to a
+        // different kind has nothing to carry.
+        ...(nextKind === oldMeta.kind && oldMeta.remoteConnectionId
+          ? { remoteConnectionId: oldMeta.remoteConnectionId }
+          : {}),
       })
       // WHY a finally, and why it wraps EVERY exit path including the bail-outs:
       // a stranded reservation would leave that pane permanently unnamed, which is

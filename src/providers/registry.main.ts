@@ -13,6 +13,7 @@ import { discoverOpencodeSkillRoots } from '@providers/opencode/runtime/skillDis
 import { opencodeTranscriptFile, parseOpencodeTranscriptFile } from 'opencode-terminal-headless'
 import { readOpencodeSessionInfo } from '@providers/opencode/runtime/opencodeDatabase'
 import { HermesSession } from '@providers/hermes/runtime/hermesSession.js'
+import { hermesTranscriptLocator, loadHermesHistoryChunk, parseHermesTranscriptLocator } from '@providers/hermes/runtime/hermesHistory.js'
 import { deliverHermesPrompt } from '@providers/hermes/runtime/promptDelivery.js'
 import { discoverHermesSkillRoots } from '@providers/hermes/runtime/skillDiscovery.js'
 import { PiSession } from '@providers/pi/runtime/piSession.js'
@@ -225,6 +226,12 @@ const hermesMain: MainProviderConfig = {
   getProjectDir: async (cwd) => cwd,
   // The conversation lives in the VPS's state.db, not in a local file.
   resolveTranscriptPath: async () => null,
+  // …so a renderer reload (and the phone's backfill) reads the LIVE session's
+  // emitted rows instead (hermesHistory.ts, review a #2), addressed by the
+  // `hermes://<connection>/<stored id>` locator the session emits.
+  loadHistoryChunk: loadHermesHistoryChunk,
+  transcriptLocator: hermesTranscriptLocator,
+  parseTranscriptLocator: parseHermesTranscriptLocator,
   deliverPrompt: deliverHermesPrompt,
 }
 

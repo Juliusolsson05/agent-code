@@ -23,6 +23,7 @@
 import { EventEmitter } from 'node:events'
 
 import {
+  HermesAuthError,
   HermesHeadless,
   HermesPromptError,
   type CommittedRow,
@@ -35,6 +36,7 @@ import {
 } from 'hermes-headless'
 
 import { getHermesConnectionService } from '@main/hermes/registry.js'
+import { hermesTranscriptSource, registerHermesHistory } from '@providers/hermes/runtime/hermesHistory.js'
 import { HermesSignedOutError } from '@main/hermes/tokenBroker.js'
 import { describeError } from '@main/hermes/service.js'
 import type { ConditionAction, ConditionCustomAction } from '@shared/conditions-core/contract.js'
@@ -43,7 +45,7 @@ import type {
   ProviderConditionRecord,
   ProviderConditionSnapshot,
 } from '@shared/types/providerConditions.js'
-import type { AgentSession, SessionOptions } from '@shared/types/session.js'
+import { HERMES_SIGNED_OUT_MESSAGE, HERMES_UNREACHABLE_MESSAGE, type AgentSession, type SessionOptions } from '@shared/types/session.js'
 import {
   HERMES_ANSWER,
   HERMES_DECLINE,
@@ -52,9 +54,7 @@ import {
 } from '@providers/hermes/runtime/requestAnswers.js'
 
 /** The `source` Agent Code tags committed rows with: one per conversation. */
-export function hermesTranscriptSource(connectionId: string, storedSessionId: string): string {
-  return `hermes://${connectionId}/${storedSessionId}`
-}
+export { hermesTranscriptSource }
 
 /**
  * The jsonl-entry payload. The renderer's Hermes mapper turns it into the
@@ -104,6 +104,13 @@ export class HermesSession extends EventEmitter implements AgentSession {
   /** Open requests in arrival order; the card shows the oldest per kind. */
   private readonly openRequests: HermesRequest[] = []
   private noticeCounter = 0
+  /**
+   * The current conversation's rows as emitted, for a renderer that reloads
+   * while this session lives (hermesHistory.ts). Reset with the history, so
+   * it always equals what a fresh fold of this pane would show.
+   */
+  private committedRows: HermesEntryPayload[] = []
+  private unregisterHistory: (() => void) | null = null
   /**
    * Offset for history generations. hermes-headless numbers generations from
    * 1 per instance, but a pane OUTLIVES its session: Reload Agent and recovery
@@ -161,7 +168,14 @@ export class HermesSession extends EventEmitter implements AgentSession {
       service.reportReachability(this.connectionId, false, error)
       this.exited = true
       // A failed start is a failed spawn: SessionManager rejects session:spawn
-      // and the renderer shows this message (sessionSpawnErrorMessage).
+      // and the renderer launders the text (sessionSpawnErrorMessage). Only
+      // the shared curated sentences survive that, so the two failures a
+      // user can fix are mapped onto them; anything else keeps its detail
+      // for main's journal and reaches the user as the generic failure.
+      if (error instanceof HermesSignedOutError) throw new Error(HERMES_SIGNED_OUT_MESSAGE)
+      if (error instanceof HermesAuthError && (error.kind === 'transport' || error.kind === 'unavailable')) {
+        throw new Error(HERMES_UNREACHABLE_MESSAGE)
+      }
       throw new Error(`Could not open the Hermes conversation: ${describeError(error)}`)
     }
     service.reportReachability(this.connectionId, true)
@@ -173,6 +187,8 @@ export class HermesSession extends EventEmitter implements AgentSession {
     if (this.stopped) return
     this.stopped = true
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
+    this.unregisterHistory?.()
+    this.unregisterHistory = null
     // Detach only: the conversation stays on the server and resumes on the
     // next spawn of this pane (hermes-headless stop() never session.close's).
     await this.headless?.stop().catch(() => undefined)
@@ -244,6 +260,10 @@ export class HermesSession extends EventEmitter implements AgentSession {
 
   private emitRow(key: string, storedSessionId: string, row: Record<string, unknown>): void {
     const payload: HermesEntryPayload = { hermes: 1, key, storedSessionId, row }
+    // Same key = the same row re-sent (a history refetch): replace in place.
+    const index = this.committedRows.findIndex((entry) => entry.key === key)
+    if (index >= 0) this.committedRows[index] = payload
+    else this.committedRows.push(payload)
     this.emit('jsonl-entry', payload, hermesTranscriptSource(this.connectionId, storedSessionId))
   }
 
@@ -255,6 +275,7 @@ export class HermesSession extends EventEmitter implements AgentSession {
   }
 
   private emitBoundary(boundary: HistoryBoundary): void {
+    if (boundary.type === 'reset') this.committedRows = []
     this.emit('history-boundary', {
       type: boundary.type,
       generation: this.generationBase + boundary.generation,
@@ -266,7 +287,17 @@ export class HermesSession extends EventEmitter implements AgentSession {
 
   private onSession(state: HermesSessionState): void {
     const previous = this.storedSessionId
-    if (state.storedSessionId && state.storedSessionId !== previous) {
+    const changed = Boolean(state.storedSessionId && state.storedSessionId !== previous)
+    // Register on the first session state too: a RESUMED pane starts with its
+    // stored id already known, so "changed" alone would never register it.
+    if (state.storedSessionId && (changed || !this.unregisterHistory) && !this.stopped) {
+      this.unregisterHistory?.()
+      this.unregisterHistory = registerHermesHistory(state.storedSessionId, {
+        connectionId: this.connectionId,
+        rows: () => this.committedRows,
+      })
+    }
+    if (state.storedSessionId && changed) {
       this.storedSessionId = state.storedSessionId
       // A spawn with no stored id learns it here; `/new` and a missing-
       // conversation fallback CHANGE it. Either way the pane must rebind its

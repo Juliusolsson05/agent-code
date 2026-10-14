@@ -941,7 +941,10 @@ export function usePaneActions(
       const cwd =
         continuation?.cwd ??
         (target.cwdSessionId ? dispatchSnapshot.sessions[target.cwdSessionId]?.cwd : null) ??
-        projectCwd(dispatchSnapshot, tab.id)
+        projectCwd(dispatchSnapshot, tab.id) ??
+        // Same remote fallback as detached creation below: a Hermes chat
+        // needs no project folder ('/' is display metadata only).
+        (isRemoteProviderKind(kind) ? '/' : null)
       if (!cwd) {
         showToast(
           kind === 'terminal'

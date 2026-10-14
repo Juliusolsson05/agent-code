@@ -60,6 +60,19 @@ async function perform(operation: () => Promise<unknown>) {
 }
 
 describe('global MCP preferences at actual provider replacement', () => {
+  // Not MCP, but this is the file that drives the REAL reloadSessionAgent →
+  // replaceSession → spawn path. Review a #3: Reload Agent re-resolved the
+  // "first ready" connection and moved the pane to another Hermes server.
+  it('keeps a Hermes pane on its own server across Reload Agent', async () => {
+    const h = setup({ kind: 'hermes', remoteConnectionId: 'conn-original' })
+    window.api.hermesList = vi.fn(async () => [
+      { id: 'conn-other', state: 'ready' },
+      { id: 'conn-original', state: 'ready' },
+    ]) as unknown as typeof window.api.hermesList
+    await perform(() => h.hook.result.current.provider.reloadSessionAgent(h.focused()))
+    expect(h.spawnSession.mock.calls.at(-1)![0].remoteConnectionId).toBe('conn-original')
+  })
+
   it('picks up every configurable domain on reload and drops inherited domains on the next reload', async () => {
     const h = setup()
     h.refs.defaultBuiltInMcpDomainsRef.current = [...CONFIGURABLE_BUILT_IN_MCP_DOMAINS]

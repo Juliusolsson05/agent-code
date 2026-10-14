@@ -192,6 +192,22 @@ export const WORKSPACE_READ_ONLY_PREFIX = 'Workspace file is read-only this sess
  *  show it, because it names the fix (File › Setup…) (#1286 review C2). */
 export const PROVIDER_CLI_NOT_FOUND_SUFFIX = ' CLI not found. Open Setup (File › Setup…) to install it or enter its path.'
 
+/** A remote provider's (Hermes, #1482) start failures that name their fix.
+ *  For a remote agent the connection is what the CLI is for a local one, so
+ *  these are curated exactly like PROVIDER_CLI_NOT_FOUND_SUFFIX: whole fixed
+ *  sentences, recognised by inclusion and ALWAYS re-emitted from these
+ *  constants, never from the error text (which can carry a server's own
+ *  error detail). Shared because main and the renderer each launder the
+ *  failure on their side of IPC. */
+export const HERMES_NOT_CONNECTED_MESSAGE = 'Hermes needs a connection. Add and sign in to one in Settings → Hermes.'
+export const HERMES_SIGNED_OUT_MESSAGE = 'Signed out of this Hermes connection. Sign in again in Settings → Hermes, then reload the agent.'
+export const HERMES_UNREACHABLE_MESSAGE = 'Could not reach this Hermes server. Check that `hermes serve` is running and reachable from this Mac, then reload the agent.'
+const HERMES_CURATED_MESSAGES = [HERMES_NOT_CONNECTED_MESSAGE, HERMES_SIGNED_OUT_MESSAGE, HERMES_UNREACHABLE_MESSAGE]
+
+export function curatedRemoteProviderMessage(raw: string): string | null {
+  return HERMES_CURATED_MESSAGES.find((message) => raw.includes(message)) ?? null
+}
+
 /** The actionable message for a Claude proxy (mitmproxy) that would not
  *  start, and how to recognise one. Shared since #1267: main now launders
  *  session:spawn rejections, so the raw mitmproxy text no longer reaches the
