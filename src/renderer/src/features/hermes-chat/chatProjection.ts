@@ -188,3 +188,64 @@ export function projectChat(items: readonly FeedRenderItem[]): ChatItem[] {
   }
   return out
 }
+
+/**
+ * Reuse the previous render's item object for every row whose content did not
+ * change, so `memo(ChatRow)` actually skips it.
+ *
+ * WHY (spotlight investigation, #1499): projectChat builds a NEW object for
+ * every row on every call, and while a reply streams `items` changes on every
+ * token, so every row of the conversation re-rendered per token (tool output
+ * re-escaped by withVisibleControls, char by char) in each live copy of the
+ * pane. Spotlight keeps two. Field-by-field `===` is exact for the scalars;
+ * a tool's `input` is the ledger's parsed object, which keeps its identity
+ * while its block is unchanged, so `===` there is the cheap correct test.
+ */
+export function stabilizeChat(previous: readonly ChatItem[] | null, next: ChatItem[]): ChatItem[] {
+  if (!previous || previous.length === 0) return next
+  const byKey = new Map(previous.map((item) => [item.key, item]))
+  let reused = 0
+  const out = next.map((item) => {
+    const before = byKey.get(item.key)
+    if (before && sameItem(before, item)) {
+      reused += 1
+      return before
+    }
+    return item
+  })
+  return reused === 0 ? next : out
+}
+
+function sameItem(a: ChatItem, b: ChatItem): boolean {
+  if (a.kind !== b.kind) return false
+  const left = a as Record<string, unknown>
+  const right = b as Record<string, unknown>
+  const keys = Object.keys(right)
+  if (Object.keys(left).length !== keys.length) return false
+  return keys.every((key) => left[key] === right[key])
+}
+
+/**
+ * A reasoning block's readable part, split from its headings.
+ *
+ * Recorded in the owner's debug bundle (2026-10-14T16-26-49, Codex route):
+ * Hermes stores the model's progress updates INSIDE `reasoning`, as a run of
+ * bold summary headings followed by prose, e.g.
+ *   "**Auditing comprehensive Hermes setup** **Checking Gmail watcher cron
+ *    status** I'm running a full live audit now: model/auth, gateway, …"
+ * The prose is the agent telling the user what it is doing; live it streamed
+ * as answer text, but once committed it sat in a COLLAPSED "Reasoning"
+ * block, so the owner asked "what is going on?" while the answer was on
+ * screen, hidden. The headings stay in the disclosure; the prose is shown.
+ */
+export function splitReasoning(text: string): { headings: string[]; prose: string } {
+  const headings: string[] = []
+  let rest = text.trim()
+  for (;;) {
+    const match = /^\*\*([^*\n]+)\*\*\s*/.exec(rest)
+    if (!match) break
+    headings.push(match[1]!.trim())
+    rest = rest.slice(match[0].length)
+  }
+  return { headings, prose: headings.length > 0 ? rest.trim() : '' }
+}

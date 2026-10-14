@@ -19,7 +19,9 @@ import type { FeedRenderItem } from '@renderer/features/feed/model/renderModel'
 import { TextProse } from '@renderer/features/feed/ui/markdown'
 import { withVisibleControls } from '@shared/text/visibleControls'
 
-import { projectChat, type ChatItem } from './chatProjection'
+import { useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
+
+import { projectChat, splitReasoning, stabilizeChat, type ChatItem } from './chatProjection'
 
 // "Near the bottom" for follow-the-conversation: the reader has not scrolled
 // up to read older messages. Matches the feed's sticky-bottom slack.
@@ -67,7 +69,23 @@ export const HermesChatFeed = memo(function HermesChatFeed({
   /** The Settings connection this pane talks to, for the empty state. */
   connectionName: string | null
 } & HermesChatControls) {
-  const chat = useMemo(() => projectChat(items), [items])
+  // Spotlight (and editor fullscreen, Reader, Settings) keep the lane's copy
+  // of this pane mounted under display:none while a second live copy shows
+  // (MainSurface + RetainedWorkspaceSurface, #752). The hidden copy must do
+  // NOTHING per token: it keeps the last items it showed and catches up once,
+  // when it is revealed. AgentFeed has the same guard (Feed.tsx
+  // workspaceVisible). Without it every streamed token rendered the whole
+  // conversation twice in Spotlight (owner report, #1499).
+  const visible = useAgentTerminalOwnerVisible()
+  const shownItems = useRef(items)
+  if (visible) shownItems.current = items
+  const source = shownItems.current
+  const previousChat = useRef<ChatItem[] | null>(null)
+  const chat = useMemo(() => {
+    const next = stabilizeChat(previousChat.current, projectChat(source))
+    previousChat.current = next
+    return next
+  }, [source])
   const scroller = useRef<HTMLDivElement | null>(null)
   const following = useRef(true)
   const loadingOlder = useRef(false)
@@ -78,8 +96,12 @@ export const HermesChatFeed = memo(function HermesChatFeed({
     // Follow new messages only while the reader is at the bottom (or the
     // pane is tailing): jumping a reader who scrolled up to an older answer
     // is the one thing a chat must never do.
+    // Hidden under display:none, scrollHeight is 0 and a pin is meaningless;
+    // `visible` in the deps re-pins on reveal, so a pane that grew while
+    // Spotlight was open comes back at the bottom (it used to stay at the top).
+    if (!visible) return
     if (node && (following.current || tailMode)) node.scrollTop = node.scrollHeight
-  }, [chat, tailMode])
+  }, [chat, tailMode, visible])
 
   useEffect(() => {
     // Jump to Latest: a monotonic request counter (0 = never asked).
@@ -200,15 +222,7 @@ const ChatRow = memo(function ChatRow({ item, connectionName, selected }: { item
         </div>
       )
     case 'reasoning':
-      return (
-        <LazyDetails
-          className="max-w-[88%] text-[12px] text-ink-dim"
-          data-chat-role="reasoning"
-          summary={<span className="cursor-pointer select-none text-muted">{item.streaming ? 'Thinking…' : 'Reasoning'}</span>}
-        >
-          <div className="mt-1 whitespace-pre-wrap border-l border-border pl-2">{withVisibleControls(item.text)}</div>
-        </LazyDetails>
-      )
+      return <ReasoningRow item={item} />
     case 'tool':
       return <ToolChip item={item} />
     case 'notice':
@@ -237,6 +251,33 @@ const ChatRow = memo(function ChatRow({ item, connectionName, selected }: { item
       )
   }
 })
+
+function ReasoningRow({ item }: { item: Extract<ChatItem, { kind: 'reasoning' }> }) {
+  const { headings, prose } = useMemo(() => splitReasoning(item.text), [item.text])
+  return (
+    <div className="flex max-w-[88%] flex-col gap-1" data-chat-role="reasoning">
+      <LazyDetails
+        className="text-[12px] text-ink-dim"
+        data-chat-role="reasoning-detail"
+        summary={
+          <span className="min-w-0 truncate text-muted">
+            {item.streaming ? 'Thinking…' : headings.length > 0 ? headings[headings.length - 1] : 'Reasoning'}
+          </span>
+        }
+      >
+        {/* Markdown, like every other bubble: 81 of 136 reasoning rows in
+            the owner's bundle showed raw `**` as plain text. */}
+        <div className="mt-1 border-l border-border pl-2"><TextProse text={item.text} /></div>
+      </LazyDetails>
+      {prose && (
+        // The agent's progress update, visible (splitReasoning says why).
+        <div className="text-[12px] italic leading-[1.55] text-ink-dim" data-chat-role="progress">
+          <TextProse text={prose} />
+        </div>
+      )}
+    </div>
+  )
+}
 
 /**
  * A <details> whose body is only MOUNTED while it is open.

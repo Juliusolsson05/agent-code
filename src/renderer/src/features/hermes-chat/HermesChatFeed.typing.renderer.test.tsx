@@ -6,6 +6,8 @@ import { createHermesTranscriptEntryMapper } from '@providers/hermes/renderer/tr
 import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/state'
 import { useAgentFeedModel } from '@renderer/features/feed/agent/useAgentFeedModel'
 
+import { AgentTerminalOwnerVisibilityProvider } from '@renderer/workspace/terminal/AgentTerminalOwnership'
+
 import { HermesChatFeed } from './HermesChatFeed'
 
 // The owner, 2026-10-14: "the Hermes composer is painstakingly slow".
@@ -83,5 +85,32 @@ describe('collapsed chat rows', () => {
     chips[0]!.open = true
     fireEvent(chips[0]!, new Event('toggle'))
     expect(chips[0]!.querySelectorAll('pre').length).toBeGreaterThan(0)
+  })
+})
+
+// The owner, 2026-10-14: "as soon as I go into spotlight with Hermes,
+// performance becomes horrendous". Spotlight shows a second live copy of the
+// pane and keeps the lane's copy mounted under display:none (#752). Both
+// re-rendered on every update. Harness: the two copies, the hidden one inside
+// the same visibility provider Spotlight uses. One new reply arrives.
+describe('a Hermes pane in Spotlight', () => {
+  it('lets the hidden copy do no work while the visible one renders only the new reply', () => {
+    const entries = recordedEntries()
+    const assistant = entries.filter((entry) => entry.type === 'assistant').at(-1)!
+    const reply = { ...assistant, uuid: 'hermes:row:new', message: { role: 'assistant' as const, content: [{ type: 'text' as const, text: 'A brand new reply.' }] } }
+    const before = { ...emptyRuntime(), entries }
+    const after = { ...emptyRuntime(), entries: [...entries, reply] }
+    const Spotlight = ({ runtime }: { runtime: SessionRuntime }) => (
+      <>
+        <Pane runtime={runtime} draft="" />
+        <AgentTerminalOwnerVisibilityProvider visible={false}>
+          <Pane runtime={runtime} draft="" />
+        </AgentTerminalOwnerVisibilityProvider>
+      </>
+    )
+    const view = render(<Spotlight runtime={before} />)
+    const mounted = markdown.renders
+    view.rerender(<Spotlight runtime={after} />)
+    expect(markdown.renders - mounted).toBe(1)
   })
 })
