@@ -32,6 +32,8 @@ import {
 import { DispatchMiniList } from '@renderer/workspace/dispatch/DispatchMiniList'
 import { rowScopedRows } from '@renderer/workspace/dispatch/rowScopedRows'
 import { stageOfWorkspace } from '@renderer/workspace/workspaceStage'
+import { LaneRecentList } from '@renderer/features/lane-history/LaneRecentList'
+import { LaneSlotProvider } from '@renderer/features/lane-history/LaneSlotContext'
 import type { DispatchGridRow, SessionId, TabId } from '@renderer/workspace/types'
 
 type Props = {
@@ -505,6 +507,10 @@ function GridRowView({
                   if (!focused) workspace.setTiledFocusedLane(laneIndex)
                 }}
               >
+                {/* ALWAYS provided, never conditional: wrapping only some
+                    lanes would change the element type above the agent view
+                    and remount it (see LaneSlotContext). */}
+                <LaneSlotProvider value={laneIndex}>
                 {resolved ? (
                   renderWorkspaceLeaf(
                     resolved.sessionId,
@@ -562,7 +568,14 @@ function GridRowView({
                           : 'Pick an agent from the strip'
                         : undefined
                     }
-                  />
+                  >
+                    {/* Lane History's empty-lane shortcut. In every empty
+                        lane, focused or not: picking from it focuses the
+                        lane, and an unfocused cleared lane is still a lane
+                        whose agent you may want back. Renders nothing until
+                        the lane has a past. */}
+                    <LaneRecentList laneIndex={laneIndex} workspace={workspace} />
+                  </DispatchEmpty>
                   {/* The starter card, Context B (#992 §4.6): extends the
                       focused empty lane's hint with the four placement-flavored
                       slots. The same three conditions as the hint — focused,
@@ -575,6 +588,7 @@ function GridRowView({
                   )}
                   </div>
                 )}
+                </LaneSlotProvider>
                 {resolved && <LanePortChip sessionId={resolved.sessionId} workspace={workspace} />}
                 {!focused && (
                   <div className="absolute inset-0 pointer-events-none bg-canvas/34 ring-1 ring-inset ring-border" />

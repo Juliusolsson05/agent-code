@@ -15,6 +15,8 @@ import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { moveLaneSelection, moveLaneFocusWithinRow } from '@renderer/workspace/dispatch/laneKeyboard'
 import type { WorkspaceState } from '@renderer/workspace/types'
 import { useAppStore } from '@renderer/app-state/hooks'
+import { currentCommandChordLabel } from '@renderer/features/command-keybindings/useCommandChord'
+import { goBackInLane, previousLaneSession } from '@renderer/features/lane-history/laneHistoryModel'
 
 // Exported by name because its admission and badge are pinned directly in
 // clearLane.renderer.test.tsx — looking the def up by id inside that suite
@@ -195,12 +197,17 @@ export const layoutCommands: CommandDef[] = [
     // `app` like New Lane: every surface has a focused lane, and "what was in
     // this lane a minute ago" is asked from wherever you are.
     //
-    // WHY a palette command opening a dialog, and no button on the lane:
-    // lanes have no header of their own (the pane header belongs to the
-    // AGENT), and a per-lane chip would sit on every lane for a question
-    // asked occasionally. The dialog is bound to the lane focused when the
-    // command ran, captured here, so moving focus while it is open cannot
-    // retarget a pick into another lane.
+    // The FULL list. The everyday paths are Lane Back below (⌥B), the
+    // "↶ A2" chip in the pane header (click = back, right-click = this
+    // history as a native menu) and the "Recently here" list an empty lane
+    // shows. The first version was this dialog alone, palette-only, on the
+    // reasoning that a per-lane chip costs every lane room for an occasional
+    // question; the owner found that hidden and counter-intuitive
+    // (2026-10-14), and the chip only appears once a lane HAS a previous
+    // agent, so a lane that never changed pays nothing.
+    //
+    // The dialog is bound to the lane focused when the command ran, captured
+    // here, so moving focus while it is open cannot retarget a pick.
     surface: 'app',
     title: 'Lane History',
     description: '**What it does:** Lists every agent that has been in the **focused lane**, newest first, with how long ago it left.\n\n**Use when:** You switched a lane to another agent (or cleared it) and want the previous one back.\n\n**Notes:** Click an agent, or press Enter on it, to put it back in this lane. Closed agents are not listed.',
@@ -210,6 +217,25 @@ export const layoutCommands: CommandDef[] = [
       const laneIndex = workspace.state.stage.focusedLane
       if (workspace.state.stage.lanes[laneIndex] === undefined) return
       useAppStore.getState().openLaneHistory(laneIndex)
+    },
+  },
+  {
+    id: 'lane-back',
+    category: 'layout-dispatch',
+    // Alt-Tab for one lane: put the agent this lane showed before back in
+    // it. A toggle by construction — the selection writer records the agent
+    // being replaced, so the one you just left becomes the next ⌥B target.
+    //
+    // ⌥B (in defaults.ts): free in this app, adjacent in spirit to the ⌥
+    // lane grammar, and the same class of Option chord as ⌥D/⌥T, which
+    // already take precedence over readline's Meta-letter in a terminal lane.
+    surface: 'app',
+    title: 'Lane Back',
+    description: '**What it does:** Puts the **previous agent** of the focused lane back in it. Press again to return — it toggles between the last two, like Alt-Tab.\n\n**Use when:** You looked at another agent in this lane and want the one you were on.\n\n**Notes:** The ↶ chip in the pane header does the same; right-click it for the lane\'s whole history.',
+    keywords: ['lane back', 'back', 'previous agent', 'last agent', 'toggle', 'swap', 'alt tab', 'lane history', 'return'],
+    when: ({ workspace }) => previousLaneSession(workspace.state, workspace.state.stage.focusedLane) !== null,
+    run: async ({ workspace }) => {
+      await goBackInLane(workspace, workspace.state.stage.focusedLane, { chord: currentCommandChordLabel('lane-back') })
     },
   },
   ...laneKeyboardCommands,

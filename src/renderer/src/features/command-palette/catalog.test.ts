@@ -96,6 +96,7 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'remove-tiled-lane',
   'clear-focused-lane',
   'lane-history',
+  'lane-back',
   'dispatch-select-previous-agent',
   'dispatch-select-next-agent',
   'dispatch-focus-lane-left',
@@ -317,11 +318,12 @@ describe('built-in command catalog — baseline characterization', () => {
     // (`new-tiled-lane-before`), the left-hand twin of New Lane → 139 with
     // Lane History (`lane-history`) → 140 with New Separate Hermes Chat (#1496:
     // New Hermes now follows the Telegram thread; this opts out) → 143 with
-    // Sidekick, Sidekick Picker… and New Sidekick… (#1493).
+    // Sidekick, Sidekick Picker… and New Sidekick… (#1493) → 144 with Lane
+    // Back (`lane-back`, ⌥B).
     // Each step of that arithmetic was a deliberate edit to this line, which is the entire point of pinning it. (The two test
     // titles above had drifted to "115" while this line said 116; they now
     // track it again.)
-    expect(builtInCommandCatalog).toHaveLength(143)
+    expect(builtInCommandCatalog).toHaveLength(144)
   })
 
   it('reports no structural defects', () => {
@@ -367,9 +369,10 @@ describe('generated per-provider split commands', () => {
     // (#1182), then up by Pin Session (#1180), then up by View Goal History
     // (#1190), then up by Reply to Reader Message (#1221, K2-4), then up by
     // New Lane Before, then up by Lane History, then up by New Separate Hermes
-    // Chat (#1496), then up by the three Sidekick commands (#1493).
+    // Chat (#1496), then up by the three Sidekick commands (#1493), then up by
+    // Lane Back.
     // Grok (#844) grew only the GENERATED term, 4 → 6, and Pi (#1132) 6 → 8.
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(133)
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(134)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -526,8 +529,9 @@ describe('governance targets', () => {
     // Then `hermes-vertical` and `hermes-horizontal` (#1482, generated from
     // AGENT_PROVIDER_KINDS like Grok's and Pi's). Then `new-tiled-lane-before`,
     // then `lane-history`, then `hermes-separate-chat` (#1496). Then `sidekick-panel`, `sidekick-picker` and `new-sidekick` (#1493).
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 64).toBe(109)
-    expect(builtInCommandCatalog).toHaveLength(143)
+    // Then `lane-back`.
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 64).toBe(110)
+    expect(builtInCommandCatalog).toHaveLength(144)
   })
 })
 

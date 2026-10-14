@@ -189,6 +189,12 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     // place a layout verb must not eat an editing chord.
     { commandId: 'clear-focused-lane', bindings: ['Alt+Backspace'], context: 'dispatch' },
 
+    // Lane Back (Lane History): ⌥B toggles the focused lane to its previous
+    // agent. 'dispatch' like the lane grammar above — it acts on the focused
+    // LANE. The chip in the pane header shows this chord, so a rebind shows
+    // up there too.
+    { commandId: 'lane-back', bindings: ['Alt+B'], context: 'dispatch' },
+
     // --- Navigation ---------------------------------------------------------
     // DELETED with the tile tree (#992): the nav-left/right/up/down bindings
     // (⌥H/J/K/L + ⌥Arrows, grid context) walked `tab.root` focus. The same

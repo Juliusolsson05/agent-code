@@ -4,7 +4,7 @@ import {
   isAgentProviderKind,
   isAgentSessionKind,
 } from '@shared/types/providerKind'
-import { memo, useCallback, useId, useLayoutEffect, useMemo, useRef } from 'react'
+import { memo, useCallback, useId, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 
 import { sessionIsWorking } from '@renderer/session-runtime/working'
@@ -981,11 +981,24 @@ export function dispatchActivityDotClass(activity: DispatchAgentActivity): strin
  * (#673), where naming the state and the way out of it is the whole job. Only
  * the caller knows which one it is looking at.
  */
-export function DispatchEmpty({ message, hint }: { message: string; hint?: string }) {
+export function DispatchEmpty({ message, hint, children }: { message: string; hint?: string; children?: ReactNode }) {
+  // `children` sit in the same centred column, under the hint: Lane History's
+  // "Recently here" list belongs next to the words "Empty lane", not pushed to
+  // the bottom of a full-height block. `text-left` is restored by the child.
+  //
+  // Scrolls instead of clipping (#1511 review): a short lane in a three-row
+  // grid cannot fit the message, five "Recently here" rows and the focused
+  // lane's starter card. `flex-1 min-h-0` lets it shrink beside the starter
+  // card in the lane's column; the inner `min-h-full` keeps the content
+  // centred when it fits and lets it scroll from the top when it does not
+  // (plain `justify-center` would push the overflow off both ends).
   return (
-    <div className="h-full flex flex-col items-center justify-center gap-1 px-4 text-center text-[12px] text-muted">
-      <span>{message}</span>
-      {hint && <span className="text-[11px] text-muted/70">{hint}</span>}
+    <div className="flex-1 min-h-0 overflow-y-auto text-[12px] text-muted">
+      <div className="min-h-full flex flex-col items-center justify-center gap-1 px-4 py-3 text-center">
+        <span>{message}</span>
+        {hint && <span className="text-[11px] text-muted/70">{hint}</span>}
+        {children ? <div className="mt-3 w-full text-left empty:hidden">{children}</div> : null}
+      </div>
     </div>
   )
 }
