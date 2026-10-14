@@ -7,6 +7,7 @@ import {
   effectiveProviderRuntime,
   isAgentProviderKind,
   isAgentSessionKind,
+  isRemoteProviderKind,
   isSessionKind,
 } from '@shared/types/providerKind'
 import type { AgentProviderRuntime } from '@shared/types/providerKind'
@@ -418,7 +419,14 @@ export function useSessionActions(
       },
     ): Promise<SessionId> => {
       const kind: SessionKind = opts?.kind ?? DEFAULT_PROVIDER
-      const remoteConnectionId = await resolveRemoteConnectionId(kind, opts?.remoteConnectionId)
+      // Only remote kinds wait for the connection list. An unconditional
+      // await here deferred EVERY spawn's IPC by a microtask, which broke
+      // replaceSession's ordering against edits made while a replacement is
+      // in flight (sessionRecovery.renderer.test.tsx "delayed session
+      // replacement").
+      const remoteConnectionId = isRemoteProviderKind(kind)
+        ? await resolveRemoteConnectionId(kind, opts?.remoteConnectionId)
+        : undefined
       const dangerousMode =
         opts?.dangerousMode ??
         (isAgentSessionKind(kind) ? refs.dangerousAgentsRef.current : undefined)

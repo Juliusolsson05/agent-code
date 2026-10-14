@@ -15,8 +15,12 @@ import { isRemoteProviderKind, type SessionKind } from '@shared/types/providerKi
  * Decision 6): most users have one Hermes server, and every generic spawn
  * path (split chords, the New Agent picker, MCP create_agent) passes only a
  * kind. Picking the first signed-in connection makes all of them work without
- * a second picker; a user with several servers chooses per pane in the
- * connection picker the "New Hermes Chat…" command shows.
+ * a second picker. A per-pane connection picker for users with several
+ * servers is follow-up #1485; until then a pane keeps whichever connection it
+ * was first given.
+ *
+ * Callers must not await this for LOCAL kinds (see spawnSession): the extra
+ * microtask would delay every Claude/Codex spawn's IPC behind a no-op.
  */
 export async function resolveRemoteConnectionId(
   kind: SessionKind | undefined,
