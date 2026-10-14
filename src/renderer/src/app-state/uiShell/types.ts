@@ -349,6 +349,20 @@ export type UiShellState = {
    * one composer without touching the lane layout code.
    */
   keyboardRegion: 'workspace' | 'sidekick'
+  /**
+   * The Sidekick column fills the window (#1493 follow-up): Spotlight for the
+   * sidekick. Window-local and never persisted, like `keyboardRegion`.
+   *
+   * WHY a flag here and not the workspace's `spotlight` (SpotlightState): lane
+   * Spotlight is keyed to a project tab and, while open, makes the
+   * spotlighted session the palette's COMMAND TARGET
+   * (commandTargetSessionIdForState). A sidekick has no tab, and the v1 ruling
+   * is that palette commands never target a sidekick — ~150 session commands
+   * assume a project. Reusing SpotlightState would have broken both. So the
+   * takeover is the Sidekick column itself growing to fill the main row, with
+   * the lanes retained-hidden underneath like any takeover.
+   */
+  sidekickSpotlight: boolean
   /** Sidekick Picker (#1493). `create` scrolls it to the New Sidekick rows. */
   sidekickPickerOpen: boolean
   sidekickPickerMode: 'switch' | 'create'

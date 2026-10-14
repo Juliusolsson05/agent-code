@@ -9,6 +9,7 @@ import type { SidekickActions } from '@renderer/features/sidekick/actions/useSid
 import { useSidekickSummaries } from '@renderer/features/sidekick/state/sidekickIndexStore'
 import { confirmRemoveSidekick } from '@renderer/features/sidekick/ui/confirmRemoveSidekick'
 import { sidekickChipLabel, SidekickStrip } from '@renderer/features/sidekick/ui/SidekickStrip'
+import { useSidekickSpotlightActive } from '@renderer/features/sidekick/state/sidekickSpotlight'
 import { KeyboardRegionContext, SIDEKICK_PANEL_ATTRIBUTE } from '@renderer/features/sidekick/ui/KeyboardRegionContext'
 import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 import { clampSidekickPanelWidth, DEFAULT_SIDEKICK_PANEL } from '@renderer/workspace/sidekickPanel'
@@ -165,15 +166,22 @@ export function SidekickPanel({ workspace, actions }: Props) {
     const choice = await window.api.showPopupMenu({
       items: [
         { type: 'item', id: 'reload', label: 'Reload Agent', enabled: heldSessionId !== null },
+        { type: 'item', id: 'spotlight', label: 'Spotlight', checked: useAppStore.getState().sidekickSpotlight },
         { type: 'item', id: 'remove', label: 'Remove Sidekick…' },
         { type: 'separator' },
         { type: 'item', id: 'hide', label: 'Hide Sidekick' },
       ],
     })
-    if (choice === 'reload' && heldSessionId) void workspace.reloadSessionAgent(heldSessionId)
+    if (choice === 'spotlight') {
+      // The menu's way into the same toggle the ⌥S chord runs; it shows the
+      // chip's sidekick first so "Spotlight" always means the one clicked.
+      const store = useAppStore.getState()
+      if (!store.sidekickSpotlight) select(sidekickId)
+      store.setSidekickSpotlight(!store.sidekickSpotlight)
+    } else if (choice === 'reload' && heldSessionId) void workspace.reloadSessionAgent(heldSessionId)
     else if (choice === 'remove') await confirmRemoveSidekick(actions, sidekickId, showToast)
     else if (choice === 'hide') hide()
-  }, [actions, heldSessions, hide, showToast, workspace])
+  }, [actions, heldSessions, hide, select, showToast, workspace])
 
   // The strip's own right-click menu, outside any chip. WHY (review of
   // #1507): Hide lived only on a chip's menu, and with no sidekick yet, or
@@ -194,6 +202,7 @@ export function SidekickPanel({ workspace, actions }: Props) {
   const chipIndex = summaries.findIndex(entry => entry.id === panel.sidekickId)
   const paneLabel = chipIndex >= 0 ? sidekickChipLabel(chipIndex) : 'S'
   const focused = region === 'sidekick'
+  const spotlit = useSidekickSpotlightActive(workspace.state)
 
   // The column is shaped exactly like a lane in TiledDispatchLayout: a
   // boundary handle in normal flow, the 46px chip strip, then the leaf on the
@@ -211,19 +220,30 @@ export function SidekickPanel({ workspace, actions }: Props) {
     <div
       role="region"
       aria-label="Sidekick"
-      className="flex h-full min-h-0 flex-shrink-0 bg-canvas"
-      style={{ width: width + SIDEKICK_COLUMN_CHROME_PX }}
+      data-sidekick-spotlight={spotlit ? 'true' : undefined}
+      // Sidekick Spotlight: the SAME element grows to fill the row instead of
+      // a second surface rendering the leaf. A separate spotlight view would
+      // remount the agent (xterm dispose + PTY replay, the #752 cost) on every
+      // toggle; changing this box's size is a plain resize, the way a lane
+      // resize is.
+      className={spotlit ? 'flex h-full min-h-0 min-w-0 flex-1 bg-canvas' : 'flex h-full min-h-0 flex-shrink-0 bg-canvas'}
+      style={spotlit ? undefined : { width: width + SIDEKICK_COLUMN_CHROME_PX }}
       {...{ [SIDEKICK_PANEL_ATTRIBUTE]: '' }}
     >
-      <SplitHandle
-        dragging={splitter.dragging}
-        onMouseDown={splitter.onMouseDown}
-        hitSizePx={10}
-        barSizePx={4}
-        label="Resize Sidekick"
-        valueNow={width}
-        onKeyboardDelta={delta => workspace.setSidekickPanel({ width: clampSidekickPanelWidth(width - delta * 16, window.innerWidth) })}
-      />
+      {/* No boundary while spotlit: there is nothing on its left to share the
+          width with. The slot stays (null) so the strip and leaf keep their
+          child positions and React never remounts the leaf. */}
+      {spotlit ? null : (
+        <SplitHandle
+          dragging={splitter.dragging}
+          onMouseDown={splitter.onMouseDown}
+          hitSizePx={10}
+          barSizePx={4}
+          label="Resize Sidekick"
+          valueNow={width}
+          onKeyboardDelta={delta => workspace.setSidekickPanel({ width: clampSidekickPanelWidth(width - delta * 16, window.innerWidth) })}
+        />
+      )}
       {splitter.cursorLock}
       <SidekickStrip
         sidekicks={summaries}
