@@ -131,3 +131,17 @@ Gate: `npx tsc -b` and the touched vitest files, run once at the end.
 - A "New Row Above" counterpart to `new-dispatch-row` (below only). It has
   the same shape of gap but is a separate request.
 - Lane context-menu or header affordances. This change is palette-only.
+
+## Review round (one Claude + one Codex reviewer)
+
+- Codex: no findings. Its exhaustive check of every legal grid shape, anchor,
+  focus and side (848,928 cases) passed.
+- Claude: no blockers. Three nits:
+  1. **Accepted, not fixed.** Lanes are keyed by flat index in
+     `TiledDispatchLayout`, so inserting before the focused lane remounts its
+     pane one slot right, and it loses DOM focus and terminal scroll. Remove
+     Lane and New Row already do the same to shifted lanes. The fix is stable
+     lane ids, which is a cross-cutting change outside this PR.
+  2. **Fixed.** Added a wake-in-flight test for a `before` insert at the
+     wake's own coordinate (`laneSelectionWake.renderer.test.tsx`).
+  3. **Intended.** The starter hint card still lists only New Lane.

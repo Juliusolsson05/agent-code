@@ -325,4 +325,21 @@ describe('a reshape while the wake is in flight', () => {
 
     expect(written).toEqual([])
   })
+  it('drops the write when New Lane Before opens a lane at the target', async () => {
+    // New Lane Before inserts AT the anchor's coordinate, so the empty
+    // newcomer takes exactly the (row, column) the gesture captured. Writing
+    // there would put the agent in a lane the user never picked it into. The
+    // grown row is a new object, so the identity check drops the write — the
+    // same rule as every other reshape of the target's own row.
+    const { hook, written } = harness({
+      duringWake: reshapeWith(tiled => insertLaneIntoGrid(tiled, 1, 'before')),
+    })
+
+    // Row 1, column 0 of [1, 2] — flat 1, the insertion's own coordinate.
+    await act(async () => {
+      await hook.result.current.selectTiledLaneSession(1, HIBERNATED)
+    })
+
+    expect(written).toEqual([])
+  })
 })
