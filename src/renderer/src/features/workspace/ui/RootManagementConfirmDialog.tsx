@@ -85,8 +85,8 @@ export function RootManagementConfirmDialog({
                 project tab, every agent and terminal. Not only this agent&rsquo;s own project.
               </li>
               <li>
-                Rearranging grids and Dispatch lanes; focusing, attaching, detaching, burying, pinning
-                and titling agents; prompting, creating and closing agents and terminals; reading any
+                Rearranging rows and lanes; moving agents between windows; focusing, pinning and
+                titling agents; prompting, creating and closing agents and terminals; reading any
                 conversation.
               </li>
               <li>
