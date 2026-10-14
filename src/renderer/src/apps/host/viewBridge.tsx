@@ -3,7 +3,7 @@ import { Button } from '@renderer/components/ui/button'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import type { AgentCodeApiV1 } from '@renderer/apps/api/types'
-import { sessionStatusSignature } from '@renderer/apps/api/sessionStatus'
+import { grantedObserveTopics, subscribeObserveNudges } from '@renderer/apps/host/observeNudges'
 import { createFrameHost } from '@renderer/apps/host/frameHost'
 import { ExtensionLoadingShell } from '@renderer/apps/host/extensionLoadingShell'
 import { clearFrameDispatch, discardPendingCommands, setFrameDispatch } from '@renderer/apps/host/frameRegistry'
@@ -144,7 +144,6 @@ function buildViewComponent(
       let ready = false
       let themeRequest = 0
       let startupTimer: ReturnType<typeof setTimeout> | null = null
-      let nudgeTimer: ReturnType<typeof setTimeout> | null = null
       let storeUnsub: (() => void) | null = null
       const stopInput = bindExtensionFrameInput(iframe, () => focusCallback.current?.())
       const closeFromHost = () => { void api.ui.close() }
@@ -157,7 +156,6 @@ function buildViewComponent(
         if (disposed) return
         disposed = true
         if (startupTimer !== null) clearTimeout(startupTimer)
-        if (nudgeTimer !== null) clearTimeout(nudgeTimer)
         storeUnsub?.()
         stopInput()
         iframe.removeEventListener('agent-code-extension-close', closeFromHost)
@@ -246,37 +244,11 @@ function buildViewComponent(
       // a burst of workspace changes does not flood the child message queue.
       void frameHost.granted.then(granted => {
         if (disposed) return
-        const topics = ([
-          ['workspace.observe', 'workspace'],
-          ['sessions.observe', 'sessions'],
-          ['panes.observe', 'panes'],
-        ] as const).filter(([cap]) => granted.includes(cap)).map(([, topic]) => topic)
-        if (topics.length === 0) return
-        // One timer, a SET of pending topics: a workspace burst and a status
-        // flip inside the same 120 ms window still produce one nudge per topic.
-        const pending = new Set<string>()
-        const nudge = (next: readonly string[]) => {
-          for (const topic of next) pending.add(topic)
-          if (nudgeTimer !== null) return
-          nudgeTimer = setTimeout(() => {
-            nudgeTimer = null
-            if (disposed) return
-            for (const topic of pending) frameHost.push({ kind: 'agent-code-ext:event', topic })
-            pending.clear()
-          }, 120)
-        }
-        const offWorkspace = useAppStore.subscribe(state => state.workspaceState, () => nudge(topics))
-        // Session STATUS (working / notification, #1479) lives on runtimes,
-        // which a workspaceState listener never sees: an agent finishing its
-        // turn changes no session row. The selector is the projected
-        // signature, not the runtime map — the map is replaced on every
-        // streamed chunk and would nudge (and make the extension re-read)
-        // many times a second. Only the `sessions` topic carries status, so
-        // only it is pushed.
-        const offStatus = topics.includes('sessions')
-          ? useAppStore.subscribe(sessionStatusSignature, () => nudge(['sessions']))
-          : null
-        storeUnsub = () => { offWorkspace(); offStatus?.() }
+        // Workspace changes and agent status changes (#1479); the coalescing
+        // and the reason status needs its own selector live in observeNudges.
+        storeUnsub = subscribeObserveNudges(grantedObserveTopics(granted), topic => {
+          if (!disposed) frameHost.push({ kind: 'agent-code-ext:event', topic })
+        })
       })
 
       const onError = () => fail('The extension frame could not be loaded.')

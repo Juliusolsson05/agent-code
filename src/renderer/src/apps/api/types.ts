@@ -11,7 +11,9 @@ export type JsonValue =
 // objects, which carry renderer-only handles and would not survive the frame
 // boundary. These are point-in-time reads; live updates arrive over the push
 // channel (Group D). Kept deliberately minimal: an extension gets identity and
-// shape, not the host's internal runtime.
+// shape, not the host's internal runtime. The one runtime-derived exception is
+// a session's `activity` and `notification` (#1479): two published answers
+// (Dispatch's working rule and badge), never the raw runtime fields behind them.
 
 export type ExtensionWorkspaceSnapshot = {
   activeTabId: string | null
@@ -159,9 +161,11 @@ export interface AgentCodeApiV1 {
   }
 
   readonly sessions: {
-    /** All sessions' identity/shape. Requires `sessions.observe`. */
+    /** All sessions' identity, shape and live status. Requires `sessions.observe`. */
     observe(): Promise<ExtensionSessionSnapshot[]>
-    /** Fire on any session change; returns an unsubscribe. Re-read via observe(). */
+    /** Fire on any session change, including an `activity` or `notification`
+     *  change (coalesced, never per streamed token); returns an unsubscribe.
+     *  Re-read via observe(). */
     subscribe(listener: () => void): () => void
   }
 

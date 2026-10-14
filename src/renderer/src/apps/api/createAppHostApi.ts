@@ -152,15 +152,19 @@ export function createAppHostApi(deps: AppHostApiDeps): AgentCodeApiV1 {
           ...projectSessionStatus(state.workspaceRuntimes[id]),
         }))
       },
-      // Two triggers because the snapshot now has two sources: session rows
-      // (metadata) and runtimes (status). The runtime half listens to the
-      // projected signature, never the runtime map itself — see
+      // The snapshot has two sources: session rows (metadata) and runtimes
+      // (status). ONE selector over both, compared field by field, so a write
+      // that changes both (a session added: new row AND new signature
+      // segment) calls the listener once, not twice (#1479 review). The
+      // runtime half is the projected signature, never the runtime map — see
       // sessionStatusSignature for why the map would fire on every token.
-      subscribe: listener => {
-        const offSessions = useAppStore.subscribe(s => s.workspaceState.sessions, () => listener())
-        const offStatus = useAppStore.subscribe(sessionStatusSignature, () => listener())
-        return () => { offSessions(); offStatus() }
-      },
+      // Frames do not use this: they are woken by observeNudges' pushes.
+      subscribe: listener =>
+        useAppStore.subscribe(
+          s => ({ rows: s.workspaceState.sessions, status: sessionStatusSignature(s) }),
+          () => listener(),
+          { equalityFn: (a, b) => a.rows === b.rows && a.status === b.status },
+        ),
     },
 
     panes: {

@@ -30,6 +30,12 @@ const permissionPrompt = {
   conditions: { 'claude.permission-prompt': { kind: 'claude.permission-prompt', state: { visible: true }, actions: [] } },
 } as unknown as ProviderConditionSnapshot
 
+const askQuestion = {
+  provider: 'claude',
+  ts: 2,
+  conditions: { 'claude.ask-user-question': { kind: 'claude.ask-user-question', state: { visible: true }, actions: [] } },
+} as unknown as ProviderConditionSnapshot
+
 const api = () => createAppHostApi({ extensionId: 'skitgubbe', closeSurface: () => {}, showToast: () => {} })
 
 function seed(sessions: Record<string, { kind: string; title?: string }>, runtimes: Record<string, SessionRuntime>) {
@@ -77,6 +83,20 @@ describe('projectSessionStatus agrees with Dispatch', () => {
     expect(projectSessionStatus(runtime({ streamPhase: 'thinking' })).activity).toBe('working')
     expect(projectSessionStatus(undefined)).toEqual({ activity: 'idle', notification: null })
   })
+
+  // The agreement table above cannot catch a precedence bug in the badge rule
+  // itself (both sides call it). These pin the order the extension now
+  // publishes (#1479 review, ub5/M15): a live prompt wins over a stale unread
+  // marker AND over a leftover start error, because the prompt is what the
+  // user can act on right now.
+  it('a live prompt outranks an unread marker and a leftover error', () => {
+    expect(projectSessionStatus(runtime({ unreadKind: 'attention', unreadSince: 1, conditions: permissionPrompt })).notification)
+      .toEqual({ kind: 'attention', label: 'ACTION' })
+    expect(projectSessionStatus(runtime({ processError: 'old failure', conditions: permissionPrompt })).notification)
+      .toEqual({ kind: 'attention', label: 'ACTION' })
+    expect(projectSessionStatus(runtime({ unreadKind: 'output', unreadSince: 1, processError: 'boom' })).notification)
+      .toEqual({ kind: 'attention', label: 'ERROR' })
+  })
 })
 
 describe('sessions.observe through the extension host API', () => {
@@ -122,6 +142,50 @@ describe('status change nudges', () => {
 
       update({ streamPhase: 'idle', unreadKind: 'output', unreadSince: 9 })
       expect(fired).toBe(2)
+    } finally {
+      off()
+    }
+  })
+
+  it('fires when only the badge changes, the agent staying as busy as it was', () => {
+    // #1479 review (ss4/ss5, M9/M10): every badge change above also flipped
+    // activity, so dropping the badge from the signature survived. These are
+    // the real cases where activity holds still.
+    seed({ a: { kind: 'claude' } }, { a: runtime({ sessionStatus: 'running' }) })
+    let fired = 0
+    const off = api().sessions.subscribe(() => { fired += 1 })
+    const update = (patch: Partial<SessionRuntime>) =>
+      useAppStore.getState().setWorkspaceRuntimes(prev => ({ ...prev, a: { ...prev.a!, ...patch } }))
+    try {
+      // Mid-turn, a permission prompt appears: still working, now ACTION.
+      update({ conditions: permissionPrompt })
+      expect(fired).toBe(1)
+      // The prompt turns into a question: same kind, different word.
+      update({ conditions: askQuestion })
+      expect(fired).toBe(2)
+      // Idle with NEW, then the user looks and NEW clears: still idle.
+      update({ conditions: null, sessionStatus: 'idle', unreadKind: 'output', unreadSince: 3 })
+      expect(fired).toBe(3)
+      update({ unreadKind: null, unreadSince: null })
+      expect(fired).toBe(4)
+    } finally {
+      off()
+    }
+    // After unsubscribing nothing fires (ca3: a leaked status listener).
+    update({ sessionStatus: 'running' })
+    expect(fired).toBe(4)
+  })
+
+  it('adding a session calls the listener once, not once per source', () => {
+    seed({ a: { kind: 'claude' } }, { a: runtime({}) })
+    let fired = 0
+    const off = api().sessions.subscribe(() => { fired += 1 })
+    try {
+      useAppStore.getState().setWorkspaceState(state => ({
+        ...state,
+        sessions: { ...state.sessions, b: { cwd: '/work/b', kind: 'codex', projectId: 'p', joinedAt: 0 } } as typeof state.sessions,
+      }))
+      expect(fired).toBe(1)
     } finally {
       off()
     }
