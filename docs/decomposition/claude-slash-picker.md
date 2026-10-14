@@ -1,7 +1,7 @@
 # Claude slash picker: anchor detection to the composer
 
-Status: **implementing**: Stage 0 done; stages 1–3 in progress on
-`fix/claude-slash-picker-transcript-rows`.
+Status: **in review**: stages 0–3 done. claude-code-headless#72 (the fix) and
+the agent-code PR (the submodule bump) are open, not merged.
 Approval mode: **pre-authorized** (owner, 2026-10-14: "use the staged
 decomposition principles … tell me when we have the PR open"). Stop-and-ask
 triggers: a recording contradicts H1, or the fix needs a rule beyond "the
@@ -57,6 +57,10 @@ the session scratchpad; the committed fixture is listed under
 - **Wrapped Bash row colour:** fg `#999999` (RGB mode). That equals the
   unselected picker row colour (`#999999`) in the same build. The selected
   picker row is `#B1B9F9`.
+- **Inline code colour** (found during Stage 2): a reply line and a prompt
+  echo starting with `` `/compact` `` are painted `#B1B9F9`, the **selected**
+  picker colour. The reply's last such row is followed by a blank row and the
+  `✻ Baked for 1s` status row. This is #1293's inline-code case.
 - **Picker position:** in 6 of 6 screens, the picker block ends on the row
   directly above the composer's top rule (`───…` / `❯ …` / `───…`):
   - 2.1.296 at 120 columns: idle, filtered (`/com`), and opened while a Bash
@@ -113,8 +117,9 @@ the session scratchpad; the committed fixture is listed under
 
 ### Stage 1: committed fixture plus fail-first tests
 - **Produces:**
-  - `test/fixtures/slash-picker/transcript-bash-wrap-2.1.296.json` and a
-    README section;
+  - `test/fixtures/slash-picker/transcript-bash-wrap-2.1.296.json` and
+    `reply-inline-code-2.1.296.json` (added in Stage 2, see below), each with
+    a README section;
   - tests that drive it through the real `ClaudeCodeHeadless` /
     `HeadlessTerminal`, as the #1253 tests do.
 - **Verified by:** the tests are red on today's parser for D1–D5 and the
@@ -133,8 +138,19 @@ the session scratchpad; the committed fixture is listed under
      preceded by `❯ ` and `* `) or continuation rows.
   3. Hidden if no item rows touch the rule.
   4. Selected = the `❯` row; otherwise the colour rule.
-- **Verified by:** the Stage 1 tests turn green. Reverting the anchoring turns
-  the D1/D2 tests red again.
+- **Verified by:** the Stage 1 tests turn green, and the old parser turns both
+  new tests red. Each guard was mutated on its own:
+  - stop rule, anchor, `❯` selection, continuation join and colour fallback:
+    all killed;
+  - colour requirement on item rows: survived, so the guard was removed.
+- **Deviation:** two guards from the first draft were removed. The Bash
+  fixture alone could not tell them apart from the stop rule:
+  - a continuation-indent check, which was redundant on every recording;
+  - the colour requirement, which no recording needs and which would break
+    under `NO_COLOR`.
+
+  The inline-code recording was added because it is the one real frame where
+  only the stop rule rejects a `/` row.
 - **Why separate:** it is the only behavioural change. Everything else is
   evidence or wiring.
 - **Reality check:** the Stage 1 fixtures.
@@ -179,6 +195,8 @@ works on plain strings, while this parser needs cells, so they share
   `startup`, `prompt`, `submit`, `open-filtered`, `escape`. Sliced by send
   time and checked by content per step: each step's replayed screen shows
   the stated state.
+- `reply-inline-code-2.1.296.json`: a **recording** with the same steps;
+  `/`-led inline code in a reply and the prompt echo, then the same picker.
 - `colour-only-selection-2.1.283.json`: an existing **recording**, kept as
   the regression guard for D4/D6.
 
@@ -188,4 +206,5 @@ works on plain strings, while this parser needs cells, so they share
   reading vendored `PromptInputFooter.tsx`. Both installed versions draw it
   above the composer's top rule. Vendored source is older than the binary.
 - **H5: "a coloured leading `/` identifies picker rows".** The wrapped Bash
-  row is `#999999`, identical to unselected picker rows.
+  row is `#999999`, identical to unselected picker rows, and inline code is
+  `#B1B9F9`, identical to the selected one.
