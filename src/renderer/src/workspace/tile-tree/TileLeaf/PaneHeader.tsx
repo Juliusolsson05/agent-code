@@ -9,6 +9,8 @@ import { PaneHeaderColorFlag } from '@renderer/workspace/tile-tree/TileLeaf/Pane
 import type { SessionId } from '@renderer/workspace/types'
 import { AgentTitleHeader } from '@renderer/workspace/tile-tree/AgentTitleHeader'
 import { paneHeaderStatusLit } from '@renderer/workspace/tile-tree/TileLeaf/paneHeaderStatus'
+import { LaneBackChip } from '@renderer/features/lane-history/LaneBackChip'
+import { useLaneSlot } from '@renderer/features/lane-history/LaneSlotContext'
 
 // Pane header: compact status strip.
 //
@@ -104,6 +106,7 @@ export function PaneHeader({
   // outline a pane that has just started streaming. Matching the fill is what
   // keeps the two from ever overlapping, and it's the smaller cost.
   const completionOutlined = completionIndicator && completionUnseen && !isSessionLive
+  const laneIndex = useLaneSlot()
   return (
     <div className="border-b border-border bg-surface text-muted font-code select-none">
       <div
@@ -193,9 +196,17 @@ export function PaneHeader({
               `pl-1` adds to the group's `gap-2`, so identity (cwd) and state
               (slot) sit at least 12px apart, the separation the terminal
               header had before it shared this row. */}
-          {trailing ? (
-            <span className="ml-auto flex flex-shrink-0 items-center gap-2 pl-1">
+          {/* The Lane Back chip rides the same slot, after the surface's own
+              state: it is LANE chrome, drawn only when this header is inside
+              a stage lane (LaneSlotContext), and only once the lane has a
+              previous agent. Rendered by the header rather than passed as
+              `trailing` because the three leaf kinds that pass `trailing`
+              (TileLeaf, TerminalLeaf, AgentTerminalLeaf) would each have to
+              know about lanes; the context keeps them lane-agnostic. */}
+          {trailing || laneIndex !== null ? (
+            <span className="ml-auto flex flex-shrink-0 items-center gap-2 pl-1 empty:hidden">
               {trailing}
+              {laneIndex !== null ? <LaneBackChip laneIndex={laneIndex} /> : null}
             </span>
           ) : null}
         </div>

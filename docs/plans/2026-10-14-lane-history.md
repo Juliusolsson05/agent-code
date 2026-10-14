@@ -69,3 +69,47 @@ All findings were valid and all are fixed. Each fix has a test, and the lane-shi
     - Added a hook-level test that a selection records a departure.
     - The ⌘T test asserts the recorded departure again instead of comparing selections only.
     - There is still no single end-to-end autosave-then-load test. Prune and load are tested separately.
+
+## Redesign: Lane Back + visible entry points (2026-10-14, later)
+
+The owner found the palette-only dialog hidden and counter-intuitive. After
+reading how the rest of the UI is built (lane anatomy, every picker, the
+native menu path, the keyboard-first plan) the owner approved this redesign:
+
+```
+ A. ⌥B Lane Back                     B. pane header chip
+ [A3] … → ⌥B → [A2] …                [A3] ~/dev/api          ↶ A2 ⌥B │FLAG│
+ toast: "Back to A2 · ⌥B returns      click = back · right-click = native menu:
+         to A3"                         Back to A2 … left 5m ago   ⌥B
+                                        B1 … left 1h ago
+ C. empty lane                          ─────────────
+      Empty lane                        Lane History…
+   RECENTLY HERE        ⌥B brings back the first
+   A3 ⏺ fix the auth tests   left 2m ago
+   A2 › build settings page  left 9m ago
+
+ D. dialog (full list): "Lane History — Row 1 · Lane 2", house list model,
+    rows = label · glyph · title · project · "left 5m ago", "Now: A3 …" line,
+    footer ↑↓ move · Put Back ↩ · Close ⎋
+```
+
+- **One model** (`features/lane-history/laneHistoryModel.ts`): it decides
+  "previous agent" for every surface, so the chip never advertises a key that
+  does something else. `goBackInLane` reads the live store state, because a
+  native menu is awaited and a captured Workspace would be stale.
+- **⌥B is a toggle by construction.** `withLaneSession` records the agent
+  being replaced, so the agent you just left is the next target. The binding
+  is `Alt+B` in the `dispatch` context, and `check:keybindings` passes.
+- **The chip is lane chrome inside the agent's header.** It is drawn through
+  `LaneSlotContext`, which exists only inside a stage lane, so Spotlight and
+  Sidekick headers show no chip, and none of the three leaf kinds had to
+  learn about lanes. It appears only once the lane has a previous agent.
+- **Native menu:** right-click uses `menu:popup`, the follow-up surface that
+  plan #1185 named. A pick is re-checked against live state when it resolves.
+- **Empty lane:** `DispatchEmpty` now takes children, so the list sits under
+  "Empty lane" instead of below a full-height block. It shows up to 5 rows,
+  and "N more — Lane History…" links to the dialog.
+- **Dialog:** rebuilt on `useListNavigation`. The listbox holds focus,
+  `aria-activedescendant` points at the highlighted row, rows use the accent
+  rail, and the footer has a key legend and Put Back. The lane-shift guard
+  from #1504 is kept.

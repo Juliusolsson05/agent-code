@@ -45,6 +45,7 @@ export const controlReference = [
       "new-tiled-lane",
       "new-tiled-lane-before",
       "lane-history",
+      "lane-back",
       "new-agent-in"
     ]
   },

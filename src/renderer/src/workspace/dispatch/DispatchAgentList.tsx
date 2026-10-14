@@ -4,7 +4,7 @@ import {
   isAgentProviderKind,
   isAgentSessionKind,
 } from '@shared/types/providerKind'
-import { memo, useCallback, useId, useLayoutEffect, useMemo, useRef } from 'react'
+import { memo, useCallback, useId, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 
 import { sessionIsWorking } from '@renderer/session-runtime/working'
@@ -981,11 +981,15 @@ export function dispatchActivityDotClass(activity: DispatchAgentActivity): strin
  * (#673), where naming the state and the way out of it is the whole job. Only
  * the caller knows which one it is looking at.
  */
-export function DispatchEmpty({ message, hint }: { message: string; hint?: string }) {
+export function DispatchEmpty({ message, hint, children }: { message: string; hint?: string; children?: ReactNode }) {
+  // `children` sit in the same centred column, under the hint: Lane History's
+  // "Recently here" list belongs next to the words "Empty lane", not pushed to
+  // the bottom of a full-height block. `text-left` is restored by the child.
   return (
     <div className="h-full flex flex-col items-center justify-center gap-1 px-4 text-center text-[12px] text-muted">
       <span>{message}</span>
       {hint && <span className="text-[11px] text-muted/70">{hint}</span>}
+      {children ? <div className="mt-3 w-full text-left empty:hidden">{children}</div> : null}
     </div>
   )
 }
