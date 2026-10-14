@@ -63,7 +63,7 @@ describe('what a Hermes pane says when it cannot start (#1495)', () => {
   })
 
   it('says signed out for a dead sign-in', () => {
-    expect(shown(new HermesStartError('dial', new HermesSignedOutError()))).toBe(session.HERMES_SIGNED_OUT_MESSAGE)
+    expect(shown(new HermesStartError('dial', new HermesSignedOutError('c1')))).toBe(session.HERMES_SIGNED_OUT_MESSAGE)
   })
 
   it('says the handshake did not finish when the socket closes before ready', () => {
