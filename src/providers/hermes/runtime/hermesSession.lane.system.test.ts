@@ -4,7 +4,7 @@
 // held-prompt card with Send now / Cancel, and the /new refusal.
 
 import { EventEmitter } from 'node:events'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { setHermesConnectionService } from '@main/hermes/registry.js'
 import type { HermesConnectionService } from '@main/hermes/service.js'
@@ -25,7 +25,16 @@ const listing = entries.find((entry) => entry.dir === 'in' && entry.kind === 'ht
 let socket: FakeSocket
 let history: Record<string, unknown>
 
+// The recording's clock: the busy rule ages a phone turn by Hermes' own row
+// timestamp, so the replay must run "2 s after the phone wrote its message".
+const phoneRowAt = ((resultOf('r4').messages as Array<{ timestamp?: number }>).at(-1)!.timestamp! * 1000)
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(phoneRowAt + 2_000)
   socket = new FakeSocket()
   history = resultOf('r3')
   setHermesConnectionService({

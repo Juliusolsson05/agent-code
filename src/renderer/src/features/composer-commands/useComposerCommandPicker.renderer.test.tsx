@@ -77,9 +77,42 @@ describe('/restart asks first (plan Decision 6, UNCONFIRMED)', () => {
   it('sends nothing when the user cancels, and sends when they confirm', async () => {
     const deliverPrompt = vi.fn(async () => ({ ok: true as const, acceptance: { kind: 'transport' as const, acceptedAt: 1 } }))
     const io = { input: '/restart', deliverPrompt } as unknown as Parameters<typeof hermesComposerSubmit>[0]
-    await hermesComposerSubmit(io, async () => false)
+    // Cancelled: nothing is sent, and the acceptance is `queue` so the
+    // composer settles its optimistic "submitting" phase (review #1503).
+    expect(await hermesComposerSubmit(io, async () => false)).toMatchObject({ kind: 'queue' })
     expect(deliverPrompt).not.toHaveBeenCalled()
-    await hermesComposerSubmit(io, async () => true)
+    expect(await hermesComposerSubmit(io, async () => true)).toMatchObject({ kind: 'transport' })
     expect(deliverPrompt).toHaveBeenCalledWith('/restart')
+  })
+})
+
+// Review #1503.
+describe('picker review fixes', () => {
+  it('Enter on an exact command runs it, even when a longer name comes first in the catalog (S17 /codex vs /codex-runtime)', async () => {
+    expect(commands.findIndex((command) => command.name === 'codex-runtime')).toBeLessThan(commands.findIndex((command) => command.name === 'codex'))
+    const { view, box, onSubmit } = await typed('/codex')
+    expect(view.container.querySelector('li[aria-selected="true"]')?.textContent).toBe('/codex')
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(onSubmit).toHaveBeenCalledWith('/codex')
+  })
+
+  it('asks again on the next / when the first answer was only the fallback list', async () => {
+    const fallback = composerCommandsFromCatalog({})
+    const load = vi.fn<(sessionId: string) => Promise<typeof commands>>()
+      .mockResolvedValueOnce(fallback)
+      .mockResolvedValue(commands)
+    function Pane() {
+      const [input, setInput] = useState('')
+      const picker = useComposerCommandPicker({ sessionId: 's1', enabled: true, input, setInputText: setInput, load })
+      return (<div><textarea aria-label="c" value={input} onChange={(event) => setInput(event.target.value)} /><ul>{picker.state?.items.map((item) => <li key={item.id}>{item.label}</li>)}</ul></div>)
+    }
+    const view = render(<Pane />)
+    const box = view.getByLabelText('c')
+    await act(async () => { fireEvent.change(box, { target: { value: '/' } }) })
+    await act(async () => { fireEvent.change(box, { target: { value: '' } }) })
+    await act(async () => { fireEvent.change(box, { target: { value: '/comp' } }) })
+    await act(async () => {})
+    expect(load).toHaveBeenCalledTimes(2)
+    expect([...view.container.querySelectorAll('li')].map((li) => li.textContent)).toContain('/compress')
   })
 })

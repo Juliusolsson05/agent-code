@@ -72,6 +72,17 @@ export function classifyHermesStartFailure(error: unknown): RemoteProviderStartE
     if (cause.kind === 'transport' || cause.kind === 'unavailable') {
       return new RemoteProviderStartError(HERMES_UNREACHABLE_MESSAGE, 'unreachable', cause.status !== undefined ? { httpStatus: cause.status } : {})
     }
+    // `protocol` is ANY unexpected HTTP status or a malformed body: a
+    // Traefik 502/504 while Hermes restarts, a 500, a 404 from a dashboard
+    // without the route. Never "sign in again" (review, #1503): that was the
+    // very trap #1495 removed. Unreachable while connecting, otherwise the
+    // conversation could not be opened.
+    if (cause.kind === 'protocol') {
+      const detail = cause.status !== undefined ? { httpStatus: cause.status } : {}
+      return stage === 'attach'
+        ? new RemoteProviderStartError(HERMES_ATTACH_FAILED_MESSAGE, 'attach', detail)
+        : new RemoteProviderStartError(HERMES_UNREACHABLE_MESSAGE, 'unreachable', detail)
+    }
     // access-expired / session-expired / auth-rejected: the broker has
     // already tried its one refresh; this sign-in is not usable.
     return new RemoteProviderStartError(HERMES_SIGNED_OUT_MESSAGE, 'signed-out', cause.status !== undefined ? { httpStatus: cause.status } : {})

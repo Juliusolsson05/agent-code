@@ -62,6 +62,17 @@ describe('what a Hermes pane says when it cannot start (#1495)', () => {
     expect(shown(new HermesStartError('dial', new HermesAuthError('transport', 'x', undefined, 'ENOTFOUND')))).toBe(session.HERMES_UNREACHABLE_MESSAGE)
   })
 
+  // Review #1503: an unexpected HTTP status is not a sign-in problem.
+  it('says unreachable for a 502 from the proxy while minting the ticket, and journals the status', () => {
+    const error = new HermesStartError('dial', new HermesAuthError('protocol', 'Connecting: unexpected HTTP 502.', 502))
+    expect(shown(error)).toBe(session.HERMES_UNREACHABLE_MESSAGE)
+    expect(classifyHermesStartFailure(error).detail).toEqual({ httpStatus: 502 })
+  })
+
+  it('says the conversation could not be opened for a 500 from the thread lookup', () => {
+    expect(shown(new HermesStartError('attach', new HermesAuthError('protocol', 'Listing: unexpected HTTP 500.', 500)))).toBe(session.HERMES_ATTACH_FAILED_MESSAGE)
+  })
+
   it('says signed out for a dead sign-in', () => {
     expect(shown(new HermesStartError('dial', new HermesSignedOutError('c1')))).toBe(session.HERMES_SIGNED_OUT_MESSAGE)
   })

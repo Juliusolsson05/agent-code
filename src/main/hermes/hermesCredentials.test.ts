@@ -494,3 +494,32 @@ describe('concurrent connection edits', () => {
     expect.soft(disk.connections.map((c: { name: string }) => c.name).sort()).toEqual(['Server A', 'Server B'])
   })
 })
+
+// Review #1503 (high): a lane session keeps its REST client for its lifetime.
+// After a URL edit and a sign-in to the new server, its calls must go to the
+// new URL with the new token, never the new token to the old URL.
+describe('REST client after a connection URL edit', () => {
+  it('never sends one server\'s token to another server', async () => {
+    const sent: Array<{ url: string; auth: string }> = []
+    const hermes = new HermesConnectionService({
+      stateDir: dir, codec, openExternal: () => undefined, openSocket: async () => ({}) as never,
+      fetchImpl: async (url, init) => {
+        sent.push({ url, auth: String((init?.headers as Record<string, string> | undefined)?.authorization ?? '') })
+        return new Response(JSON.stringify({ sessions: [] }), { status: 200 })
+      },
+    })
+    await hermes.initialize()
+    const connection = await hermes.add({ name: 'VPS', baseUrl: URL_A })
+    const store = new HermesTokenStore(join(dir, 'hermes', 'tokens'), codec)
+    await store.set(connection.id, URL_A, tokens({ accessToken: 'token-for-A' }))
+    const rest = hermes.restFor(connection.id)
+    await rest.listSessions({ source: 'telegram' })
+    await hermes.update(connection.id, { name: 'VPS', baseUrl: 'https://hermes-b.example' })
+    await store.set(connection.id, 'https://hermes-b.example', tokens({ accessToken: 'token-for-B' }))
+    await rest.listSessions({ source: 'telegram' })
+    expect(sent.map((call) => [new URL(call.url).host, call.auth])).toEqual([
+      ['hermes-a.example', 'Bearer token-for-A'],
+      ['hermes-b.example', 'Bearer token-for-B'],
+    ])
+  })
+})

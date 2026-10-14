@@ -38,6 +38,10 @@ let dialFailure: Error | null = null
 const reports = { backend: [] as unknown[], reachability: [] as boolean[] }
 // The service's event side (HermesConnectionService emits 'disconnect').
 let serviceEvents = new EventEmitter()
+// /restart: what the unauthenticated status says, one value per poll.
+let gatewayStates: Array<boolean | null> = []
+// The thread lookup that preceded this spawn failed (service.defaultLaneKey).
+let laneLookupFailed = false
 
 beforeEach(() => {
   sockets = []
@@ -56,6 +60,13 @@ beforeEach(() => {
     },
     reportBackend: (_id: string, contract: unknown) => reports.backend.push(contract),
     reportReachability: (_id: string, reachable: boolean) => reports.reachability.push(reachable),
+    restFor: () => ({ restartGateway: async () => ({ ok: true, pid: 1, name: 'gateway-restart' }) }),
+    consumeLaneLookupFailure: () => {
+      const failed = laneLookupFailed
+      laneLookupFailed = false
+      return failed
+    },
+    gatewayRunning: async () => (gatewayStates.length > 1 ? gatewayStates.shift()! : gatewayStates[0] ?? null),
   } as unknown as HermesConnectionService)
 })
 afterEach(() => {
@@ -407,5 +418,67 @@ describe('HermesSession (AgentSession contract on recorded frames)', () => {
     for (let tick = 0; tick < 20; tick += 1) await flush()
     expect(captured.length).toBe(before)
     expect(sockets).toHaveLength(1)
+  })
+})
+
+
+// Review #1503: /restart said "back" from the OLD gateway still draining.
+// Status sequences follow recorded S24 (running → stopped → starting/running).
+describe('/restart', () => {
+  async function restartWith(states: Array<boolean | null>) {
+    gatewayStates = states
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] })
+    try {
+      const { session, of } = await (async () => {
+        vi.useRealTimers()
+        const started = await startedSession('S3')
+        vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] })
+        return started
+      })()
+      await session.deliverPromptText('/restart')
+      for (let tick = 0; tick < 60; tick += 1) await vi.advanceTimersByTimeAsync(2_000)
+      return (of('jsonl-entry') as HermesEntryPayload[]).map((row) => String(row.row.text ?? ''))
+    } finally {
+      vi.useRealTimers()
+    }
+  }
+
+  it('waits for the gateway to go down before saying it is back', async () => {
+    const notices = await restartWith([true, true, false, false, true])
+    expect(notices.filter((text) => text.includes('gateway is back'))).toHaveLength(1)
+    // Every status up to the final "running again" was read before saying so.
+    expect(gatewayStates).toEqual([true])
+    expect(notices.findIndex((text) => text.includes('gateway is back'))).toBeGreaterThan(notices.findIndex((text) => text.startsWith('Restarting')))
+  })
+
+  it('says the restart was not confirmed when the gateway never stops', async () => {
+    const notices = await restartWith([true])
+    expect(notices.some((text) => text.includes('gateway is back'))).toBe(false)
+    expect(notices.some((text) => text.includes('did not confirm the restart'))).toBe(true)
+  })
+})
+
+// Review #1503: a message that starts no turn must say so, or the composer
+// keeps its optimistic "submitting" phase forever.
+describe('what delivery reports when no turn starts', () => {
+  it('a refused command and /restart report turnStarted: false; a plain message reports true', async () => {
+    const { session, socket } = await startedSession('S3')
+    expect(await session.deliverPromptText('/model gpt')).toEqual({ turnStarted: false })
+    gatewayStates = [null]
+    expect(await session.deliverPromptText('/restart')).toEqual({ turnStarted: false })
+    const sending = session.deliverPromptText('hello')
+    const submit = await socket.nextSent((frame) => frame.method === 'prompt.submit')
+    socket.push({ jsonrpc: '2.0', id: submit.id, result: { status: 'streaming', user_row_id: 1 } })
+    expect(await sending).toEqual({ turnStarted: true })
+    await session.stop()
+  })
+})
+
+describe('a separate chat opened because the Telegram thread lookup failed (review #1503)', () => {
+  it('says so, once', async () => {
+    laneLookupFailed = true
+    const { of } = await startedSession('S3')
+    const notices = (of('jsonl-entry') as HermesEntryPayload[]).map((row) => String(row.row.text ?? ''))
+    expect(notices.filter((text) => text.includes('Could not look up your Telegram thread'))).toHaveLength(1)
   })
 })

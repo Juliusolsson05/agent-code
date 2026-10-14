@@ -761,8 +761,14 @@ export interface AgentSession extends AgentSessionEmitter {
    *  starting head. Keeping both
    *  behind one provider-owned capability lets SessionManager stay ignorant
    *  of which OpenCode runtime was selected. Claude/Codex leave it undefined
-   *  and their provider policies write through io.write instead. */
-  deliverPromptText?(text: string): Promise<void>
+   *  and their provider policies write through io.write instead.
+   *
+   *  Hermes (#1503) may resolve `{ turnStarted: false }`: the message was
+   *  taken but no turn starts for it now (queued behind a running turn, held
+   *  for a Telegram turn, or a slash command main answered itself). The
+   *  delivery adapter reports that as a `queue` acceptance so the composer
+   *  settles its optimistic "submitting" phase. */
+  deliverPromptText?(text: string): Promise<void | { turnStarted: boolean }>
 }
 
 export type PromptAcceptanceOutcome =

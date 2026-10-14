@@ -75,10 +75,9 @@ export type HermesEntryPayload = {
   row: Record<string, unknown>
 }
 
-// /restart: wait before the first status check (the old gateway may still be
-// up), then poll; Hermes' own restart takes about a minute in the owner's
-// Docker deployment.
-const RESTART_SETTLE_MS = 5_000
+// /restart: poll Hermes' unauthenticated status until the gateway was seen
+// down and then up again; Hermes' own restart takes about a minute in the
+// owner's Docker deployment (S24: down 10.5 s, back by 14.7 s locally).
 const RESTART_POLL_MS = 2_000
 const RESTART_DEADLINE_MS = 90_000
 
@@ -132,6 +131,9 @@ export class HermesSession extends EventEmitter implements AgentSession {
   /** Prompts held behind a running phone turn (hermes-headless lane state). */
   private held: Array<{ id: string; text: string }> = []
   private laneNoticeShown = false
+  /** A brand-new pane (no conversation to resume): the only kind a thread lookup preceded. */
+  private readonly freshPane: boolean
+  private laneBusy = false
   /** commands.catalog for this attach (listComposerCommands). */
   private composerCommands: ComposerCommand[] | null = null
   /**
@@ -190,8 +192,17 @@ export class HermesSession extends EventEmitter implements AgentSession {
     // Open cards can no longer be answered (the socket is gone), and leaving
     // them up kept the pane "blocked on you" with every click failing
     // (round-1 review c1 #2). Hermes fails them closed on its own timeout.
-    if (this.openRequests.length > 0) {
+    if (this.openRequests.length > 0 || this.held.length > 0) {
       this.openRequests.length = 0
+      this.requestReceivedAt.clear()
+      // Held prompts are taken back, not kept for later (review #1503): the
+      // package would otherwise send them automatically after a sign-in,
+      // possibly hours later, into whatever the thread is by then.
+      for (const hold of this.held) {
+        const text = this.headless?.cancelHeld(hold.id)
+        if (text) this.emitNotice(`Not sent: ${text}`)
+      }
+      this.held = []
       this.emitConditions()
     }
     this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
@@ -219,6 +230,7 @@ export class HermesSession extends EventEmitter implements AgentSession {
     this.connectionId = options.remoteConnectionId
     this.storedSessionId = options.resumeSessionId ?? null
     this.laneKey = options.hermesLaneKey ?? null
+    this.freshPane = !options.resumeSessionId
   }
 
   async start(): Promise<{ projectDir?: string } | void> {
@@ -302,6 +314,9 @@ export class HermesSession extends EventEmitter implements AgentSession {
     }
     service.reportReachability(this.connectionId, true)
     this.openInput()
+    if (!this.laneKey && this.freshPane && service.consumeLaneLookupFailure(this.connectionId)) {
+      this.emitNotice('Could not look up your Telegram thread on this server, so this is a separate Hermes chat. Open a new Hermes pane to try again.')
+    }
     if (this.laneKey && !this.laneNoticeShown) {
       this.laneNoticeShown = true
       // Plan D6 (owner decision 2026-10-14: no phone delivery). Said once per
@@ -357,7 +372,7 @@ export class HermesSession extends EventEmitter implements AgentSession {
     this.emit('input-readiness', { ready: true, reason: 'ready' })
   }
 
-  async deliverPromptText(text: string): Promise<void> {
+  async deliverPromptText(text: string): Promise<{ turnStarted: boolean }> {
     if (!this.headless) throw new HermesPromptError('not-ready', 'The Hermes conversation has not started.')
     // `not-ready` is retry-safe: the composer keeps the message for after
     // the re-attach instead of losing it to a dead runtime id.
@@ -366,7 +381,7 @@ export class HermesSession extends EventEmitter implements AgentSession {
       // Plan Decision 5 (UNCONFIRMED): Agent Code cannot reset the GATEWAY's
       // routing for the thread, and a pane-side /new would quietly leave it.
       this.emitNotice('To start a new Telegram conversation, type /new in Telegram; this pane will follow it. For a separate desktop-only chat, use “New Separate Hermes Chat”.')
-      return
+      return { turnStarted: false }
     }
     if (/^\/[a-z0-9]/i.test(text.trim())) {
       const typed = text.trim()
@@ -376,11 +391,11 @@ export class HermesSession extends EventEmitter implements AgentSession {
         // terminal-only in Hermes), and slash.exec would act on the slash
         // worker's copy of the session or print nothing useful.
         this.emitNotice(command.availability.reason)
-        return
+        return { turnStarted: false }
       }
       if (command?.source === 'app' && command.name === 'restart') {
         void this.restartGateway()
-        return
+        return { turnStarted: false }
       }
       const outcome = await this.headless.runSlash(typed)
       if (outcome.kind === 'output' && outcome.text.trim()) this.emitNotice(outcome.text.trim())
@@ -390,12 +405,13 @@ export class HermesSession extends EventEmitter implements AgentSession {
           ? 'Asked on the side; the answer appears here without interrupting the conversation.'
           : 'Started in the background; the result appears here when it is done.')
       }
-      return
+      // A skill or quick command that became a prompt starts a turn.
+      return { turnStarted: outcome.kind === 'prompt' && outcome.result.status !== 'queued' }
     }
     const outcome = await this.headless.prompt(text)
     if (outcome.status === 'held') {
       this.emit('process-state', { active: true, status: 'Hermes is replying on Telegram; your message sends when it finishes.' })
-      return
+      return { turnStarted: false }
     }
     if (outcome.status === 'queued') {
       // Hermes is still on the previous task and will answer this after it.
@@ -403,7 +419,9 @@ export class HermesSession extends EventEmitter implements AgentSession {
       // Hermes were answering IT (owner's debug bundle: "what is going on?"
       // sent while a gateway restart was still running).
       this.emit('process-state', { active: true, status: 'Your message is queued; Hermes answers it after the current task.' })
+      return { turnStarted: false }
     }
+    return { turnStarted: true }
   }
 
   /** The composer picker's catalog (#1497). Cached per attach; the app commands always come along. */
@@ -435,19 +453,30 @@ export class HermesSession extends EventEmitter implements AgentSession {
       return
     }
     this.emitNotice('Restarting Hermes’ messaging gateway. Telegram is offline for about a minute.')
-    // Watch the unauthenticated status until the gateway reports running
-    // again. The first seconds are skipped: right after the request the OLD
-    // gateway may still say "running" before it stops.
+    // "Back" needs a DOWN observed first (review #1503). The old gateway
+    // drains running work before it stops, and keeps answering
+    // `gateway_running: true` meanwhile (recorded S24: still running at
+    // line 26, stopped at 28, starting at 36), so the first `true` after a
+    // fixed delay was usually the OLD gateway. A restart Hermes refused
+    // never goes down at all; that ends as "did not confirm" below.
     const started = Date.now()
-    await new Promise((resolve) => setTimeout(resolve, RESTART_SETTLE_MS))
-    while (!this.stopped && Date.now() - started < RESTART_DEADLINE_MS) {
-      if ((await service.gatewayRunning(this.connectionId)) === true) {
+    let sawDown = false
+    const live = () => !this.stopped && !this.signedOut
+    while (live() && Date.now() - started < RESTART_DEADLINE_MS) {
+      await new Promise((resolve) => setTimeout(resolve, RESTART_POLL_MS))
+      if (!live()) return
+      const running = await service.gatewayRunning(this.connectionId)
+      if (running === false) sawDown = true
+      if (running === true && sawDown) {
         this.emitNotice('Hermes’ gateway is back.')
         return
       }
-      await new Promise((resolve) => setTimeout(resolve, RESTART_POLL_MS))
     }
-    if (!this.stopped) this.emitNotice('Hermes’ gateway did not report back within 90 seconds. Check the server (Hostinger → Docker Manager).')
+    if (live()) {
+      this.emitNotice(sawDown
+        ? 'Hermes’ gateway did not come back within 90 seconds. Check the server (Hostinger → Docker Manager).'
+        : 'Hermes did not confirm the restart within 90 seconds: its gateway never stopped. It may have refused, or still be finishing running work. Check the server.')
+    }
   }
 
   async resolveCondition(action: ConditionCustomAction): Promise<
@@ -662,6 +691,7 @@ export class HermesSession extends EventEmitter implements AgentSession {
 
   private onRequestClosed(id: string): void {
     const index = this.openRequests.findIndex((entry) => entry.id === id)
+    this.requestReceivedAt.delete(id)
     if (index < 0) return
     this.openRequests.splice(index, 1)
     this.emitConditions()
@@ -672,9 +702,16 @@ export class HermesSession extends EventEmitter implements AgentSession {
     const heldChanged = state.held.length !== this.held.length || state.held.some((hold, index) => hold.id !== this.held[index]?.id)
     this.held = state.held.map(({ id, text }) => ({ id, text }))
     if (heldChanged) this.emitConditions()
+    // Only on a busy CHANGE (review #1503): the package also emits `lane` for
+    // every held-list change, including each prompt the drain sends, and an
+    // unconditional `active:false` then marked the pane idle while Hermes
+    // answered that very prompt. On busy→idle the line is cleared but
+    // activity is not claimed idle: our own turn's stream owns that.
+    if (state.busy === this.laneBusy) return
+    this.laneBusy = state.busy
     this.emit('process-state', state.busy
       ? { active: true, status: 'Hermes is replying on Telegram…' }
-      : { active: false, status: undefined })
+      : { active: true, status: undefined })
   }
 
   private emitConditions(): void {

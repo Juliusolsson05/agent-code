@@ -34,6 +34,9 @@ export function rankCommands(commands: readonly ComposerCommand[], typed: string
   const visible = commands.filter((command) => command.availability.kind !== 'hidden')
   if (!typed) return visible.slice(0, MAX_ITEMS)
   const tier = (command: ComposerCommand): number => {
+    // An exact name or alias first (review #1503, recorded S17: `/codex`
+    // must not be completed to `/codex-runtime`, `/q` to `/quit`).
+    if (command.name === typed || command.aliases.includes(typed)) return -1
     if (command.name.startsWith(typed)) return 0
     if (command.aliases.some((alias) => alias.startsWith(typed))) return 1
     if (command.name.includes(typed)) return 2
@@ -74,25 +77,47 @@ export function useComposerCommandPicker({
   load?: (sessionId: string) => Promise<ComposerCommand[]>
 }): ComposerCommandPicker {
   const [commands, setCommands] = useState<ComposerCommand[] | null>(null)
+  /** The last answer had the server's catalog, not just Agent Code's own fallback. */
+  const complete = useRef(false)
+  const wasSlash = useRef(false)
   const [selected, setSelected] = useState(0)
   const [dismissedFor, setDismissedFor] = useState<string | null>(null)
   const query = enabled ? slashQuery(input) : null
   const loading = useRef(false)
 
-  // Fetched once per session, when a slash draft first appears: no IPC on
-  // every keystroke, nothing at all for a pane where nobody types `/`.
+  // Fetched when a slash draft BEGINS: no IPC on every keystroke, nothing for
+  // a pane where nobody types `/`. Kept for the session only once it held
+  // the server's real catalog; Agent Code's fallback (the pane was still
+  // connecting, or discovery failed) is asked again on the next `/`, or a
+  // pane that first saw it would never show skills (review #1503).
+  const isSlash = query !== null
+  const startedSlash = isSlash && !wasSlash.current
+  wasSlash.current = isSlash
   useEffect(() => {
-    if (!query || commands || loading.current) return
+    if (!isSlash || loading.current) return
+    if (commands && (complete.current || !startedSlash)) return
     loading.current = true
-    void load(sessionId)
-      .then((list) => setCommands(list))
-      .catch(() => setCommands([]))
+    const forSession = sessionId
+    void load(forSession)
+      .then((list) => {
+        // A reply for a session this picker no longer serves is dropped.
+        if (forSession !== currentSession.current) return
+        complete.current = list.some((command) => command.source === 'provider' && command.availability.kind !== 'unavailable')
+        setCommands(list)
+      })
+      .catch(() => {
+        if (forSession === currentSession.current) setCommands((current) => current ?? [])
+      })
       .finally(() => {
         loading.current = false
       })
-  }, [query, commands, load, sessionId])
+  }, [isSlash, startedSlash, commands, load, sessionId])
 
+  const currentSession = useRef(sessionId)
   useEffect(() => {
+    currentSession.current = sessionId
+    complete.current = false
+    loading.current = false
     setCommands(null)
   }, [sessionId])
 
@@ -141,8 +166,10 @@ export function useComposerCommandPicker({
       return true
     }
     if (event.key === 'Enter' && !event.shiftKey) {
-      // The draft already IS this command: run it (normal submit path).
+      // The draft already IS a command (this one, or an exact name/alias the
+      // user typed): run it through the normal submit path.
       if (input.trim() === choice.complete.trim()) return false
+      if (query && query.arg === null && commands?.some((command) => command.name === query.name || command.aliases.includes(query.name))) return false
       event.preventDefault()
       setInputText(choice.complete)
       return true

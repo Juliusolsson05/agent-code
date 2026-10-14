@@ -23,7 +23,10 @@ export async function hermesComposerSubmit(io: ComposerSubmitIo, confirm: typeof
       description: 'Telegram goes offline for about a minute while Hermes restarts its messaging gateway. This conversation stays open.',
       confirmLabel: 'Restart Gateway',
     })
-    if (!confirmed) return { kind: 'transport', acceptedAt: Date.now() }
+    // Cancelled: nothing was sent and no turn starts. `queue` is the
+    // composer's "no turn for this" acceptance, which settles its optimistic
+    // "submitting" phase (review #1503: `transport` left the pane busy).
+    if (!confirmed) return { kind: 'queue', acceptedAt: Date.now() }
   }
   const result = await io.deliverPrompt(io.input)
   if (!result.ok) {

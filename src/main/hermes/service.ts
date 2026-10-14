@@ -296,12 +296,27 @@ export class HermesConnectionService extends EventEmitter {
    * second copy of the tokens or refreshes on its own schedule.
    */
   restFor(id: string): HermesRest {
-    const connection = this.require(id)
-    return new HermesRest({
-      baseUrl: connection.baseUrl,
-      accessToken: (options) => this.broker(connection).restAccessToken(options),
-      fetchImpl: this.deps.fetchImpl,
-    })
+    // WHY a fresh client per CALL, built from one snapshot of the connection
+    // and ITS broker (review #1503, high): a lane session keeps this object
+    // for its lifetime. Capturing the URL once while resolving the broker per
+    // call meant that after the user edited the URL and signed in to the new
+    // server, the next lane refresh sent the NEW server's bearer to the OLD
+    // URL. Now the URL and the token always come from the same connection
+    // record (the broker is itself bound to that URL), whatever changes.
+    const current = (): HermesRest => {
+      const connection = this.require(id)
+      const broker = this.broker(connection)
+      return new HermesRest({
+        baseUrl: connection.baseUrl,
+        accessToken: (options) => broker.restAccessToken(options),
+        fetchImpl: this.deps.fetchImpl,
+      })
+    }
+    return {
+      listSessions: (query?: Parameters<HermesRest['listSessions']>[0]) => current().listSessions(query),
+      latestDescendant: (sessionId: string, profile?: string) => current().latestDescendant(sessionId, profile),
+      restartGateway: () => current().restartGateway(),
+    } as HermesRest
   }
 
   /**
@@ -312,17 +327,31 @@ export class HermesConnectionService extends EventEmitter {
    */
   async defaultLaneKey(id: string): Promise<string | null> {
     try {
+      this.laneLookupFailedAt.delete(id)
       return (await HermesHeadless.defaultLane(this.restFor(id)))?.sessionKey ?? null
     } catch (error) {
       console.warn('[hermes] Telegram thread lookup failed:', describeError(error))
+      // The pane that is about to open as a separate chat says why
+      // (consumeLaneLookupFailure); silently opening a desktop-only chat
+      // when the owner expects the thread was a review finding (#1503).
+      this.laneLookupFailedAt.set(id, Date.now())
       return null
     }
   }
 
+  /** True once, for the pane spawned right after a failed thread lookup on this connection. */
+  consumeLaneLookupFailure(id: string): boolean {
+    const at = this.laneLookupFailedAt.get(id)
+    this.laneLookupFailedAt.delete(id)
+    return at !== undefined && Date.now() - at < 60_000
+  }
+
   /** Unauthenticated `/api/status`: is the messaging gateway running? Null when unreachable. */
   async gatewayRunning(id: string): Promise<boolean | null> {
-    const connection = this.require(id)
     try {
+      // Inside the try: a connection removed mid-poll is "unknown", never an
+      // unhandled rejection from a fire-and-forget restart watcher (review).
+      const connection = this.require(id)
       const fetchImpl = this.deps.fetchImpl ?? fetch
       const response = await fetchImpl(`${connection.baseUrl.replace(/\/+$/, '')}/api/status`, { signal: AbortSignal.timeout(10_000) })
       if (!response.ok) return null
@@ -332,6 +361,8 @@ export class HermesConnectionService extends EventEmitter {
       return null
     }
   }
+
+  private readonly laneLookupFailedAt = new Map<string, number>()
 
   // ── internals ──────────────────────────────────────────────────────────────
 

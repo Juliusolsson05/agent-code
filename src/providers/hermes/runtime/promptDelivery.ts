@@ -31,8 +31,11 @@ export async function deliverHermesPrompt(io: PromptDeliveryIo): Promise<PromptD
     }
   }
   try {
-    await io.session.deliverPromptText(io.prompt)
-    return { ok: true, acceptance: { kind: 'transport', acceptedAt: Date.now() } }
+    const outcome = await io.session.deliverPromptText(io.prompt)
+    // No turn starts now (queued, held for Telegram, or answered by main):
+    // `queue` is the composer's "settle the optimistic phase" signal.
+    const kind = outcome && outcome.turnStarted === false ? 'queue' : 'transport'
+    return { ok: true, acceptance: { kind, acceptedAt: Date.now() } }
   } catch (error) {
     const kind = error instanceof HermesPromptError ? error.kind : 'unknown'
     const message = `Hermes did not take the message: ${error instanceof Error ? error.message : String(error)}`
