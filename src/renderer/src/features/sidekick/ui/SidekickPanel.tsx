@@ -24,6 +24,10 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
  */
 export const SIDEKICK_SURFACE_TAB_ID = 'sidekick'
 
+/** The column's chrome beside the agent: the 10px boundary handle plus the
+ *  46px chip strip, the same sizes as a lane's (TiledDispatchLayout). */
+const SIDEKICK_COLUMN_CHROME_PX = 10 + 46
+
 
 type Props = { workspace: Workspace; actions: SidekickActions }
 
@@ -42,8 +46,13 @@ export function SidekickPanel({ workspace, actions }: Props) {
   // Width: clamped on every read (sidekickPanel.ts WHY), dragged from the
   // boundary on the panel's LEFT edge. The panel is the rightmost column of
   // the main row, so its width is simply the distance from the pointer to the
-  // window's right edge — handle and strip included, which is why the stored
-  // width is the whole column.
+  // window's right edge, minus the column's own chrome (handle + strip).
+  //
+  // WHY the stored width is the AGENT AREA and not the whole column (review
+  // of #1507): it was the agent area when the panel was an aside, and every
+  // saved workspace.json carries that number. Counting the new 56px of chrome
+  // inside it would have shrunk every existing sidekick by 56px and put the
+  // clamp's 300px floor at 244px of agent, below what a composer fits.
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth)
   useEffect(() => {
     const onResize = () => setWindowWidth(window.innerWidth)
@@ -53,7 +62,7 @@ export function SidekickPanel({ workspace, actions }: Props) {
   const width = clampSidekickPanelWidth(panel.width, windowWidth)
   const splitter = useResizableSplitter({
     axis: 'x',
-    onDrag: clientX => workspace.setSidekickPanel({ width: clampSidekickPanelWidth(window.innerWidth - clientX, window.innerWidth) }),
+    onDrag: clientX => workspace.setSidekickPanel({ width: clampSidekickPanelWidth(window.innerWidth - clientX - SIDEKICK_COLUMN_CHROME_PX, window.innerWidth) }),
   })
 
   // Attach the sidekick as soon as the panel shows it, when no CURRENT lease
@@ -166,6 +175,22 @@ export function SidekickPanel({ workspace, actions }: Props) {
     else if (choice === 'hide') hide()
   }, [actions, heldSessions, hide, showToast, workspace])
 
+  // The strip's own right-click menu, outside any chip. WHY (review of
+  // #1507): Hide lived only on a chip's menu, and with no sidekick yet, or
+  // after removing the last one, there is no chip — the old header always
+  // had a Hide button, so the mouse had lost its way to close the column.
+  const onStripMenu = useCallback(async () => {
+    const choice = await window.api.showPopupMenu({
+      items: [
+        { type: 'item', id: 'new', label: 'New Sidekick…' },
+        { type: 'separator' },
+        { type: 'item', id: 'hide', label: 'Hide Sidekick' },
+      ],
+    })
+    if (choice === 'new') openPicker('create')
+    else if (choice === 'hide') hide()
+  }, [hide, openPicker])
+
   const chipIndex = summaries.findIndex(entry => entry.id === panel.sidekickId)
   const paneLabel = chipIndex >= 0 ? sidekickChipLabel(chipIndex) : 'S'
   const focused = region === 'sidekick'
@@ -187,7 +212,7 @@ export function SidekickPanel({ workspace, actions }: Props) {
       role="region"
       aria-label="Sidekick"
       className="flex h-full min-h-0 flex-shrink-0 bg-canvas"
-      style={{ width }}
+      style={{ width: width + SIDEKICK_COLUMN_CHROME_PX }}
       {...{ [SIDEKICK_PANEL_ATTRIBUTE]: '' }}
     >
       <SplitHandle
@@ -207,6 +232,7 @@ export function SidekickPanel({ workspace, actions }: Props) {
         focused={focused}
         onSelect={select}
         onChipMenu={id => { void onChipMenu(id) }}
+        onStripMenu={() => { void onStripMenu() }}
         onNew={() => openPicker('create')}
       />
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">

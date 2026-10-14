@@ -25,15 +25,12 @@ export const sidekickCommands: CommandDef[] = [
       ui.closePalette()
       const store = useAppStore.getState()
       const open = workspace.state.sidekickPanel?.open === true
-      // Under Settings the panel is retained but hidden (SidekickPanelSurface),
-      // so "show it" has to leave Settings, the way every other way of going
-      // back to work does. Without this ⌘J did nothing visible there.
-      if (store.settingsPageOpen) {
-        store.closeSettingsPage()
-        workspace.setSidekickPanel({ open: true })
-        store.setKeyboardRegion('sidekick')
-        return
-      }
+      // No Settings branch: Settings owns the interaction while open
+      // (hasAppInteractionOwner in useKeybinds), so neither this chord nor the
+      // palette nor the app menu can run a Sidekick command there; the panel
+      // is simply retained-hidden until Escape leaves Settings. A "leave
+      // Settings and show the Sidekick" branch was written once (#1507) and
+      // was unreachable for exactly that reason.
       // Three states, one chord: closed → open + keyboard; open but the
       // keyboard elsewhere → take the keyboard; already typing in it → hide.
       if (!open) {
@@ -56,9 +53,6 @@ export const sidekickCommands: CommandDef[] = [
     keywords: ['sidekick', 'picker', 'switch', 'global', 'agent', 'hermes'],
     run: ({ workspace, ui }) => {
       ui.closePalette()
-      // Leaves Settings for the same reason as `sidekick-panel`: the pick
-      // lands in a panel Settings keeps hidden.
-      useAppStore.getState().closeSettingsPage()
       workspace.setSidekickPanel({ open: true })
       useAppStore.getState().openSidekickPicker('switch')
     },
@@ -72,7 +66,6 @@ export const sidekickCommands: CommandDef[] = [
     keywords: ['new', 'sidekick', 'global', 'agent', 'hermes', 'create', 'home'],
     run: ({ workspace, ui }) => {
       ui.closePalette()
-      useAppStore.getState().closeSettingsPage()
       workspace.setSidekickPanel({ open: true })
       useAppStore.getState().openSidekickPicker('create')
     },

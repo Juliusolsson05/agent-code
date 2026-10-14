@@ -35,6 +35,7 @@ export const SidekickStrip = memo(function SidekickStrip({
   focused,
   onSelect,
   onChipMenu,
+  onStripMenu,
   onNew,
 }: {
   sidekicks: SidekickSummary[]
@@ -47,10 +48,16 @@ export const SidekickStrip = memo(function SidekickStrip({
   focused: boolean
   onSelect: (sidekickId: string) => void
   onChipMenu: (sidekickId: string) => void
+  /** Right-click on the strip outside a chip (chips stop their own event). */
+  onStripMenu: () => void
   onNew: () => void
 }) {
   return (
     <div
+      onContextMenu={event => {
+        event.preventDefault()
+        onStripMenu()
+      }}
       className={`
         flex h-full w-[46px] min-h-0 flex-shrink-0 flex-col overflow-y-auto bg-surface [contain:layout_paint]
         border-l ${focused ? 'border-accent/60' : 'border-border'}
@@ -124,6 +131,8 @@ const SidekickChip = memo(function SidekickChip({
       onClick={() => onSelect(summary.id)}
       onContextMenu={event => {
         event.preventDefault()
+        // The strip has its own menu; a chip's must not open both.
+        event.stopPropagation()
         onMenu(summary.id)
       }}
       title={`${label} · ${summary.title ?? summary.kind}${where}`}
@@ -133,14 +142,19 @@ const SidekickChip = memo(function SidekickChip({
       // submit the sidekick's draft (issue #236, see DispatchMiniChip).
       data-dispatch-row="true"
       className={`
-        flex w-full items-center justify-center border-t border-border py-1.5
+        flex w-full items-stretch border-t border-border
         text-[10px] font-semibold tabular-nums outline-none
         hover:ring-1 hover:ring-inset hover:ring-accent/40
         focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring
         ${dispatchActivityClasses(activity, active).index}
       `}
     >
-      {label}
+      {/* The lane chip's exact box: label in the flexible remainder, then a
+          10px slot where DispatchColorFlagStrip sits. Sidekicks have no
+          colour flag, but without the slot the label centres 5px right of
+          every lane chip's and the two columns stop lining up. */}
+      <span className="flex min-w-0 flex-1 items-center justify-center py-1.5">{label}</span>
+      <span aria-hidden="true" className="w-[10px] flex-shrink-0" />
     </button>
   )
 })

@@ -9,7 +9,7 @@ import type { SidekickIndexView, SidekickSummary } from '@shared/sidekicks/types
 
 import { SidekickPanel } from './SidekickPanel'
 import { scrubbedPanelPointer, SidekickPanelSurface } from './SidekickPanelSurface'
-import { sidekickCommands } from '@renderer/features/sidekick/commands/sidekickCommands'
+import { useKeyboardRegionFollowsPointer } from './KeyboardRegionContext'
 
 // The mounted Sidekick panel (#1493, review round 1 F2/F3/F6). The leaf is the
 // one stand-in: renderWorkspaceLeaf draws a whole TileLeaf, whose own focus
@@ -133,7 +133,10 @@ describe('Sidekick column is a native lane (#1493 follow-up)', () => {
     fireEvent.mouseDown(handle)
     fireEvent.mouseMove(window, { clientX: window.innerWidth - 500 })
     fireEvent.mouseUp(window)
-    expect(workspace.setSidekickPanel).toHaveBeenCalledWith({ width: 500 })
+    // The stored width is the agent area: the column's 56px of chrome
+    // (10px boundary + 46px strip) is not part of it, so saved widths from
+    // before the lane-shaped column keep their agent size.
+    expect(workspace.setSidekickPanel).toHaveBeenCalledWith({ width: 444 })
   })
 
   it('switches sidekicks from the chip strip, with no panel header of its own', () => {
@@ -161,13 +164,41 @@ describe('Sidekick column is a native lane (#1493 follow-up)', () => {
     expect(useAppStore.getState().keyboardRegion).toBe('workspace')
   })
 
-  it('⌘J from Settings leaves Settings and shows the Sidekick', () => {
-    act(() => { useAppStore.getState().openSettingsPage() })
+  it("routes a chip's right-click menu to Reload, Remove and Hide", async () => {
+    useSidekickIndexStore.getState().accept(view([summary('this-window')]))
+    const workspace = workspaceWith({ sk: { kind: 'claude', cwd: HOME, sidekickId: ID } })
+    const pick = { next: 'reload' as string | null }
+    const showPopupMenu = vi.fn(async () => pick.next)
+    Object.defineProperty(window, 'api', { configurable: true, value: { showPopupMenu } })
+    render(<SidekickPanel workspace={workspace} actions={actionsWith(vi.fn())} />)
+    const chip = screen.getByRole('button', { name: /^S1/ })
+    fireEvent.contextMenu(chip)
+    await waitFor(() => expect(workspace.reloadSessionAgent).toHaveBeenCalledWith('sk'))
+    // The chip's menu only: the strip's own menu must not open as well.
+    expect(showPopupMenu).toHaveBeenCalledTimes(1)
+    pick.next = 'hide'
+    fireEvent.contextMenu(chip)
+    await waitFor(() => expect(workspace.setSidekickPanel).toHaveBeenCalledWith({ open: false }))
+  })
+
+  it('keeps Hide reachable by mouse when there is no sidekick (no chip to right-click)', async () => {
+    useSidekickIndexStore.getState().accept(view([]))
     const workspace = workspaceWith({})
-    const command = sidekickCommands.find(entry => entry.id === 'sidekick-panel')!
-    command.run({ workspace, ui: { closePalette: vi.fn() } } as never)
-    expect(useAppStore.getState().settingsPageOpen).toBe(false)
-    expect(workspace.setSidekickPanel).toHaveBeenCalledWith({ open: true })
-    expect(useAppStore.getState().keyboardRegion).toBe('sidekick')
+    const showPopupMenu = vi.fn(async () => 'hide')
+    Object.defineProperty(window, 'api', { configurable: true, value: { showPopupMenu } })
+    render(<SidekickPanel workspace={workspace} actions={actionsWith(vi.fn())} />)
+    // The strip's + button (the empty body has its own New Sidekick… button).
+    fireEvent.contextMenu(screen.getByTitle('New Sidekick…'))
+    await waitFor(() => expect(workspace.setSidekickPanel).toHaveBeenCalledWith({ open: false }))
+  })
+
+  it('dragging the boundary never moves the keyboard between regions', () => {
+    useSidekickIndexStore.getState().accept(view([summary('this-window')]))
+    render(<SidekickPanel workspace={workspaceWith({ sk: { kind: 'claude', cwd: HOME, sidekickId: ID } })} actions={actionsWith(vi.fn())} />)
+    const Region = () => { useKeyboardRegionFollowsPointer(); return null }
+    render(<Region />)
+    act(() => { useAppStore.getState().setKeyboardRegion('workspace') })
+    fireEvent.pointerDown(screen.getByRole('separator', { name: 'Resize Sidekick' }))
+    expect(useAppStore.getState().keyboardRegion).toBe('workspace')
   })
 })
