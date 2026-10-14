@@ -37,6 +37,11 @@ export const REGION_NEUTRAL_SELECTOR = [
   '[role="alertdialog"]',
   '[role="menu"]',
   '[data-radix-popper-content-wrapper]',
+  // A resize handle is not a place to type. Dragging the Sidekick's boundary
+  // (or any lane split) must not move the keyboard between regions; the
+  // Sidekick's handle sits inside the panel's marked DOM, so without this a
+  // resize silently took the keyboard away from the lane being typed in.
+  '[role="separator"]',
 ].join(', ')
 
 /**
