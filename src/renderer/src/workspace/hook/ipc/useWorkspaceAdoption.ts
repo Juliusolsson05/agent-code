@@ -1,13 +1,8 @@
 import { useEffect, useRef } from 'react'
 
-import type { SessionBackendSnapshot } from '@shared/types/session'
-import { emptyRuntime } from '@renderer/session-runtime/state'
-import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
-import type { SessionId, SessionMeta } from '@renderer/workspace/types'
 import { adoptWorkspace } from '@renderer/workspace/adoptWorkspace'
-import { seedResumedRuntimeFields } from '@renderer/workspace/providerSessionIdentity'
-import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
+import { loadIncomingHistory, seedIncomingRuntimes } from '@renderer/workspace/hook/ipc/seedIncomingSessions'
 import type { WorkspaceSetRuntimes, WorkspaceSetState } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
@@ -19,104 +14,9 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 // the handoff must arrive at the window that is about to display them, not at
 // one that is being torn down.
 //
-// WHY the adopted sessions are seeded from a backend snapshot instead of going
-// through `recoverSession` the way bootstrap does:
-//
-// There is nothing to recover. `recover()` exists to reconcile a persisted id
-// with a backend that may or may not still exist after an app restart — it can
-// adopt, spawn, or fail. Here every backend is alive, healthy, and already
-// owned by main; the only thing missing is this renderer's view of it. Calling
-// `recover` would take a generation fence, an ownership claim, and a 30-second
-// deadline to establish something we already know. What we DO need from main is
-// the readiness snapshot, because `setInputReadiness` dedupes on
-// `(ready, reason)` — a healthy agent already sitting at `ready: true` emits
-// nothing further to a renderer that just started watching it, so without the
-// snapshot every adopted pane would sit on "starting agent" forever and its
-// first send would detour through a full recovery round trip.
-
-/**
- * A backend snapshot per adopted session, or null where there is no backend.
- *
- * Parked (detached) and buried sessions deliberately have no process — that is
- * the whole point of the live-vs-owned split in `sessionOwnership.ts` — so a
- * null here is the normal case for them, not a failure.
- */
-type AdoptedSnapshots = Map<SessionId, SessionBackendSnapshot | null>
-
-function seedAdoptedRuntime(
-  previous: SessionRuntime | undefined,
-  meta: SessionMeta | undefined,
-  snapshot: SessionBackendSnapshot | null,
-  draft: string | undefined,
-): SessionRuntime {
-  const base: SessionRuntime = {
-    ...emptyRuntime(),
-    ...seedResumedRuntimeFields(previous, meta),
-    ...(draft ? { draftInput: draft } : {}),
-  }
-  if (!snapshot) {
-    // No backend: a parked or buried agent. `seedResumedRuntimeFields` reports
-    // `started`, which would be a lie about a session that has no process, and
-    // would make the row claim it is running. Idle is what rehydrate leaves
-    // hibernated sessions in.
-    return { ...base, processStatus: 'idle' }
-  }
-  // Same authority rule as rehydrate: a snapshot older than what this runtime
-  // has already observed must not roll readiness backwards.
-  const snapshotIsAuthoritative = snapshot.input.revision >= base.inputReadinessRevision
-  // WHY an exit observed during the fetch survives it (#1083 review, finding
-  // 2): routing moves to this window BEFORE the offer arrives, so the live
-  // channel can write `exited` while `getBackendSnapshot` is still in flight.
-  // The reply was computed while the backend was alive; applying it blindly
-  // repaints a dead agent as `started` with an enabled composer. Both sibling
-  // seed sites already guard this (`rehydrate.ts`, `session.ts`); adoption did
-  // not, and only `conditions` had been defended.
-  const observedTerminalProcess =
-    (previous?.processStatus === 'failed' || previous?.processStatus === 'exited') &&
-    previous.recoveryFailureCode === null
-  if (observedTerminalProcess) {
-    // `base` starts from `emptyRuntime()`, so returning it would erase the
-    // very thing being preserved. The observed end state is carried over
-    // whole; `recoveryFailureCode` is already null by the condition above.
-    return {
-      ...base,
-      processStatus: previous.processStatus,
-      processError: previous.processError,
-      exited: previous.exited,
-      recoveryFailureCode: null,
-    }
-  }
-  const seeded: SessionRuntime = {
-    ...base,
-    processStatus: snapshot.lifecycle === 'live' ? 'started' : 'spawning',
-    processError: null,
-    recoveryFailureCode: null,
-    exited: null,
-    ...(snapshotIsAuthoritative
-      ? {
-          inputReady: snapshot.input.ready,
-          inputReadinessRevision: snapshot.input.revision,
-          inputReadinessReason: snapshot.input.reason ?? null,
-          inputReadinessChangedAt: Date.now(),
-        }
-      : {}),
-  }
-  // WHY conditions need their own ordering check rather than riding
-  // `snapshotIsAuthoritative` (#895): readiness and conditions are separate
-  // channels with separate counters, and `previous` here is not "what this
-  // window used to show" — it is whatever the LIVE channel has already written
-  // for a session whose routing moved here before the adoption offer arrived.
-  // `onSessionConditions` creates a runtime for a session it has never seen,
-  // so a prompt dismissed while this snapshot was in flight is already in the
-  // map, and seeding over it would put the dismissed prompt back in the
-  // surface the user acts on.
-  //
-  // Note `base` deliberately starts from `emptyRuntime()`, which is exactly
-  // the bug: without this the adopted pane began with `conditions: null`, and
-  // providers publish conditions only when they CHANGE, so nothing ever
-  // re-sent the blocker.
-  return seeded
-}
+// Why the adopted sessions are seeded from backend snapshots instead of going
+// through `recoverSession` (and how): see seedIncomingSessions.ts, shared with
+// the live-window move (#1481).
 
 export function useWorkspaceAdoption(
   refs: WorkspaceRefs,
@@ -184,56 +84,14 @@ export function useWorkspaceAdoption(
       return
     }
 
-    // Snapshots are fetched BEFORE any state is published so an adopted pane
-    // never paints in the "starting agent" state it would show from a bare
-    // seed. A failed snapshot degrades to null, which is the same shape as a
-    // parked session and is handled.
-    const snapshots: AdoptedSnapshots = new Map()
-    await Promise.all(adoption.adoptedSessionIds.map(async sessionId => {
-      try {
-        snapshots.set(sessionId, await window.api.getBackendSnapshot(sessionId))
-      } catch {
-        snapshots.set(sessionId, null)
-      }
-    }))
-
-    // Runtimes first, state second. A session whose runtime does not exist yet
-    // renders through `emptyRuntime()` as an idle pane with a `?` label;
-    // seeding before the rows are visible means an adopted agent selected into
-    // a lane never paints in that state.
-    //
-    // WHY EVERY adopted session gets a runtime, not just the ones with a
-    // backend: `ensureSessionLive` — the wake path behind lane selection —
-    // gates on `latestRuntimesRef.current[sessionId]` being present, and every
-    // one of its `setRuntimes` writes no-ops when it is missing. A parked agent
-    // adopted without a runtime therefore wakes into an empty feed with no
-    // transcript and no way to report a failure, which is precisely the case
-    // this whole feature exists to rescue.
-    setRuntimes(prev => {
-      const next = { ...prev }
-      for (const sessionId of adoption.adoptedSessionIds) {
-        next[sessionId] = seedAdoptedRuntime(
-          prev[sessionId],
-          adoption.state.sessions[sessionId],
-          snapshots.get(sessionId) ?? null,
-          adoption.drafts[sessionId],
-        )
-      }
-      return next
+    // Snapshot, seed and condition re-seed, in that order, before any row is
+    // published. The reasons for each step live on seedIncomingRuntimes.
+    const snapshots = await seedIncomingRuntimes({
+      sessionIds: adoption.adoptedSessionIds,
+      metas: adoption.state.sessions,
+      drafts: adoption.drafts,
+      setRuntimes,
     })
-
-    // The runtimes exist now, so main can safely re-emit what these sessions
-    // are blocked on (#895). Providers publish conditions only when they
-    // CHANGE, so an agent already sitting on a permission or a question sends
-    // nothing to a renderer that just started watching it — the adopting
-    // window lost the blocker entirely, while the raw TUI still showed it.
-    //
-    // AFTER the seed, never before: `seedAdoptedRuntime` builds from
-    // `emptyRuntime()`, so anything delivered earlier is overwritten by it.
-    // Not awaited — it arrives on the event channel like any other condition
-    // change, and a pane painting one turn without its blocker is far better
-    // than holding up the whole adoption for it.
-    void window.api.reseedSessionConditions?.(adoption.adoptedSessionIds as string[])
 
     setState(prev => ({
       ...prev,
@@ -252,21 +110,17 @@ export function useWorkspaceAdoption(
       windowId,
     ]
 
-    // History is loaded per session and not awaited as a batch: each pane fills
-    // in as its transcript arrives, which is the same progressive behavior
-    // bootstrap has. Only sessions that arrived WITH A LIVE BACKEND are loaded
-    // eagerly — those are the ones the closed window was actively running. A
-    // parked agent's transcript is fetched by `ensureSessionLive` when it is
-    // actually woken. (Until #992 the eager set was "the adopted tile leaves",
-    // a structural stand-in for the same idea.)
-    for (const sessionId of adoption.adoptedSessionIds.filter(id => snapshots.get(id) != null)) {
-      void loadInitialHistoryForSession({
-        sessionId: sessionId as SessionId,
-        refs,
-        setRuntimes,
-        meta: adoption.state.sessions[sessionId],
-      })
-    }
+    // Only sessions that arrived with a live backend (the ones the closed
+    // window was actively running) load history eagerly. (Until #992 the
+    // eager set was "the adopted tile leaves", a structural stand-in for the
+    // same idea.)
+    loadIncomingHistory({
+      sessionIds: adoption.adoptedSessionIds,
+      snapshots,
+      metas: adoption.state.sessions,
+      refs,
+      setRuntimes,
+    })
   }
 
   useEffect(() => {
