@@ -1,3 +1,4 @@
+import { useKeyboardRegionActive } from '@renderer/features/sidekick/ui/KeyboardRegionContext'
 import { useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 
 // "May this pane own keyboard input right now?" (#752)
@@ -20,9 +21,17 @@ import { useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/Agent
 // bare-Enter submit target, the dictation hotkey, the condition outlet —
 // used to be unreachable because the leaf did not exist; now it must be told
 // that a hidden focused pane owns nothing.
+//
+// WHY the keyboard REGION joins the gate (#1493): the Sidekick panel shows a
+// leaf beside the lanes, and both can be "focused" at once — the panel's leaf
+// and the focused lane's leaf. Without a third term both claimed Enter, paste
+// and dictation. The region is the one fact that says which of the two the
+// user is typing into; `hidden` deliberately ignores it (a lane is not
+// hidden, just not the keyboard's owner).
 export function useInteractiveOwnership(focused: boolean): { interactive: boolean; hidden: boolean } {
   const visible = useAgentTerminalOwnerVisible()
-  return { interactive: focused && visible, hidden: !visible }
+  const regionActive = useKeyboardRegionActive()
+  return { interactive: focused && visible && regionActive, hidden: !visible }
 }
 
 // WHY refocus-on-reveal must check where focus currently is: a takeover

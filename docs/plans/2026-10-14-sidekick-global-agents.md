@@ -558,3 +558,15 @@ Each task names what it hands to the next. Every commit gets thick WHY comments;
   - **Ruling: persistence schedules a save only if none is pending,** at most every 400 ms, instead of a restarting debounce. The app store changes on every streamed token, so a restarting debounce would never fire while the agent is talking.
   - New wake caller: `sidekick.attach`.
   - The filing-order mutant (filing after register) is killed.
+- **2026-10-14, Tasks 5 and 6.**
+  - **Ruling (deviates from §9's last paragraph): palette commands never target a sidekick in v1.** `commandTargetSessionId` still resolves to the focused lane, and there is no target-carrying context menu on the panel. Why: about 150 session commands assume a project (Close, Spotlight, Pin, Merge into Project, Send to Window). The catalog-walk guard the plan proposed would have to keep that whole surface correct forever. Instead the panel header carries the actions a sidekick needs:
+    - **Switch** (opens the picker)
+    - **Reload** (`workspace.reloadSessionAgent`)
+    - **Remove**
+    - **Hide**
+
+    Cost if wrong: provider switch, rewind and MCP toggles are not reachable for a sidekick from the palette. That is a follow-up, not a regression, since sidekicks are new.
+  - **Ruling: the keyboard region also gates `AgentTerminalLeaf` and `TerminalLeaf`.** Their keystroke and dictation routing reads `focused` directly rather than `useInteractiveOwnership`. Two one-line edits in leaf files; no lane layout file changed.
+  - **Ruling: no Control `ui.surfaceSet` route for the panel in v1.** Control exposure of sidekicks is out of scope (§5).
+  - **The catalog went from 137 to 140 commands:** `sidekick-panel` (⌘J), `sidekick-picker` (⌘⇧J) and `new-sidekick`. `check:keybindings` is OK.
+  - **Mutants:** the region gate is killed by 2 tests; the panel and picker states and Hermes ordering are pinned.

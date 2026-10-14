@@ -19,6 +19,7 @@ import { promptTemplateCommands } from '@renderer/features/prompt-templates/comm
 import { keyVaultCommands } from '@renderer/features/key-vault/commands/keyVaultCommands'
 import { replyToSelectionCommands } from '@renderer/features/reply-to-selection/commands/replyToSelectionCommands'
 import { agentStatusCommands } from '@renderer/features/agent-status/commands/agentStatusCommands'
+import { sidekickCommands } from '@renderer/features/sidekick/commands/sidekickCommands'
 import { dispatchColorFlagCommands } from '@renderer/features/workspace/commands/dispatchColorFlagCommands'
 import { agentTitleCommands } from '@renderer/features/workspace/commands/agentTitleCommands'
 import { remoteCommands } from '@renderer/features/remote/commands/remoteCommands'
@@ -101,6 +102,8 @@ export const builtInCommandCatalog: readonly CommandDef[] = Object.freeze([
   // empty-query browse order, so like things stay adjacent.
   ...replyToSelectionCommands,
   ...agentStatusCommands,
+  // Beside Agent Status: the other right-docked panel (#1493).
+  ...sidekickCommands,
   ...remoteCommands,
   ...usageCommands,
   // Beside Usage: both are app-wide "how much went where" reports (#964).

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
+import { useKeyboardRegionActive } from '@renderer/features/sidekick/ui/KeyboardRegionContext'
 import { focusIsUnowned } from '@renderer/workspace/tile-tree/TileLeaf/useInteractiveOwnership'
 import { useAcknowledgeAfterDwell } from '@renderer/workspace/tile-tree/TileLeaf/useAcknowledgeAfterDwell'
 import { isEngagementKeydown } from '@renderer/workspace/tile-tree/engagementKeydown'
@@ -104,8 +105,13 @@ export function AgentTerminalLeaf({
 
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
-  const focusedRef = useRef(focused)
-  focusedRef.current = focused
+  // The keyboard region (#1493) joins `focused` for everything that ROUTES
+  // input — keystrokes (focusedRef, read by isActive) and dictation — so a
+  // lane in terminal view stops capturing input while the user types into
+  // the Sidekick panel. Layout-facing uses of `focused` stay unchanged.
+  const regionActive = useKeyboardRegionActive()
+  const focusedRef = useRef(focused && regionActive)
+  focusedRef.current = focused && regionActive
   const dimensionActive = useAgentTerminalDimensionActive()
   const ownerVisible = useAgentTerminalOwnerVisible()
   // #1172: the same hook as TileLeaf, so switching a pane between Feed and raw
@@ -159,7 +165,7 @@ export function AgentTerminalLeaf({
     // workspace-focused one; it must be neither the dictation target nor a
     // fallback (`enabled`), while an unfocused visible pane stays a fallback.
     enabled: dictationEnabled && ownerVisible,
-    focused: focused && dimensionActive,
+    focused: focused && regionActive && dimensionActive,
     provider: dictationProvider,
     shortcut: dictationShortcut,
     sink: { kind: 'terminal', sessionId },

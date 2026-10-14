@@ -125,6 +125,15 @@ export function buildDefaultKeybindings(): CommandBindingDefault[] {
     // other applications for this exact action.
     { commandId: 'new-window', bindings: ['Cmd+Shift+N'], context: 'global' },
 
+    // --- Sidekick (#1493) ---------------------------------------------------
+    // ⌘J / ⌘⇧J: free in this app and in RESERVED_INTERACTIONS (checked
+    // 2026-10-14). ⌘J is not a macOS system shortcut; some text views use it
+    // for "Jump to Selection", which Agent Code has no menu item for. Global,
+    // because the panel is reachable from every surface, including while a
+    // takeover (Settings, Reader, Spotlight) owns the main area.
+    { commandId: 'sidekick-panel', bindings: ['Cmd+J'], context: 'global' },
+    { commandId: 'sidekick-picker', bindings: ['Cmd+Shift+J'], context: 'global' },
+
     // --- Tabs ---------------------------------------------------------------
     { commandId: 'new-tab', bindings: ['Cmd+T'], context: 'global' },
     { commandId: 'close-tab', bindings: ['Cmd+Shift+W'], context: 'global' },

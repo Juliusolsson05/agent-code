@@ -203,6 +203,10 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'reply-to-reader-message',
   // agent status / remote (2)
   'show-agent-status',
+  // sidekickCommands (3) — the other right-docked panel (#1493)
+  'sidekick-panel',
+  'sidekick-picker',
+  'new-sidekick',
   'toggle-remote-panel',
   // usage (1, was 3: both header preferences retired)
   'usage.open',
@@ -268,12 +272,12 @@ const NAVIGATION_COMMAND_GROUP: readonly string[] = [
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 137 governed commands in registration order', () => {
+  it('contains exactly the 140 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 137 commands', () => {
+  it('has exactly 140 commands', () => {
     // Stated separately from the order assertion because this number is the
     // thing that moves, and a bare count failure is a clearer signal than a
     // 99-line array diff.
@@ -306,11 +310,12 @@ describe('built-in command catalog — baseline characterization', () => {
     // the single-agent counterpart of Pin Sessions… that the Sessions
     // right-click menu offers → 134 with View Goal History (#1190) → 137 with
     // the two generated Hermes splits `hermes-vertical` / `hermes-horizontal`
-    // (#1482; main was already at 135).
+    // (#1482; main was already at 135) → 140 with Sidekick, Sidekick
+    // Picker… and New Sidekick… (#1493).
     // Each step of that arithmetic was a deliberate edit to this line, which is the entire point of pinning it. (The two test
     // titles above had drifted to "115" while this line said 116; they now
     // track it again.)
-    expect(builtInCommandCatalog).toHaveLength(137)
+    expect(builtInCommandCatalog).toHaveLength(140)
   })
 
   it('reports no structural defects', () => {
@@ -354,9 +359,10 @@ describe('generated per-provider split commands', () => {
     // then up by the seven Browser Pocket commands (#1142), then up by the
     // three skills commands (#1161), then up by Close Completed Agents…
     // (#1182), then up by Pin Session (#1180), then up by View Goal History
-    // (#1190), then up by Reply to Reader Message (#1221, K2-4).
+    // (#1190), then up by Reply to Reader Message (#1221, K2-4), then up by
+    // the three Sidekick commands (#1493).
     // Grok (#844) grew only the GENERATED term, 4 → 6, and Pi (#1132) 6 → 8.
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(127)
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(130)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -511,9 +517,10 @@ describe('governance targets', () => {
     // `close-completed-agents` (#1182). Then `pin-agent` (#1180). Then
     // `view-goal-history` (#1190). Then `reply-to-reader-message` (#1221, K2-4).
     // Then `hermes-vertical` and `hermes-horizontal` (#1482, generated from
-    // AGENT_PROVIDER_KINDS like Grok's and Pi's).
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 64).toBe(103)
-    expect(builtInCommandCatalog).toHaveLength(137)
+    // AGENT_PROVIDER_KINDS like Grok's and Pi's). Then `sidekick-panel`,
+    // `sidekick-picker` and `new-sidekick` (#1493).
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 67).toBe(103)
+    expect(builtInCommandCatalog).toHaveLength(140)
   })
 })
 

@@ -1,4 +1,5 @@
 import type { SurfaceEntry } from './types'
+import { SidekickPanelSurface } from '@renderer/features/sidekick/ui/SidekickPanelSurface'
 import { ConfirmHost } from '@renderer/components/ui/confirm-dialog'
 import { CaffeinateToastSurface } from '@renderer/features/caffeinate/surfaces/CaffeinateToastSurface'
 import { VoiceDictationSurface } from '@renderer/features/voice-dictation/surfaces/VoiceDictationSurface'
@@ -172,4 +173,9 @@ export const sidePanelSurfaces: SurfaceEntry[] = [
   { id: 'worktrees-bar', Component: WorktreesBarSurface },
   { id: 'agent-status-panel', Component: AgentStatusPanelSurface },
   { id: 'debug-surfaces', Component: DebugSurfaces },
+  // LAST, so the Sidekick panel is the window's rightmost column (#1493): it
+  // is the one panel that is always about the same agent, so it keeps a fixed
+  // place at the edge while the contextual panels (Git, Agent Status) open
+  // and close between it and the lanes. Also always mounted — see its header.
+  { id: 'sidekick-panel', Component: SidekickPanelSurface },
 ]
