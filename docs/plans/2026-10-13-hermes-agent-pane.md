@@ -638,6 +638,33 @@ Reviewer b: Pi (tests/rendering), report `temp/hermes-loop/review-app/report-b.m
 | Suspicion: chat test folds no replay ring | valid as a fidelity note | the reviewer rebuilt the realistic S8 union and found no duplicate; exactly-once across a drop is pinned in the package's cut-point tests. Not changed |
 | Suspicion: invented `CAPS` frame | valid, benign | kept; it matches the four answerable kinds |
 
+## Review round 1 of 2 (2026-10-14, owner-requested: 2 Claude + 2 Codex, two rounds, merge when ready)
+
+Reports in `temp/hermes-loop/review-r1/`. All four: FIX-BEFORE-MERGE. Fix commits:
+- package `c870f58` (reconnect 4007, URL credentials) and `4f07f5e` (ring-authoritative requests, self-replace, evicted-start turn, dead replay(), survivor tests);
+- app `c5836fd1` (c1) and `54773582` (x1/x2), plus the ledger/gitlink commit.
+
+| Reviewer / finding | Verdict | Disposition |
+|---|---|---|
+| c1 #1 deleted conversation → reconnect storm, two chains | valid (probe: 266 dials) | package reattach falls back on 4007 with `session-replaced`; app runs one reconnect attempt at a time; tests both sides |
+| c1 #2 cards survive sign-out | valid | detach clears open requests; test |
+| c1 #3 `user:pass@` URL stored and shown | valid | `normalizeBaseUrl` refuses credentials without echoing them; test |
+| c1 #4 removed connection says "sign in again"; Reload shows generic failure | valid | `HermesConnectionMissingError` → removed notice / curated not-connected sentence; stops the retry loop; test |
+| c1 suspicions: sign-in commit vs remove/URL edit | valid (narrow) | revoke before the write, re-check and delete after it |
+| c2 #1 approval lost across a resume / truncated reconnect | valid (probes) | request frames held during acquire; ring decides; tests incl. no-flicker |
+| c2 #2 self-replace reported as disconnect → endless replaces | valid (probe: 153 dials) | detach before close; test |
+| c2 #3 evicted-start turn never settles | valid (probe) | dispatch from the ring's last message.complete; test on S9 |
+| c2 #4 cut-point sweep covers dead replay() | valid | replay()/surfaceOpenRequests() deleted; sweep ported to acquire() (mutation proven) |
+| c2 survivors M27 M30 M24 M28 M18 M19 M29 M03 M36 M39 M40 M44 | valid | tests added; re-run of c2's battery kills all; remaining survivors M05 M51 M52 (c2: equivalent), M06 (transport dedupe now backs the pinned reconciler dedupe), M20 (turnInFlight also true from the seeded running turn) |
+| x1 #1 `/new` keeps old assistant bubbles | valid (probe) | boundary `conversationChanged` → renderer drops archived live turns; tests renderer + session |
+| x1 #2 / x2 #1 older history unreachable in the chat | valid (probes) | chat loads older pages near the top, preserving scroll; test |
+| x1 #3 Settings Save error hidden in the edit form | valid (probe) | error shown in the form, Cancel clears it; Settings card tests (kills x1's four Settings survivors) |
+| x2 #2 Jump to Latest / Auto-follow / picker inert in the chat | valid | chat honours scrollToLatestRequest, tailMode and the assistant picker selection; tests. Code-block picker highlight not drawn in the chat (residual, minor) |
+| x2 #3 View Prompts disabled | valid | `promptHistoryExtraction: true` (reads in-memory rows); test |
+| x2 #4 default connection skips a signed-in but unreachable server | valid | resolver prefers ready, then unreachable; test |
+| x1 survivor: TileLeaf chat-mount predicate | valid as a gap | declined: TileLeaf is not mountable in a unit test without the whole workspace; the predicate itself (`isChatSurfaceProviderKind`) is pinned |
+| x2 suspicion: live history keyed by stored id only | plausible, not probed | residual (two servers sharing a stored id) |
+
 ## Execution notes
 
 - **2026-10-13, plan-only:**
