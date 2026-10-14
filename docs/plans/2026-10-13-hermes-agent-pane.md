@@ -599,6 +599,11 @@ Reviewer b: OpenCode failed at once (provider: "Insufficient balance"); replaced
 | 5. Another session's `session.reclaimed` wipes cards | valid (source-derived probe; 0 in corpus) | fixed `9427867`: payload-identity fence + re-attach by stored id; test #5 |
 | 6. `stop()` during a pending dial leaves a live socket/session | valid | fixed `9427867`: connect generation; test #6 |
 | Suspicion: history reply after `/new` commits old rows | overstated (reviewer: inline handlers are serial on the pinned backend) | kept a cheap runtime fence; its mutation survives by design (race unreachable on v0.21.7) |
+| Review B (Pi, at 2dfaeba): history reply after /new applied to the new conversation | valid (FakeSocket ordering through the public API) | fence already in `9427867`; now pinned by a test |
+| Review B: facade 0% covered, 11/11 facade mutations survive | valid | facade system tests (13 now); listed facade mutations killed |
+| Review B: rowKey / tool fallbacks / sealText / success:false untested | valid | tests on S4/S6 + justified literal; mutations killed |
+| Review B minor: probe auth_flows/version fallback | valid, low | declined: pass-through of recorded fields; OAuth shape needs S2 (UNVERIFIED residual) |
+| Review B suspicions: truncated ring, heartbeat, backendCompatibility, PKCE, untyped frames | valid as gaps | tests added (truncated: mechanical mutation of S8); `backendCompatibility(null)` was a real bug (contract 0), fixed |
 | 15 surviving mutations | valid as test gaps | facade + reconciler + auth tests added; every new guard and the redirect/verifier/provider mutations now fail tests (50 core/system tests); remaining survivor: the history fence above |
 
 ## Execution notes
