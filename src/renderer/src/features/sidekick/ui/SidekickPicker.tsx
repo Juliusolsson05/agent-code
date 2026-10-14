@@ -10,7 +10,7 @@ import {
 } from '@renderer/components/ui/dialog'
 import { DialogActions } from '@renderer/components/ui/dialog-actions'
 import { KbdLegend } from '@renderer/components/ui/kbd'
-import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
+import { confirmRemoveSidekick } from '@renderer/features/sidekick/ui/confirmRemoveSidekick'
 import { useHermesConnections } from '@renderer/features/hermes-chat/useHermesConnections'
 import { useEnabledAgentProviderKinds } from '@renderer/features/providers/store'
 import { sidekickPlace } from '@renderer/features/sidekick/actions/useSidekickActions'
@@ -118,18 +118,7 @@ export function SidekickPicker({ workspace, actions }: { workspace: Workspace; a
 
   const remove = async (row: Row | undefined) => {
     if (!row || row.kind !== 'sidekick') return
-    const confirmed = await requestConfirm({
-      title: 'Remove Sidekick',
-      description: 'Its process stops and it leaves the Sidekick index. The conversation stays in Conversations.',
-      confirmLabel: 'Remove',
-      tone: 'danger',
-    })
-    if (!confirmed) return
-    try {
-      await actions.removeSidekick(row.summary.id)
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : String(error))
-    }
+    await confirmRemoveSidekick(actions, row.summary.id, showToast)
   }
 
   const nav = useListNavigation({

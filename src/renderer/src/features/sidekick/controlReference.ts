@@ -7,7 +7,7 @@ export const controlReference = [
     "id": "sidekick",
     "title": "Sidekick: global agents beside the workspace",
     "purpose": "Keep one global agent — Hermes, or any agent started in the home folder — open beside every project, in a panel docked at the right edge of each window.",
-    "ui": "Sidekick panel (Sidekick command), Sidekick Picker… and New Sidekick… commands; panel header Switch, Reload, Remove and Hide.",
+    "ui": "Sidekick panel (Sidekick command), Sidekick Picker… and New Sidekick… commands; the panel is a lane-shaped column (resize boundary, S1/S2… chip strip to switch, + to create) and a chip's right-click menu has Reload Agent, Remove Sidekick… and Hide Sidekick; hidden while Settings is open.",
     "prerequisites": "At least one enabled agent provider; Hermes needs a signed-in connection under Settings → Hermes.",
     "workflow": [
       "Open the Sidekick panel",
