@@ -123,7 +123,7 @@ function ChatRow({ item, connectionName }: { item: ChatItem; connectionName: str
       return (
         <div className="py-10 text-center text-[13px] text-muted" data-chat-role="empty">
           <div className="mb-1 text-[22px]" aria-hidden>☤</div>
-          Message your Hermes agent{connectionName ? ` on ${connectionName}` : ''}. Type / for its commands and skills.
+          Message your Hermes agent{connectionName ? ` on ${connectionName}` : ''}. Its slash commands (/new, /usage, a /skill) work here too.
         </div>
       )
   }

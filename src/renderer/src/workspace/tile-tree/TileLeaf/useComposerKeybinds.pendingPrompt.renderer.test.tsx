@@ -369,3 +369,41 @@ describe('echo providers', () => {
     expect(composer().readOnly).toBe(false)
   })
 })
+
+// Review b (#1482): a Hermes pane is a chat over the network. There is no PTY
+// to forward slash keystrokes to, and Hermes commits a skill's EXPANSION
+// rather than the typed `/skill` (recorded hermes-headless S13).
+describe('Hermes (chat surface) slash messages', () => {
+  it('types / as ordinary text and sends the command as one message', async () => {
+    seed('hermes')
+    const { feed, settle } = heldFeed()
+    mount('hermes', feed)
+    fireEvent.keyDown(composer(), { key: '/' })
+    await act(async () => {})
+    // No PTY slash mode: nothing was written, so the first Enter submits.
+    expect(sendSpy).not.toHaveBeenCalled()
+    act(() => current.setDraftInput(SESSION, '/hh-secret'))
+    let pending!: Promise<void>
+    act(() => { pending = submit('textarea-enter') })
+    await act(async () => {})
+    expect(feed.calls.filter(call => call.method === 'deliverPrompt').map(call => (call as { prompt: string }).prompt)).toEqual(['/hh-secret'])
+    await settle({ ok: true, acceptance: { kind: 'user', acceptedAt: Date.now() } })
+    await act(async () => { await pending })
+    // No optimistic echo outlives the send: Hermes will never commit a row
+    // reading "/hh-secret", so an echo would be a permanent second bubble.
+    expect(current.getRuntime(SESSION).entries.some(e => e.uuid?.startsWith('optimistic-codex-user:'))).toBe(false)
+  })
+
+  it('still echoes an ordinary Hermes message at once (its committed row matches it)', async () => {
+    seed('hermes')
+    const { feed, settle } = heldFeed()
+    mount('hermes', feed)
+    act(() => current.setDraftInput(SESSION, 'what is on my calendar'))
+    let pending!: Promise<void>
+    act(() => { pending = submit('textarea-enter') })
+    await act(async () => {})
+    await settle({ ok: true, acceptance: { kind: 'user', acceptedAt: Date.now() } })
+    await act(async () => { await pending })
+    expect(current.getRuntime(SESSION).entries.some(e => e.uuid?.startsWith('optimistic-codex-user:'))).toBe(true)
+  })
+})

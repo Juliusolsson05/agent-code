@@ -1,4 +1,4 @@
-import type { AgentProviderKind } from '@shared/types/providerKind'
+import { isChatSurfaceProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
 import { useRef, useState } from 'react'
 
 import type { SessionId } from '@renderer/workspace/types'
@@ -105,7 +105,15 @@ export function useComposerKeybinds({
     setSlashMode(false)
     setInputText('')
   }
-  const isLocalUsageCommand = () => input.trim().toLowerCase() === '/usage'
+  // A chat-surface pane (Hermes, #1482) has no PTY and no native slash picker:
+  // its slash commands are ordinary messages that HermesSession routes to the
+  // server (slash.exec / command.dispatch). So neither the PTY slash mode
+  // below nor Agent Code's local `/usage` intercept applies; Hermes has its
+  // own `/usage` (recorded S13). Before this, `/` entered slash mode, every
+  // key went to HermesSession.write (which drops all but Esc) and the first
+  // Enter ran nothing (review b #1).
+  const chatSurface = isChatSurfaceProviderKind(provider)
+  const isLocalUsageCommand = () => !chatSurface && input.trim().toLowerCase() === '/usage'
   const openLocalUsageCommand = async (clearProviderLine: boolean) => {
     // WHY this local slash command is intercepted LATE instead of blocking
     // slash-mode entry:
@@ -261,6 +269,14 @@ export function useComposerKeybinds({
       ? sessionKind
       : DEFAULT_PROVIDER
     const caps = getRendererProviderCapabilities(submitProvider)
+    // A chat-surface slash message never commits a user row with the TYPED
+    // text: Hermes stores a skill's expansion instead (recorded S13) and runs
+    // other commands without a user row at all. The optimistic echo is only
+    // reconciled away by an exact committed-text match, so it would stay as a
+    // second, permanent bubble (review b #2). Those submits use the pending
+    // row instead, which is removed when the send settles.
+    const optimisticEcho = caps.usesOptimisticUserEcho
+      && !(isChatSurfaceProviderKind(submitProvider) && input.trimStart().startsWith('/'))
     // THE PROMPT LEAVES THE COMPOSER VIEW AT ENTER (#1181). From the `sending`
     // state written above, TileLeaf shows the composer empty and read-only and
     // Feed shows the prompt as a pending row. Before this the draft stayed
@@ -299,7 +315,7 @@ export function useComposerKeybinds({
     // was skipped) is the only proof of which claim that is. See
     // OptimisticSubmitStamp in hook/actions/streaming.ts for the two-submit race.
     const optimisticStamp = workspace.beginOptimisticSubmit(sessionId)
-    if (caps.usesOptimisticUserEcho) {
+    if (optimisticEcho) {
       // Codex does not reliably give us a structured user
       // message at submit time the way Claude does. Seed the
       // feed immediately from the local composer state so
@@ -390,7 +406,7 @@ export function useComposerKeybinds({
       // row is already in the store and the prompt never blinks out. Echo
       // providers keep their optimistic row until the transcript catches up.
       // Leaving `sending` is what undims it and unlocks the composer.
-      if (!caps.usesOptimisticUserEcho) workspace.removePendingPromptEntry(sessionId, pasteId)
+      if (!optimisticEcho) workspace.removePendingPromptEntry(sessionId, pasteId)
       workspace.updateRuntime(sessionId, { promptDelivery: { kind: 'idle' } })
       // Acceptance, not the write, decides whether first-output is measurable:
       // a queued prompt's clock would otherwise stop on the running turn's
@@ -469,7 +485,7 @@ export function useComposerKeybinds({
       // but its Stage 0 edge must distinguish proven zero-write failure from a
       // partial/unknown send. In particular, a successful Codex paste followed
       // by a throwing Enter is not a `before-write-failure`.
-      if (caps.usesOptimisticUserEcho) {
+      if (optimisticEcho) {
         workspace.removeOptimisticCodexUserEntry(
           sessionId,
           input,
@@ -482,7 +498,7 @@ export function useComposerKeybinds({
       // visible again as soon as `sending` is replaced below. The `uncertain`
       // banner still blocks a plain resend when something may have reached
       // the provider.
-      if (!caps.usesOptimisticUserEcho) workspace.removePendingPromptEntry(sessionId, pasteId)
+      if (!optimisticEcho) workspace.removePendingPromptEntry(sessionId, pasteId)
       if (nothingWasWritten) {
         workspace.unwindOptimisticSubmit(sessionId, optimisticStamp)
         reportLifecycle('submit.unwound', sessionId, {
@@ -604,7 +620,7 @@ export function useComposerKeybinds({
     // Only when input is empty AND the user types `/`. That way
     // normal text containing a `/` in the middle (a URL, a path)
     // doesn't accidentally flip us into slash mode.
-    if (!slashMode && backendReady && input === '' && e.key === '/') {
+    if (!chatSurface && !slashMode && backendReady && input === '' && e.key === '/') {
       e.preventDefault()
       await send('/')
       setInputText('/')
