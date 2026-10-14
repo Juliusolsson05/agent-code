@@ -50,6 +50,9 @@ export function useSidekickActions(workspace: Workspace): SidekickActions {
   const createSidekick = useCallback(async ({ kind, providerRuntime }: CreateSidekickOptions): Promise<SidekickId> => {
     const homeDir = sidekickHomeDir()
     if (!homeDir) throw new Error('Sidekicks are still loading; try again in a moment.')
+    // The picker disables New during restore; this covers every other caller
+    // (see SidekickPicker for why a row filed before rehydrate is lost).
+    if (workspace.restoreStatus === 'pending') throw new Error('The workspace is still restoring; try again in a moment.')
     // Minted HERE so the row can be filed in the same commit spawn's row lands
     // (fileSpawnAsSidekick below). Main validates it and refuses a collision.
     const sidekickId = crypto.randomUUID()
@@ -59,20 +62,38 @@ export function useSidekickActions(workspace: Workspace): SidekickActions {
     const sessionId = await workspace.spawn(homeDir, { kind, providerRuntime })
     workspace.fileSpawnAsSidekick(sessionId, sidekickId)
     const meta = latestSessionMeta(sessionId)
-    const registered = await window.api.registerSidekick({ id: sidekickId, sessionId, meta })
-    if (!registered.ok) {
-      // The process is running but nothing durable names it. Retire it rather
-      // than leave an agent no picker can ever reach again.
+    // A refusal AND a thrown invoke (main mid-shutdown, a read-only store
+    // rejecting the commit — review round 1, C6) end the same way: the
+    // process is running but nothing durable names it. Retire it rather than
+    // leave an agent no picker can ever reach again.
+    let failure: string | null
+    try {
+      const registered = await window.api.registerSidekick({ id: sidekickId, sessionId, meta })
+      failure = registered.ok ? null : registered.reason
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error)
+    }
+    if (failure !== null) {
       await workspace.killSession(sessionId, 'sidekick.register-failed').catch(() => undefined)
       workspace.releaseSidekickRow(sessionId)
-      throw new Error(`Could not save the sidekick: ${registered.reason}`)
+      throw new Error(`Could not save the sidekick: ${failure}`)
     }
     workspace.setSidekickPanel({ open: true, sidekickId })
     return sidekickId
   }, [workspace])
 
-  const adoptAndWake = useCallback(async (result: SidekickAttachResult): Promise<SidekickAttachResult> => {
+  const adoptAndWake = useCallback(async (sidekickId: SidekickId, request: () => Promise<SidekickAttachResult>): Promise<SidekickAttachResult> => {
+    // WHY an epoch around the invoke (review round 1): main can grant this
+    // window the lease and then move it on (another window's take, a remove)
+    // before this reply is processed. `sidekick:released` for that second
+    // move may then arrive FIRST, find no row to drop, and the late reply
+    // would install a row this window no longer holds — a second view of a
+    // session whose input main now refuses here. Any release in between
+    // voids the reply.
+    const epoch = releaseEpoch(sidekickId)
+    const result = await request()
     if (!result.ok) return result
+    if (releaseEpoch(sidekickId) !== epoch) return { ok: false, reason: 'owned-elsewhere' }
     const { record } = result
     const meta = record.meta as SessionMeta | null
     if (!meta || typeof meta !== 'object') return { ok: false, reason: 'not-found' }
@@ -92,11 +113,11 @@ export function useSidekickActions(workspace: Workspace): SidekickActions {
   const showSidekick = useCallback(async (sidekickId: SidekickId) => {
     const place = sidekickPlace(liveSessions(), sidekickId)
     if (place.kind === 'here') return { ok: true as const, held: true as const }
-    return await adoptAndWake(await window.api.attachSidekick(sidekickId))
-  }, [adoptAndWake, workspace])
+    return await adoptAndWake(sidekickId, () => window.api.attachSidekick(sidekickId))
+  }, [adoptAndWake])
 
   const openHere = useCallback(async (sidekickId: SidekickId) => {
-    return await adoptAndWake(await window.api.takeSidekick(sidekickId))
+    return await adoptAndWake(sidekickId, () => window.api.takeSidekick(sidekickId))
   }, [adoptAndWake])
 
   const removeSidekick = useCallback(async (sidekickId: SidekickId) => {
@@ -119,6 +140,7 @@ export function useSidekickActions(workspace: Workspace): SidekickActions {
     // Keep the panel pointer: the panel now shows "Live in another window"
     // (or picks another sidekick if this one was removed — the index view
     // update handles that, see SidekickPanel).
+    bumpReleaseEpoch(event.sidekickId)
     workspace.releaseSidekickRow(event.sessionId)
   }, [workspace])
 
@@ -138,4 +160,14 @@ function liveSessions(): Record<string, SessionMeta> {
 
 function latestSessionMeta(sessionId: string): SessionMeta | null {
   return useAppStore.getState().workspaceState.sessions[sessionId] ?? null
+}
+
+/** Per-window count of `sidekick:released` events per sidekick (see
+ *  adoptAndWake). Module state because every window is its own renderer. */
+const releaseEpochs = new Map<SidekickId, number>()
+function releaseEpoch(sidekickId: SidekickId): number {
+  return releaseEpochs.get(sidekickId) ?? 0
+}
+function bumpReleaseEpoch(sidekickId: SidekickId): void {
+  releaseEpochs.set(sidekickId, releaseEpoch(sidekickId) + 1)
 }

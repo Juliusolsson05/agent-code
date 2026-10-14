@@ -38,7 +38,7 @@ beforeEach(() => {
   useSidekickIndexStore.getState().accept(view())
 })
 
-function harness(api: Partial<typeof window.api>) {
+function harness(api: Partial<typeof window.api>, restoreStatus: 'pending' | 'restored' = 'restored') {
   window.api = { ...originalApi, reseedSessionConditions: vi.fn(async () => 0), ...api } as typeof window.api
   const rows = renderHook(() => useSidekickRowActions(useAppStore.getState().setWorkspaceState, useAppStore.getState().setWorkspaceRuntimes)).result
   const spawn = vi.fn(async (cwd: string, opts?: { kind?: string; remoteConnectionId?: string }) => {
@@ -50,6 +50,7 @@ function harness(api: Partial<typeof window.api>) {
   const killSession = vi.fn(async () => undefined)
   const workspace = {
     get state() { return useAppStore.getState().workspaceState },
+    restoreStatus,
     spawn, ensureSessionLive, killSession,
     get fileSpawnAsSidekick() { return rows.current.fileSpawnAsSidekick },
     get adoptSidekickRow() { return rows.current.adoptSidekickRow },
@@ -134,4 +135,59 @@ it('saves a Hermes /new conversation and a Reload Agent successor to main', asyn
   useAppStore.getState().setWorkspaceRuntimes(prev => ({ ...prev }))
   await act(async () => { await vi.advanceTimersByTimeAsync(500) })
   expect(saveSidekick.mock.calls.length).toBe(calls)
+})
+
+it('retires the process when registering THROWS, not only when main refuses (review round 1, C6)', async () => {
+  const { actions, killSession } = harness({ registerSidekick: vi.fn(async () => { throw new Error('store is read-only') }) })
+  await act(async () => {
+    await expect(actions.current.createSidekick({ kind: 'claude' })).rejects.toThrow('store is read-only')
+  })
+  expect(killSession).toHaveBeenCalledWith('spawned-1', 'sidekick.register-failed')
+  expect(useAppStore.getState().workspaceState.sessions['spawned-1']).toBeUndefined()
+})
+
+it('refuses to create while the workspace is restoring: rehydrate would drop the row', async () => {
+  const registerSidekick = vi.fn(async () => ({ ok: true as const }))
+  const { actions, spawn } = harness({ registerSidekick }, 'pending')
+  await act(async () => {
+    await expect(actions.current.createSidekick({ kind: 'claude' })).rejects.toThrow('still restoring')
+  })
+  expect(spawn).not.toHaveBeenCalled()
+})
+
+it('a release that arrives before the take reply voids the reply (review round 1)', async () => {
+  // Main granted this window the lease, then moved it on (another window's
+  // take). Its `released` notice beat the first reply here; installing the
+  // row from that late reply would show a sidekick main no longer lets this
+  // window type into.
+  const id = '00000000-0000-4000-8000-000000000002'
+  const record = { id, sessionId: 'moved', createdAt: 1, lastActiveAt: 1, meta: { kind: 'claude', cwd: HOME, sidekickId: id } }
+  let reply!: (result: SidekickAttachResult) => void
+  const takeSidekick = vi.fn(() => new Promise<SidekickAttachResult>(resolve => { reply = resolve }))
+  const { actions, ensureSessionLive } = harness({ takeSidekick })
+  let result: SidekickAttachResult | undefined
+  await act(async () => {
+    const pending = actions.current.openHere(id)
+    actions.current.onReleased({ sidekickId: id, sessionId: 'moved' })
+    reply({ ok: true, record })
+    result = await pending
+  })
+  expect(result).toEqual({ ok: false, reason: 'owned-elsewhere' })
+  expect(useAppStore.getState().workspaceState.sessions.moved).toBeUndefined()
+  expect(ensureSessionLive).not.toHaveBeenCalled()
+})
+
+it('flushes a pending save on beforeunload instead of losing the last debounce window', async () => {
+  vi.useFakeTimers()
+  const id = '00000000-0000-4000-8000-000000000002'
+  const saveSidekick = vi.fn(async () => ({ ok: true as const }))
+  window.api = { ...originalApi, saveSidekick } as typeof window.api
+  useAppStore.getState().setWorkspaceState(prev => ({ ...prev, sessions: { held: { kind: 'claude', cwd: HOME, sidekickId: id } } }))
+  renderHook(() => useSidekickPersistence())
+  await act(async () => { await vi.advanceTimersByTimeAsync(500) })
+  const calls = saveSidekick.mock.calls.length
+  useAppStore.getState().setWorkspaceState(prev => ({ ...prev, sessions: { held: { ...prev.sessions.held!, title: 'typed just before quit' } } }))
+  act(() => { window.dispatchEvent(new Event('beforeunload')) })
+  expect(saveSidekick.mock.calls.length).toBe(calls + 1)
+  expect(saveSidekick).toHaveBeenLastCalledWith(expect.objectContaining({ meta: expect.objectContaining({ title: 'typed just before quit' }) }))
 })

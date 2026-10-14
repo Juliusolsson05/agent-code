@@ -95,7 +95,7 @@ export class RemoteWorkspaceProjection {
   // Sidekicks (#1493) are listed on the phone like any agent, titled
   // "Sidekick" through the shared projection — a live sidekick used to reach
   // the phone's session list with no title, name or TLDR.
-  private reproject(windows: readonly PersistedWindow[], sidekicks?: PersistedSidekicks): void {
+  private reproject(windows: readonly PersistedWindow[], sidekicks: PersistedSidekicks): void {
     if (this.disposed) return
     const projection = projectWorkspace(windows, sidekicks)
     const next = new Map<string, RemoteSessionIdentity>()
@@ -139,7 +139,7 @@ export class RemoteWorkspaceProjection {
         if (namesChanged) {
           // Re-project from the CURRENT document — the world may have
           // saved again while the read was in flight.
-          this.reproject(this.store.windows())
+          this.reproject(this.store.windows(), this.store.sidekicks())
         }
       })
       .catch(() => {})

@@ -112,6 +112,7 @@ import {
   windowCount,
 } from '@main/window/windowRegistry.js'
 import { abandonPendingBequest, recordPendingBequest } from '@main/ipc/window.js'
+import { commitDurableOwnership } from '@main/ipc/workspace.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
 import type { SessionForwarderControl } from '@main/sessions/forwarder.js'
 import { SessionFeedTap } from '@main/sessions/sessionFeedTap.js'
@@ -1451,6 +1452,7 @@ async function startApp(): Promise<void> {
     store: workspaceFileStore,
     router: {
       holder: sessionId => windowForSession(sessionId),
+      owner: sessionId => captureSessionWindowLease(sessionId)?.windowId ?? null,
       claim: (sessionId, windowId) => claimSessionForWindow(sessionId, windowId) !== null,
       transfer: (sessionId, windowId) => transferSessions([sessionId], windowId),
       release: sessionId => { releaseSession(captureSessionWindowLease(sessionId)) },
@@ -1459,6 +1461,8 @@ async function startApp(): Promise<void> {
     kill: options => manager!.killOwned(options),
     homeDir: osHomedir(),
     releasedChannel: SIDEKICK_CHANNELS.released,
+    // C4: a sidekick commit is a durable-ownership commit like a window save.
+    onCommitted: () => { if (manager) commitDurableOwnership(manager, workspaceFileStore) },
   })
   assertStartupOpen()
   // Conversation ledger (docs/decomposition/conversations.md, Stage 3): a

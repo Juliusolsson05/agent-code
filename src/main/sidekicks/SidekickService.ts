@@ -22,7 +22,7 @@ import type { SessionKillOptions } from '@shared/types/session.js'
 //   I1  the record in workspace.json is the durable truth; no window slice
 //       ever holds a sidekick row (the renderer's autosave enforces that half)
 //   I2  at most one window holds a sidekick's row — the window holding the
-//       router lease for `record.sessionId`
+//       router lease for the sidekick's CURRENT session
 //   I3  only that window may write the record (every write is lease-checked
 //       HERE, never trusted from the renderer)
 //
@@ -32,13 +32,31 @@ import type { SessionKillOptions } from '@shared/types/session.js'
 // `SessionMeta.agentNameId`'s comment describes for agent names. The router
 // lease already answers "which window may act on this process" for every
 // other session; sidekicks reuse that answer instead of inventing a second.
+//
+// THE CURRENT SESSION IS NOT ALWAYS THE DURABLE ONE (review round 1, C2/C3):
+// Reload Agent and provider switch mint a successor session in the holding
+// window, and the renderer reports it to `save` only after its debounce. A
+// `take` or `remove` acting on the durable `record.sessionId` in that window
+// moved or killed the RETIRED session — two owners, or a successor left
+// running with no record. Main learns of the successor at spawn time instead
+// (`noteSpawnClaimed`, wired from session:spawn, which carries the
+// predecessor id), so every decision below uses `currentSessionId`.
 
 /** The router operations the service needs, injected so tests can drive a
  *  real store against a scripted router. Wired to windowRegistry in main. */
 export type SidekickRouter = {
   /** The window holding a CURRENT lease for the session, else null. */
   holder(sessionId: string): string | null
-  /** Claim for a window; null when another live window holds it. */
+  /**
+   * The window the router has the session filed under, current OR stale
+   * (a renderer that reloaded keeps its lease at an old generation until its
+   * recover re-claims). WHY separate from `holder` (review round 1, C5): a
+   * stale owner makes `holder` null, but `claim` still refuses every other
+   * window while that owner's window lives — so treating it as "nobody
+   * holds it" left the sidekick untakeable.
+   */
+  owner(sessionId: string): string | null
+  /** Claim for a window; false when another live window holds it. */
   claim(sessionId: string, windowId: string): boolean
   /** Move an existing lease to `windowId` (the router's only handoff). */
   transfer(sessionId: string, windowId: string): void
@@ -53,7 +71,27 @@ export type SidekickServiceDeps = {
   kill(options: SessionKillOptions): Promise<boolean>
   homeDir: string
   releasedChannel: string
+  /**
+   * After any committed change to the index. Main wires this to
+   * commitDurableOwnership (review round 1, C4): `collectSessionIds` counts
+   * sidekick sessions, but only a WINDOW save used to ask SessionManager to
+   * acknowledge them, so a Codex sidekick's same-rollout handoff stayed
+   * pending — and the next Reload Agent waited on it forever — whenever no
+   * window happened to save (a read-only or partially restored workspace).
+   */
+  onCommitted?: () => void
   now?: () => number
+}
+
+/** What a spawn told main about a sidekick's newest session, before any save. */
+type LiveSuccessor = {
+  sessionId: string
+  previous: string
+  /** The ownership tuple the successor was spawned with: a provider switch
+   *  changes `kind`, and a moved row must be recovered as what it now is. */
+  kind: string | null
+  providerRuntime: string | null
+  cwd: string | null
 }
 
 function field(meta: unknown, key: string): string | null {
@@ -65,6 +103,8 @@ function field(meta: unknown, key: string): string | null {
 export class SidekickService extends EventEmitter {
   private revision = 0
   private readonly now: () => number
+  private readonly live = new Map<SidekickId, LiveSuccessor>()
+  private readonly removing = new Set<SidekickId>()
 
   constructor(private readonly deps: SidekickServiceDeps) {
     super()
@@ -76,6 +116,42 @@ export class SidekickService extends EventEmitter {
       revision: this.revision,
       homeDir: this.deps.homeDir,
       sidekicks: this.deps.store.sidekicks().records.map(record => this.summarize(record)),
+    }
+  }
+
+  /** The session currently running this sidekick: a spawned successor the
+   *  renderer has not saved yet, else the durable one. */
+  private currentSessionId(record: SidekickRecord): string {
+    return this.live.get(record.id)?.sessionId ?? record.sessionId
+  }
+
+  /**
+   * session:spawn claimed `sessionId` for a window, replacing `predecessor`.
+   * If the predecessor is a sidekick's current session, the successor becomes
+   * its current session NOW (C2). A sidekick being removed gets its successor
+   * killed instead (C3): nothing durable will ever name it.
+   */
+  noteSpawnClaimed(predecessor: string | undefined, sessionId: string, spawned: { kind?: string; providerRuntime?: string; cwd?: string }): void {
+    if (!predecessor) return
+    const record = this.deps.store.sidekicks().records.find(entry => this.currentSessionId(entry) === predecessor)
+    if (!record) return
+    if (this.removing.has(record.id)) {
+      void this.killQuietly(sessionId, spawned.kind ?? field(record.meta, 'kind'), spawned.providerRuntime ?? null, spawned.cwd ?? field(record.meta, 'cwd'))
+      return
+    }
+    this.live.set(record.id, {
+      sessionId,
+      previous: predecessor,
+      kind: spawned.kind ?? null,
+      providerRuntime: spawned.providerRuntime ?? null,
+      cwd: spawned.cwd ?? null,
+    })
+  }
+
+  /** A spawn that claimed a successor then failed: the predecessor is still current. */
+  noteSpawnFailed(sessionId: string): void {
+    for (const [id, successor] of this.live) {
+      if (successor.sessionId === sessionId) this.live.delete(id)
     }
   }
 
@@ -104,7 +180,10 @@ export class SidekickService extends EventEmitter {
       result = { ok: true }
       return { version: 1, records: [...current.records, { id: request.id, sessionId: request.sessionId, createdAt: at, lastActiveAt: at, meta: request.meta }] }
     })
-    if (result.ok) this.changed()
+    if (result.ok) {
+      this.deps.onCommitted?.()
+      this.changed()
+    }
     return result
   }
 
@@ -116,9 +195,11 @@ export class SidekickService extends EventEmitter {
    * holds the NEW session, and only when the OLD one is held by that same
    * window or by nobody (the replacement retired it). A window that lost the
    * sidekick through `take` fails the first check, so a slow renderer's late
-   * debounced save can never overwrite the new holder's record.
+   * debounced save can never overwrite the new holder's record. A sidekick
+   * being removed accepts no saves (C3).
    */
   async save(windowId: string, request: SidekickSaveRequest): Promise<SidekickWriteResult> {
+    if (this.removing.has(request.id)) return { ok: false, reason: 'being removed' }
     let result: SidekickWriteResult = { ok: false, reason: 'not committed' }
     await this.deps.store.commitSidekicks(current => {
       const index = current.records.findIndex(record => record.id === request.id)
@@ -151,33 +232,35 @@ export class SidekickService extends EventEmitter {
       records[index] = next
       return { version: 1, records }
     })
-    // Save does not change anything the index view shows except
-    // lastActiveAt/title/kind; broadcasting on every debounced save would be
-    // a broadcast per keystroke pause. Broadcast only when a summary field
-    // actually moved.
-    if (result.ok) this.changedIfSummaryMoved(request.id)
+    if (result.ok) {
+      // The durable record has caught up with the spawned successor.
+      if (this.live.get(request.id)?.sessionId === request.sessionId) this.live.delete(request.id)
+      this.deps.onCommitted?.()
+      this.changedIfSummaryMoved(request.id)
+    }
     return result
   }
 
   /**
-   * Show a sidekick that no window holds.
+   * Show a sidekick no window currently holds.
    *
-   * WHY attach CLAIMS the lease (plan ruling, 2026-10-14): the renderer's
+   * WHY attach CLAIMS the lease (plan ruling, Task 2): the renderer's
    * `session:recover` would claim it anyway, but only after an async round
-   * trip. Two windows opening the same sleeping sidekick at once would then
-   * both insert the row and race the recover, and the loser would surface a
-   * raw "owned by another window" error in its pane. Claiming here makes
-   * exactly one winner and gives the other the honest `owned-elsewhere`.
+   * trip; two windows opening the same sleeping sidekick at once would both
+   * insert the row and race the recover. Claiming here makes one winner.
+   *
+   * A STALE owner (its renderer reloaded and has not re-claimed yet, C5) is
+   * not "someone else's": its window may not even show the sidekick any more.
+   * The lease is transferred, and the stale owner told, exactly as `take`.
    */
   attach(windowId: string, id: SidekickId): SidekickAttachResult {
     const record = this.find(id)
     if (!record) return { ok: false, reason: 'not-found' }
-    const holder = this.deps.router.holder(record.sessionId)
-    if (holder === windowId) return { ok: true, record }
+    const sessionId = this.currentSessionId(record)
+    const holder = this.deps.router.holder(sessionId)
+    if (holder === windowId) return { ok: true, record: this.presented(record) }
     if (holder !== null) return { ok: false, reason: 'owned-elsewhere' }
-    if (!this.deps.router.claim(record.sessionId, windowId)) return { ok: false, reason: 'window-gone' }
-    this.changed()
-    return { ok: true, record }
+    return this.acquire(windowId, record)
   }
 
   /**
@@ -185,23 +268,51 @@ export class SidekickService extends EventEmitter {
    *
    * ORDER IS THE SAFETY PROPERTY: the lease moves FIRST, then the previous
    * holder is told. From the moment of the transfer every request the old
-   * window can still make about this session — save here, kill-owned and
-   * deliver-prompt in ipc/session.ts — fails its lease check, however long
-   * its renderer takes to process `released`. Telling it first would leave
-   * a window in which it believes it lost the sidekick but could still act.
-   * The router flushes held events to the new owner as part of the transfer.
+   * window can still make about this session — save here, kill-owned, and
+   * (since review round 1, C1) session:input and session:deliver-prompt —
+   * fails its lease check, however long its renderer takes to process
+   * `released`. The router flushes held events to the new owner as part of
+   * the transfer. The CURRENT session moves (C2), never a retired one.
    */
   take(windowId: string, id: SidekickId): SidekickAttachResult {
     const record = this.find(id)
     if (!record) return { ok: false, reason: 'not-found' }
-    const holder = this.deps.router.holder(record.sessionId)
-    if (holder === windowId) return { ok: true, record }
-    if (holder === null) return this.attach(windowId, id)
-    this.deps.router.transfer(record.sessionId, windowId)
-    if (this.deps.router.holder(record.sessionId) !== windowId) return { ok: false, reason: 'window-gone' }
-    this.notifyReleased(holder, { sidekickId: id, sessionId: record.sessionId })
+    const sessionId = this.currentSessionId(record)
+    if (this.deps.router.holder(sessionId) === windowId) return { ok: true, record: this.presented(record) }
+    return this.acquire(windowId, record)
+  }
+
+  /** Claim a free session, or transfer it from whichever window is filed as
+   *  its owner (current or stale) and tell that window. */
+  private acquire(windowId: string, record: SidekickRecord): SidekickAttachResult {
+    const sessionId = this.currentSessionId(record)
+    const previous = this.deps.router.holder(sessionId) ?? this.deps.router.owner(sessionId)
+    if (previous === null || previous === windowId) {
+      if (!this.deps.router.claim(sessionId, windowId)) return { ok: false, reason: 'window-gone' }
+    } else {
+      this.deps.router.transfer(sessionId, windowId)
+      if (this.deps.router.holder(sessionId) !== windowId) return { ok: false, reason: 'window-gone' }
+      this.notifyReleased(previous, { sidekickId: record.id, sessionId })
+    }
     this.changed()
-    return { ok: true, record }
+    return { ok: true, record: this.presented(record) }
+  }
+
+  /**
+   * The record as the new holder must adopt it: under its CURRENT session,
+   * with the ownership tuple that session was spawned with when the renderer
+   * has not saved it yet (a provider switch changes `kind`; recovering the
+   * moved row as the old kind would be an ownership conflict).
+   */
+  private presented(record: SidekickRecord): SidekickRecord {
+    const successor = this.live.get(record.id)
+    if (!successor) return record
+    const meta = record.meta && typeof record.meta === 'object' ? { ...(record.meta as Record<string, unknown>) } : {}
+    if (successor.kind) meta.kind = successor.kind
+    if (successor.cwd) meta.cwd = successor.cwd
+    if (successor.providerRuntime) meta.providerRuntime = successor.providerRuntime
+    else delete meta.providerRuntime
+    return { ...record, sessionId: successor.sessionId, meta }
   }
 
   /**
@@ -209,39 +320,54 @@ export class SidekickService extends EventEmitter {
    *
    * WHY main kills with its own authority instead of asking the holder: the
    * user removes from the picker in whatever window they are in, and the
-   * holder may be another window — or none. The kill goes through
-   * SessionManager.killOwned with the ownership tuple the record holds, the
-   * same proof a pane close sends; a mismatched tuple refuses rather than
-   * killing something else. The conversation itself stays in the provider's
-   * native store and in Conversations (plan Decision 8).
+   * holder may be another window — or none. Each kill goes through
+   * SessionManager.killOwned with an ownership tuple; a mismatched tuple
+   * refuses rather than killing something else. The conversation itself
+   * stays in the provider's native store and in Conversations (Decision 8).
+   *
+   * C3: the sidekick is marked `removing` BEFORE the first await, so a
+   * replacement saved or spawned while the kill runs cannot outlive it — the
+   * save is refused and the spawned successor is killed (noteSpawnClaimed).
+   * Both the current session and a not-yet-saved successor's predecessor are
+   * stopped; killOwned refuses whichever no longer exists.
    */
-  // The requester is not consulted (any window may remove); it is taken so the
-  // IPC layer's signature matches every other mutation and a future audit
-  // field has somewhere to come from.
   async remove(_requesterWindowId: string, id: SidekickId, caller: KillCaller = 'sidekick.remove'): Promise<SidekickWriteResult> {
     const record = this.find(id)
     if (!record) return { ok: false, reason: 'not-found' }
-    const holder = this.deps.router.holder(record.sessionId)
-    const kind = field(record.meta, 'kind')
-    const cwd = field(record.meta, 'cwd')
-    const providerRuntime = field(record.meta, 'providerRuntime')
-    if (kind && cwd) {
-      await this.deps.kill({
-        sessionId: record.sessionId,
-        kind: kind as SessionKillOptions['kind'],
-        cwd,
-        ...(providerRuntime ? { providerRuntime: providerRuntime as SessionKillOptions['providerRuntime'] } : {}),
-        caller,
-      }).catch(() => false)
+    if (this.removing.has(id)) return { ok: false, reason: 'being removed' }
+    this.removing.add(id)
+    try {
+      const presented = this.presented(record)
+      const holder = this.deps.router.holder(presented.sessionId) ?? this.deps.router.owner(presented.sessionId)
+      const sessions = new Set([presented.sessionId, record.sessionId])
+      for (const sessionId of sessions) {
+        const meta = sessionId === presented.sessionId ? presented.meta : record.meta
+        await this.killQuietly(sessionId, field(meta, 'kind'), field(meta, 'providerRuntime'), field(meta, 'cwd'), caller)
+        this.deps.router.release(sessionId)
+      }
+      this.live.delete(id)
+      await this.deps.store.commitSidekicks(current => ({
+        version: 1,
+        records: current.records.filter(entry => entry.id !== id),
+      }))
+      if (holder !== null) this.notifyReleased(holder, { sidekickId: id, sessionId: presented.sessionId })
+      this.deps.onCommitted?.()
+      this.changed()
+      return { ok: true }
+    } finally {
+      this.removing.delete(id)
     }
-    this.deps.router.release(record.sessionId)
-    await this.deps.store.commitSidekicks(current => ({
-      version: 1,
-      records: current.records.filter(entry => entry.id !== id),
-    }))
-    if (holder !== null) this.notifyReleased(holder, { sidekickId: id, sessionId: record.sessionId })
-    this.changed()
-    return { ok: true }
+  }
+
+  private async killQuietly(sessionId: string, kind: string | null, providerRuntime: string | null, cwd: string | null, caller: KillCaller = 'sidekick.remove'): Promise<void> {
+    if (!kind || !cwd) return
+    await this.deps.kill({
+      sessionId,
+      kind: kind as SessionKillOptions['kind'],
+      cwd,
+      ...(providerRuntime ? { providerRuntime: providerRuntime as SessionKillOptions['providerRuntime'] } : {}),
+      caller,
+    }).catch(() => false)
   }
 
   /**
@@ -252,11 +378,15 @@ export class SidekickService extends EventEmitter {
    * sidekick row (I1), so a transferred lease would route the sidekick's
    * events into a window that only builds orphan runtimes for them. Released,
    * the process keeps running and the next window to show the sidekick claims
-   * it through `attach` + `session:recover` (which adopts the live backend
-   * and reseeds through the router's gap path).
+   * it through `attach` + `session:recover`.
    */
   sidekickSessionIds(): Set<string> {
-    return new Set(this.deps.store.sidekicks().records.map(record => record.sessionId))
+    const ids = new Set<string>()
+    for (const record of this.deps.store.sidekicks().records) {
+      ids.add(record.sessionId)
+      ids.add(this.currentSessionId(record))
+    }
+    return ids
   }
 
   releaseForClosedWindow(sessionIds: readonly string[]): void {
@@ -273,17 +403,18 @@ export class SidekickService extends EventEmitter {
   }
 
   private summarize(record: SidekickRecord): SidekickSummary {
+    const presented = this.presented(record)
     return {
       id: record.id,
-      sessionId: record.sessionId,
-      kind: field(record.meta, 'kind'),
-      providerRuntime: field(record.meta, 'providerRuntime'),
-      title: field(record.meta, 'title'),
-      agentNameId: field(record.meta, 'agentNameId'),
-      remoteConnectionId: field(record.meta, 'remoteConnectionId'),
+      sessionId: presented.sessionId,
+      kind: field(presented.meta, 'kind'),
+      providerRuntime: field(presented.meta, 'providerRuntime'),
+      title: field(presented.meta, 'title'),
+      agentNameId: field(presented.meta, 'agentNameId'),
+      remoteConnectionId: field(presented.meta, 'remoteConnectionId'),
       createdAt: record.createdAt,
       lastActiveAt: record.lastActiveAt,
-      liveWindowId: this.deps.router.holder(record.sessionId),
+      liveWindowId: this.deps.router.holder(presented.sessionId),
     }
   }
 
@@ -308,7 +439,6 @@ export class SidekickService extends EventEmitter {
     this.emit('changed', this.view())
   }
 }
-
 
 /**
  * Split a closing window's leases into the ones a survivor inherits and the

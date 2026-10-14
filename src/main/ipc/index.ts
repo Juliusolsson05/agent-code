@@ -119,7 +119,14 @@ export function registerAllIpc(deps: IpcDeps): void {
   installPerformanceIpcInstrumentation()
   registerEditorFsIpc(editorFsRoots)
   registerEditorFsWatchIpc(editorFsRoots)
-  registerSessionIpc(deps.manager, deps.pasteDebugJournals, deps.sessionFeedTap, deps.appRunJournal)
+  registerSessionIpc(deps.manager, deps.pasteDebugJournals, deps.sessionFeedTap, deps.appRunJournal, {
+    claimed: (options, sessionId) => deps.sidekickService.noteSpawnClaimed(options.predecessorSessionId, sessionId, {
+      kind: options.kind,
+      providerRuntime: options.providerRuntime,
+      cwd: options.cwd,
+    }),
+    failed: sessionId => deps.sidekickService.noteSpawnFailed(sessionId),
+  })
   registerProviderIpc(deps.manager)
   registerLspIpc(deps.lspManager, editorFsRoots, deps.aiWorkspaceRegistry)
   registerFsIpc()

@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron'
+import type { WebContents } from 'electron'
 import { createHash } from 'node:crypto'
 
 import { ProviderCliNotFoundError, type SessionManager } from '@main/sessionManager.js'
@@ -10,7 +11,7 @@ import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { sha8FromDigestBytes } from '@shared/code/sha8.js'
 import type { ConditionCustomAction } from '@shared/types/providerConditions.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
-import type { PromptDeliveryOptions } from '@shared/types/providerConfig.js'
+import type { PromptDeliveryOptions, PromptDeliveryResult } from '@shared/types/providerConfig.js'
 import {
   loadInitialHistoryChunk,
   loadOlderHistoryChunk,
@@ -69,6 +70,20 @@ const WINDOW_CANNOT_OWN_SESSION = 'The requesting window can no longer own this 
 // still on screen, still owned, and can be reloaded in place. It is released
 // only when the owner explicitly disposes of the session.
 
+/**
+ * Told when session:spawn has claimed a minted id for a window, and when that
+ * spawn then failed. Sidekicks (#1493, review round 1 C2) need it: a Reload
+ * Agent or provider switch replaces a sidekick's session in the holding
+ * window, and main must know the successor at claim time — not at the
+ * renderer's debounced save — or a `take`/`remove` in between acts on the
+ * retired session. Called inside the id-mint callback so it is ordered before
+ * any event of the new session can reach anyone.
+ */
+export type SessionSpawnObserver = {
+  claimed(options: SessionSpawnOptions, sessionId: string): void
+  failed(sessionId: string): void
+}
+
 export function registerSessionIpc(
   manager: SessionManager,
   pasteDebugJournals: PasteDebugJournalRegistry,
@@ -76,6 +91,7 @@ export function registerSessionIpc(
   // file owns: deliver-prompt flushes committed rows before replying (#1181).
   feedTap: Pick<SessionFeedTap, 'flushCommitted'>,
   appRunJournal?: AppRunJournal,
+  spawnObserver?: SessionSpawnObserver,
 ): void {
   ipcMain.handle(
     'session:spawn',
@@ -93,11 +109,14 @@ export function registerSessionIpc(
         return await manager.spawn(options, sessionId => {
           lease = claimSessionForWindow(sessionId, owner)
           if (!lease) throw new Error(WINDOW_CANNOT_OWN_SESSION)
+          spawnObserver?.claimed(options, sessionId)
         })
       } catch (error) {
         // A failed spawn never returns its minted id to the renderer, so no
         // pane-disposal request can clean this claim later. Release only this
         // admission; a successor recovery may already have claimed the id.
+        const minted = (lease as SessionWindowLease | null)?.sessionId
+        if (minted) spawnObserver?.failed(minted)
         releaseSession(lease)
         throw launderSpawnError(error, options, appRunJournal)
       }
@@ -406,7 +425,10 @@ export function registerSessionIpc(
 
   ipcMain.handle(
     'session:input',
-    (_evt, sessionId: string, data: string, pasteId?: string) => {
+    (evt, sessionId: string, data: string, pasteId?: string) => {
+      // A window that no longer holds this session must not type into it
+      // (#1493 review C1). See heldByAnotherWindow.
+      if (heldByAnotherWindow(sessionId, evt.sender)) return false
       // Optional pasteId journals THIS write into the per-paste debug
       // dump. Only set by the composer's paste flow (useComposerKeybinds) —
       // never set on keystrokes, agent-pty bridging, or other normal
@@ -513,13 +535,30 @@ export function registerSessionIpc(
   ipcMain.handle(
     'session:deliver-prompt',
     async (
-      _evt,
+      evt,
       sessionId: string,
       prompt: string,
       imagePaths?: string[],
       deliveryId?: string,
       options?: PromptDeliveryOptions,
     ) => {
+      // #1493 review C1: "Open here" moves a sidekick's lease to another
+      // window and only THEN tells the old one. A prompt the old window sends
+      // in between must be refused here, or it lands on an agent the user is
+      // now typing to somewhere else. Refused before any byte is written, so
+      // the composer keeps the draft and nothing needs a retry decision.
+      if (heldByAnotherWindow(sessionId, evt.sender)) {
+        return {
+          ok: false,
+          stage: 'reservation',
+          code: 'not-ready',
+          message: 'This agent is now open in another window.',
+          retrySafe: true,
+          disposition: 'do-not-retry',
+          promptWritten: false,
+          enterWritten: false,
+        } satisfies PromptDeliveryResult
+      }
       const record = typeof deliveryId === 'string' && deliveryId.length > 0
         ? (event: string, data?: Record<string, unknown>) => {
             pasteDebugJournals.get(deliveryId).append({
@@ -696,3 +735,24 @@ export function classifySpawnFailure(error: unknown, proxyApplies: boolean): Spa
   if (/\bEACCES\b/.test(raw)) return generic('eacces')
   return generic('unclassified')
 }
+
+/**
+ * True when a DIFFERENT window holds this session's lease (#1493 review C1).
+ *
+ * WHY only "a different window", not the full current-lease check kill-owned
+ * uses: input and prompt delivery predate window leases and are also used
+ * right after a renderer reload, before that renderer's recover has re-claimed
+ * (its lease is then the same window at a stale generation). Refusing that
+ * would break the reload path for every agent. The hole the review reproduced
+ * is narrower — another window took the session — and this closes exactly
+ * it. A session no window holds (main-internal, or released by a closed
+ * window) is not this check's business.
+ */
+function heldByAnotherWindow(sessionId: string, sender: WebContents): boolean {
+  if (typeof sessionId !== 'string' || !sessionId) return false
+  const lease = captureSessionWindowLease(sessionId)
+  if (!lease) return false
+  const requester = windowIdFor(sender)
+  return requester !== null && lease.windowId !== requester
+}
+
