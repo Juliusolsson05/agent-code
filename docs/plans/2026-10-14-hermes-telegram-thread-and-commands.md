@@ -730,7 +730,7 @@ This would get its own issue + plan.
 | L4 | Package: slash routes (`slash/routes.ts`) wired into `runSlash`; `commandCatalog()`; `SlashOutcome` side-task / refused | todo | |
 | L5 | Package: `HermesRest` (done); lane (`lanes.ts` and `laneBusy.ts` done); lane mode in HermesHeadless (tip resolution, `sessions.changed`, backstop, holds); always `queued:true` (gated on H2); `turn-lost` on an epoch change | todo | |
 | L6 | Package tests on the recordings (S17–S25, T1–T8), plus the existing tests updated for HermesStartError wrapping; `npm run check` green; live tests run on v0.21.7 + v0.22.0 | todo | |
-| L7 | App Stage A: `RemoteStartFailure` stages, curated sentences, `classifySpawnFailure` fix (#1495), journal stage, `openWs` 401/403 wording, turn-lost notice, sudo/secret countdown | todo | |
+| L7 | App Stage A: `RemoteStartFailure` stages, curated sentences, `classifySpawnFailure` fix (#1495), journal stage, `openWs` 401/403 wording, turn-lost notice, sudo/secret countdown | doing | 6473dabd4: everything except the countdown and the S25-backed system test. Proven fail-first: reverting the classify branch turns the new session.test case red. |
 | L8 | App Stage C: Copy Assistant on Hermes (C0 reproduction first) | todo | |
 | L9 | App Stage D: lane mode (spawn option `hermesLane`, commands, `hermes:lanes` IPC, chip / notice / divider / busy line, held prompts as a non-blocking condition, `/new` refusal) | todo | |
 | L10 | App Stage E: composer command catalog + picker; `/restart` with confirmation and status polling; side-answer cards | todo | |
@@ -743,6 +743,7 @@ This would get its own issue + plan.
 
 ### Progress log
 
+- 2026-10-14: L7 mostly done (6473dabd4). Investigations running: the owner's debug bundle ("Hermes has a lot of issues") and slowness in spotlight.
 - 2026-10-14: L16 fixed (#1499). Package b6c610e pushed: lane mode, slash routes, typed errors, events (tests pending Stage 0).
 - 2026-10-14: plan + Tailscale plan committed; issues #1495–#1498 opened; Stage 0 agent started; L1/L2/L3 package code written, plus `HermesRest`, `lanes.ts` and `laneBusy.ts`.
 
