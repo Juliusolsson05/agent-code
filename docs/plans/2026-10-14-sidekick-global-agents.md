@@ -576,6 +576,32 @@ Each task names what it hands to the next. Every commit gets thick WHY comments;
   - **`app-state/store.test.ts` and `store.performance.test.ts`: time out only under the full parallel run** (the test at 5 s, the `beforeAll` import at 10 s). They pass alone on both `origin/main` and this branch. This is the known local load failure in memory; CI is the gate.
   - Typecheck, `check:keybindings`, `test:contract`, the fixture checks and `test:package` all passed (the check reached the test run, which comes after them).
 
+- **2026-10-14, review round 1 (one Codex, one Claude reviewer; both said FIX-BEFORE-MERGE).** Every valid finding was fixed, and each fix was proven by reverting it and watching its test fail.
+
+  | # | Finding | Verdict | Disposition |
+  |---|---|---|---|
+  | C1 | `session:input` / `deliver-prompt` never checked the sender's lease, so a window that lost a sidekick kept typing into it | valid | Fixed: `heldByAnotherWindow` refusal in `ipc/session.ts` |
+  | C2 | Reload Agent / provider switch then take: the record named the retired session, giving two owners | valid | Fixed: `SessionSpawnObserver` → `noteSpawnClaimed` / `noteSpawnFailed`. Every decision uses `currentSessionId`, and `presented` hands over the successor's tuple |
+  | C3 | Remove racing a replacement left the successor running with no record | valid | Fixed: `removing` set (saves refused, a late successor killed). Remove kills both current and durable sessions with their own tuples |
+  | C4 | Sidekick commits never ran `commitDurableOwnership` | valid | Fixed: `onCommitted` dep |
+  | C5 | A stale lease (holder reloaded) made a sidekick untakeable | valid | Fixed: `router.owner`; `acquire` transfers from a current or stale owner and notifies it |
+  | C6 | A thrown register leaked the process | valid | Fixed: try/catch, same retirement as a refusal |
+  | C7 | The phone's name reproject dropped sidekicks | valid | Fixed |
+  | — | A `released` beating the attach/take reply re-installed the row | valid (suspicion confirmed by reading) | Fixed: per-sidekick release epoch voids the reply |
+  | F1 | ⌘W / lane chords / Escape acted on the hidden lane while the panel had the keyboard | valid | Fixed: fail-closed `SIDEKICK_REGION_COMMAND_IDS` gate in `useKeybinds` |
+  | F2 | The first ⌘J left the caret in the lane composer | valid | Fixed: the panel focuses its leaf's textarea whenever the region is `sidekick` |
+  | F3 | After a reload, the panel showed "elsewhere" for its own sidekick | valid | Fixed: attach is also attempted for `elsewhere`; `owned-elsewhere` is not a failure |
+  | F4 | The panel pointer was never scrubbed against the index | valid | Fixed: `scrubbedPanelPointer` |
+  | F5 | 19/28 mutants survived (autosave I1, panel mount, guards) | valid | Fixed for I1, panel mount, picker, `beforeunload`, notice order, kill tuple and phone. **Accepted residual:** the thin `isSidekickSession` guards in `pane.ts` spawn focus, `effects.ts` pin sanity, and Control observe/lane-select have no dedicated test. The funnel guards (`selectTiledLaneSession`, `pinSession`, `setPinnedSessionIds`) are tested |
+  | F6 | Retry did nothing | valid | Fixed: an attempt counter in the effect's dependencies |
+  | F7 | Keyboard-first gaps | partly valid | ⌘J / ⌘⇧J / picker ⌘⌫ / F2 focus cover the keyboard path; no further change |
+  | F8 | Picker Enter on an elsewhere sidekick should take it | valid (plan §7 already said so: this was DRIFT) | Fixed |
+  | — | Radix menus flipped the region | valid | Fixed: `REGION_NEUTRAL_SELECTOR` (menu role and popper wrapper; not `listbox`, which lanes render inline) |
+  | — | Create during boot | valid | Fixed: New is disabled and `createSidekick` refuses while `restoreStatus` is `pending` |
+  | — | `useWorkspaceContext` re-renders; Reload All includes sidekicks | not a defect | Re-renders are the existing pattern of every side panel. Reload All reloading a live sidekick is the expected meaning of "all" |
+
+  The scoped suites (main sidekicks/ipc/remote/storage/window; renderer sidekick/workspace/palette/keybindings/control) gave 281 files and 2,423 tests passed. `npx tsc -b` is clean.
+
 ## Plan vs built (2026-10-14)
 
 | Section | Status | Note |
@@ -586,8 +612,8 @@ Each task names what it hands to the next. Every commit gets thick WHY comments;
 | §4 SidekickService, IPC, preload, projections, window close | MATCH, one DRIFT | `attach` claims the lease (ruling). `excludeFromBequest` shipped as `partitionClosedWindowSessions` + `releaseForClosedWindow`: same behaviour, testable as a pure function. |
 | §5 Renderer model | MATCH, one DRIFT | The row writers are in `hook/actions/sidekick.ts`, not `pane.ts` (ruling). Undo Close needed no change (ruling). `sidekickPanel` is optional (ruling). |
 | §6 Feature state and actions | MATCH | "Live here" is derived from the window's own rows, and persistence is throttled (rulings, Task 4). |
-| §7 Panel UI, picker, commands | DRIFT | There is no `remove-sidekick` palette command: Remove is in the panel header and the picker (⌘⌫). There is no Control `ui.surfaceSet` route (ruling). |
+| §7 Panel UI, picker, commands | DRIFT | Picker Enter on an elsewhere sidekick now takes it, as §7 said (review F8, fixed). There is no `remove-sidekick` palette command: Remove is in the panel header and the picker (⌘⌫). There is no Control `ui.surfaceSet` route (ruling). |
 | §8 Hermes | MATCH | Hermes is first when a connection is ready, and disabled with the fix when none is signed in. Hermes code is unchanged. |
 | §9 Consumer audit | MATCH, one DRIFT | Palette commands never target a sidekick in v1 (ruling, Tasks 5 and 6). The catalog-walk guard is therefore unnecessary and was not built. |
-| Tests 1–11 | MATCH, with three DRIFTs | Test 8's catalog walk was dropped (above). Test 9 drives the real `useInteractiveOwnership`, type-to-focus and paste hooks in two composers, not two full TileLeafs. Test 10 covers the panel body states and picker ordering rather than a full-workspace panel mount. |
+| Tests 1–11 | MATCH, with three DRIFTs | Test 8's catalog walk was dropped (above). Test 9 drives the real `useInteractiveOwnership`, type-to-focus and paste hooks in two composers, not two full TileLeafs. Test 10 now also mounts the panel and the picker (review round 1), with the leaf stood in by a textarea. |
 | Verification | See Task 7 | The app was not launched; the manual QA list goes in the PR. |
