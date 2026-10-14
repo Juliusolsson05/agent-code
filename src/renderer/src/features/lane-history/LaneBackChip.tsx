@@ -60,18 +60,19 @@ function LaneBackChipButton({ laneIndex, previous }: { laneIndex: number; previo
     // The header's mousedown already focuses the lane; stopping the click
     // keeps a parent onClick (none today) from treating it as a pane click.
     event.stopPropagation()
-    goBackInLane(workspace, laneIndex, { target: previous, chord })
+    void goBackInLane(workspace, laneIndex, { target: previous, chord })
   }
 
   const onContextMenu = (event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault()
     event.stopPropagation()
-    const rect = event.currentTarget.getBoundingClientRect()
-    // A pointer right-click opens at the cursor (x/y omitted); the
-    // context-menu key opens at the chip, not wherever the mouse rests.
-    const fromKeyboard = event.button !== 2 && event.clientX === 0 && event.clientY === 0
+    // Open at the event's own coordinates. For a pointer right-click that is
+    // the cursor; for a keyboard-opened context menu (Shift+F10) Chromium
+    // sets them to the focused chip. The first version guessed "keyboard" from
+    // clientX/Y === 0, which Chromium never produces, so that branch was dead
+    // (#1511 review).
     void openLaneHistoryMenu(workspace, laneIndex, chord, binding ? toElectronAccelerator(binding) : null,
-      fromKeyboard ? { x: Math.round(rect.left), y: Math.round(rect.bottom) } : {})
+      { x: Math.round(event.clientX), y: Math.round(event.clientY) })
   }
 
   return (
@@ -141,6 +142,13 @@ async function openLaneHistoryMenu(
 ): Promise<void> {
   const store = useAppStore.getState()
   const state = store.workspaceState as WorkspaceState
+  // The lane OBJECT the menu was built for. A flat index is not an identity:
+  // a lane inserted or removed before this one while the menu is open (an
+  // agent via the ac_* tools, a close that removes a lane) slides a different
+  // lane into the slot, and the pick would replace THAT lane's agent (#1511
+  // review, same rule as the dialog's laneChanged guard). Lane objects are
+  // replaced only when that lane is written, so identity is exact.
+  const laneBefore = state.stage.lanes[laneIndex]
   let picked: string | null
   try {
     picked = await window.api.showPopupMenu({ items: laneHistoryMenuItems(state, laneIndex, accelerator), ...at })
@@ -152,6 +160,8 @@ async function openLaneHistoryMenu(
     return
   }
   if (!picked) return
+  const laneNow = (useAppStore.getState().workspaceState as WorkspaceState).stage.lanes[laneIndex]
+  if (!laneBefore || laneNow !== laneBefore) return
   if (picked === LANE_HISTORY_MENU_OPEN_DIALOG) {
     useAppStore.getState().openLaneHistory(laneIndex)
     return
@@ -161,7 +171,7 @@ async function openLaneHistoryMenu(
   // The menu is modal but the workspace is not frozen behind it. goBackInLane
   // re-reads the LIVE state and re-checks that the target still exists and is
   // not already the occupant (the #1185 "re-check on resolve" rule).
-  goBackInLane(workspace, laneIndex, { target, chord })
+  await goBackInLane(workspace, laneIndex, { target, chord })
 }
 
 /**

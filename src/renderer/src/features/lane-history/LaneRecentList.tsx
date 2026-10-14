@@ -36,9 +36,13 @@ export function LaneRecentList({ laneIndex, workspace }: { laneIndex: number; wo
     count: shown.length,
     resetKey: laneIndex,
     idPrefix: `lane-recent-${laneIndex}`,
+    // The list is LIVE (an agent can close while it shows). Without keys a row
+    // disappearing above the highlight slid it onto the neighbour, and Enter
+    // restored an agent the user never highlighted (#1511 review).
+    keys: shown.map(entry => entry.sessionId),
     onActivate: index => {
       const entry = shown[index]
-      if (entry) goBackInLane(workspace, laneIndex, { target: entry.sessionId, chord: backChord })
+      if (entry) void goBackInLane(workspace, laneIndex, { target: entry.sessionId, chord: backChord })
     },
   })
   if (shown.length === 0) return null
@@ -71,17 +75,19 @@ export function LaneRecentList({ laneIndex, workspace }: { laneIndex: number; wo
             itemProps={list.getItemProps(index)}
           />
         ))}
-        {more > 0 ? (
-          <button
-            type="button"
-            tabIndex={-1}
-            onClick={() => useAppStore.getState().openLaneHistory(laneIndex)}
-            className="w-full px-3 py-1 text-left text-[11px] text-muted hover:bg-row-hover-bg hover:text-ink"
-          >
-            {more} more — Lane History…
-          </button>
-        ) : null}
       </div>
+      {/* OUTSIDE the listbox and a real tab stop: a listbox may only contain
+          options, and inside it this was neither announced nor reachable by
+          keyboard (#1511 review). */}
+      {more > 0 ? (
+        <button
+          type="button"
+          onClick={() => useAppStore.getState().openLaneHistory(laneIndex)}
+          className="mt-1 rounded-control px-1 text-[11px] text-muted hover:text-ink focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
+        >
+          {more} more — Lane History…
+        </button>
+      ) : null}
     </div>
   )
 }

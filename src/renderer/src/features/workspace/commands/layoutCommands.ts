@@ -234,8 +234,8 @@ export const layoutCommands: CommandDef[] = [
     description: '**What it does:** Puts the **previous agent** of the focused lane back in it. Press again to return — it toggles between the last two, like Alt-Tab.\n\n**Use when:** You looked at another agent in this lane and want the one you were on.\n\n**Notes:** The ↶ chip in the pane header does the same; right-click it for the lane\'s whole history.',
     keywords: ['lane back', 'back', 'previous agent', 'last agent', 'toggle', 'swap', 'alt tab', 'lane history', 'return'],
     when: ({ workspace }) => previousLaneSession(workspace.state, workspace.state.stage.focusedLane) !== null,
-    run: ({ workspace }) => {
-      goBackInLane(workspace, workspace.state.stage.focusedLane, { chord: currentCommandChordLabel('lane-back') })
+    run: async ({ workspace }) => {
+      await goBackInLane(workspace, workspace.state.stage.focusedLane, { chord: currentCommandChordLabel('lane-back') })
     },
   },
   ...laneKeyboardCommands,

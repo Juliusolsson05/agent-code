@@ -124,15 +124,54 @@ describe('Lane Back (⌥B)', () => {
 
   it('toasts the ARRIVING pane with where a second press goes', async () => {
     const t = harness([{ selectedSessionId: 'a2', history: [{ sessionId: 'a1', at: Date.now() }] }])
-    goBackInLane(t.workspace, 0, { chord: '⌥B' })
+    await goBackInLane(t.workspace, 0, { chord: '⌥B' })
     expect(t.showPaneToast).toHaveBeenCalledWith('a1', 'Back to A1 · ⌥B returns to A2')
   })
 
-  it('is not offered, and does nothing, when the lane has no live previous agent', () => {
+  it('toasts only after a cold wake places the agent, once, and never for a failed wake', async () => {
+    // #1511 review: the toast used to fire before the wake, so a slow wake
+    // outlived it, a failed wake still announced success, and a second ⌥B
+    // during the wake started a second wake.
+    const t = harness([{ selectedSessionId: 'a2', history: [{ sessionId: 'a1', at: Date.now() }] }])
+    let finishWake!: () => void
+    const place = t.selectTiledLaneSession.getMockImplementation()!
+    t.selectTiledLaneSession.mockImplementationOnce((laneIndex, sessionId) =>
+      new Promise<void>(resolve => { finishWake = () => { void place(laneIndex, sessionId).then(resolve) } }))
+
+    const first = goBackInLane(t.workspace, 0)
+    expect(await goBackInLane(t.workspace, 0)).toBe(false)
+    expect(t.selectTiledLaneSession).toHaveBeenCalledTimes(1)
+    expect(t.showPaneToast).not.toHaveBeenCalled()
+
+    await act(async () => { finishWake() })
+    expect(await first).toBe(true)
+    expect(t.showPaneToast).toHaveBeenCalledTimes(1)
+
+    // A wake that fails leaves the lane alone: no "Back to" over it.
+    t.showPaneToast.mockClear()
+    t.selectTiledLaneSession.mockImplementationOnce(async () => {})
+    expect(await goBackInLane(t.workspace, 0)).toBe(false)
+    expect(t.showPaneToast).not.toHaveBeenCalled()
+  })
+
+  it('decides from the LIVE store, not the Workspace object it was handed', async () => {
+    // The native menu awaits; the Workspace captured when it opened is stale.
+    // A snapshot that still shows a1 as previous must not win over the store,
+    // where the lane has since moved on.
+    const t = harness([{ selectedSessionId: 'a2', history: [{ sessionId: 'a1', at: 1 }] }])
+    const stale = { ...t.workspace, state: t.workspace.state } as Workspace
+    await act(async () => { await t.workspace.selectTiledLaneSession(0, 'a1') })
+
+    await goBackInLane(stale, 0)
+    // Live: a1 is the occupant and a2 the previous agent, so back goes to a2.
+    expect(t.lane(0).selectedSessionId).toBe('a2')
+  })
+
+  it('is not offered, and does nothing, when the lane has no live previous agent', async () => {
     const t = harness([{ selectedSessionId: 'a1', history: [{ sessionId: 'closed', at: 1 }] }])
     const context = { workspace: t.workspace, ui: {}, flags: {} } as unknown as CommandContext
     expect(command.when?.(context)).toBe(false)
-    expect(goBackInLane(t.workspace, 0)).toBe(false)
+    expect(await goBackInLane(t.workspace, 0)).toBe(false)
     expect(t.selectTiledLaneSession).not.toHaveBeenCalled()
   })
 })
@@ -194,11 +233,39 @@ describe('the ↶ chip in the pane header', () => {
     expect(t.lane(0).selectedSessionId).toBe('b1')
   })
 
-  it('the menu\'s last item opens the full dialog for this lane', () => {
+  it('the menu\'s last item opens the full dialog for this lane', async () => {
     const state = baseState([{ selectedSessionId: 'a2', history: [{ sessionId: 'a1', at: 0 }] }])
     const items = laneHistoryMenuItems(state, 0, 'Alt+B')
     expect(items[0]).toMatchObject({ accelerator: 'Alt+B' })
     expect(items.at(-1)).toMatchObject({ id: 'lane-history:dialog', label: 'Lane History…' })
+
+    const t = harness([{ selectedSessionId: 'a2', history: [{ sessionId: 'a1', at: 0 }] }])
+    window.api = { ...window.api, showPopupMenu: vi.fn().mockResolvedValue('lane-history:dialog') } as typeof window.api
+    render(header(t, 0))
+    await act(async () => { fireEvent.contextMenu(screen.getByRole('button', { name: /Back to A1/ })) })
+    expect(useAppStore.getState().laneHistoryLane).toBe(0)
+  })
+
+  it('drops a menu pick when a different lane slid into its slot while it was open', async () => {
+    // #1511 review: removing an earlier lane during the (modal, awaited) menu
+    // moved another lane into the captured index; the pick replaced THAT
+    // lane's agent.
+    const t = harness([{ selectedSessionId: 'b1' }, { selectedSessionId: 'a2', history: [{ sessionId: 'a1', at: 0 }] }, { selectedSessionId: 'a3' }])
+    window.api = {
+      ...window.api,
+      showPopupMenu: vi.fn(async () => {
+        useAppStore.getState().setWorkspaceState((prev: WorkspaceState) => ({
+          ...prev,
+          stage: { ...prev.stage, lanes: [prev.stage.lanes[1]!, prev.stage.lanes[2]!], rows: [{ length: 2 }] },
+        }))
+        return 'lane-history:pick:a1'
+      }),
+    } as typeof window.api
+    render(header(t, 1))
+    await act(async () => { fireEvent.contextMenu(screen.getByRole('button', { name: /Back to A1/ })) })
+
+    expect(t.selectTiledLaneSession).not.toHaveBeenCalled()
+    expect(t.lane(1).selectedSessionId).toBe('a3')
   })
 })
 
@@ -217,6 +284,40 @@ describe('"Recently here" in an empty lane', () => {
     await act(async () => { fireEvent.click(within(list).getAllByRole('option')[1]!) })
     expect(t.lane(0).selectedSessionId).toBe('b1')
     expect(t.setTiledFocusedLane).toHaveBeenCalledWith(0)
+  })
+
+  it('keeps the highlight on the same agent when one above it closes, and links the rest', async () => {
+    const now = Date.now()
+    const history = ['a1', 'a2', 'a3', 'b1'].map((sessionId, i) => ({ sessionId, at: now - i * MIN }))
+    const t = harness([{ history }])
+    // Two per list here would need 6+ live agents; the cap is 5, so add one
+    // past entry the list cannot show to prove the "more" link.
+    useAppStore.getState().setWorkspaceState((prev: WorkspaceState) => ({
+      ...prev,
+      sessions: Object.fromEntries([...Object.entries(prev.sessions), ...['c1', 'c2'].map((id, i) => [id, { cwd: `/w/${id}`, kind: 'claude', projectId: 'tab-b', joinedAt: 5 + i }])]),
+      stage: { ...prev.stage, lanes: [{ history: [...history, { sessionId: 'c1', at: 0 }, { sessionId: 'c2', at: 0 }] }] },
+    }))
+    render(<LaneRecentList laneIndex={0} workspace={t.workspace} />)
+    const list = screen.getByRole('listbox', { name: 'Agents recently in this lane' })
+    // Six live past agents, five shown: the "more" link is a real tab stop
+    // OUTSIDE the listbox (a listbox may only contain options).
+    const more = screen.getByRole('button', { name: /more — Lane History/ })
+    expect(list.contains(more)).toBe(false)
+    expect(more.tabIndex).toBe(0)
+
+    fireEvent.keyDown(list, { key: 'ArrowDown' })
+    fireEvent.keyDown(list, { key: 'ArrowDown' })
+
+    // a1 (above the highlighted a3) closes.
+    act(() => {
+      useAppStore.getState().setWorkspaceState((prev: WorkspaceState) => {
+        const { a1: _closed, ...sessions } = prev.sessions
+        return { ...prev, sessions }
+      })
+    })
+    await act(async () => { fireEvent.keyDown(list, { key: 'Enter' }) })
+    expect(t.lane(0).selectedSessionId).toBe('a3')
+
   })
 
   it('renders nothing for a lane that never held an agent', () => {
@@ -255,6 +356,8 @@ describe('Lane History dialog', () => {
     await act(async () => { fireEvent.keyDown(list, { key: 'Enter' }) })
 
     expect(t.lane(0).selectedSessionId).toBe('b1')
+    // Exactly once: the footer's Put Back must not also act on that Enter.
+    expect(t.selectTiledLaneSession).toHaveBeenCalledTimes(1)
     expect(onClose).toHaveBeenCalled()
   })
 

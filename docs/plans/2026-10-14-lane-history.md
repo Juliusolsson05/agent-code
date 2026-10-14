@@ -113,3 +113,23 @@ native menu path, the keyboard-first plan) the owner approved this redesign:
   `aria-activedescendant` points at the highlighted row, rows use the accent
   rail, and the footer has a key legend and Put Back. The lane-shift guard
   from #1504 is kept.
+
+### Review round for the redesign (#1511: one Claude + one Codex reviewer)
+
+Neither reviewer found a blocker. Every should-fix item and every actionable nit is fixed, and each fix has a test. I proved the two guard fixes by disabling them and watching their tests fail.
+
+- **Both reviewers:**
+  - **The toast fired before a cold wake finished.** It expired early, and a failed wake still announced success. `goBackInLane` is now async: it toasts only once the lane really shows the target, and a per-lane in-flight guard stops a second ⌥B from starting a second wake.
+  - **A native-menu pick could land in a lane that slid into the captured slot.** The pick is dropped unless the lane object is unchanged, and the "Lane History…" branch follows the same rule.
+  - **The "Recently here" highlight slid when a row above it closed.** The list now passes the session ids as `keys`.
+- **Codex:** the "N more" link could not be reached by keyboard. It is now a real tab stop.
+- **Claude:**
+  - **A short lane clipped its empty-lane content.** `DispatchEmpty` now scrolls, using `flex-1 min-h-0` plus inner `min-h-full` centring.
+  - **The "N more" button sat inside the listbox.** It now sits outside it, because a listbox may only contain options.
+  - **The keyboard-open check for the menu was dead code.** Chromium never reports coordinates of 0,0, so it never fired. The menu now always opens at the event's coordinates.
+  - **Test gaps:**
+    - A stale-Workspace test proves the model reads the live store.
+    - The dialog branch of the menu now has a test.
+    - The Enter test now checks that exactly one selection happens.
+    - The real `TiledDispatchLayout` wiring is tested in `gridDispatchLayout.renderer.test.tsx`: lane slot provider and Recently here.
+- **Accepted:** pressing ⌥B with no previous agent eats the keystroke, the same as ⌥H.

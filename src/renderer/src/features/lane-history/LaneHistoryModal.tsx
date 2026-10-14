@@ -91,7 +91,7 @@ export function LaneHistoryModal({ laneIndex, workspace, onClose }: Props) {
     // click or Enter can land in between.
     if (laneIndex === null || laneChanged || !entry) return
     onClose()
-    goBackInLane(workspace, laneIndex, { target: entry.sessionId, chord: backChord })
+    void goBackInLane(workspace, laneIndex, { target: entry.sessionId, chord: backChord })
   }
 
   const list = useListNavigation({

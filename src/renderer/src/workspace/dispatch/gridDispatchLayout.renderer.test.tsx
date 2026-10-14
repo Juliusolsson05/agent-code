@@ -1,3 +1,4 @@
+import type React from 'react'
 import { cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -70,8 +71,8 @@ vi.mock('@renderer/workspace/dispatch/DispatchAgentList', () => ({
   // The hint is exposed as data, not asserted as copy: the layout decides
   // WHETHER an empty lane may advertise a pick, and that decision is the
   // behavior worth pinning. The wording is a design choice.
-  DispatchEmpty: ({ message, hint }: { message: string; hint?: string }) => (
-    <div data-testid="lane-empty" data-hint={hint ?? ''}>{message}</div>
+  DispatchEmpty: ({ message, hint, children }: { message: string; hint?: string; children?: React.ReactNode }) => (
+    <div data-testid="lane-empty" data-hint={hint ?? ''}>{message}{children}</div>
   ),
 }))
 // The strip is mocked down to what the LAYOUT owns about it:
@@ -118,10 +119,20 @@ vi.mock('@renderer/workspace/dispatch/DispatchMiniList', () => ({
     )
   },
 }))
-vi.mock('@renderer/workspace/tile-tree/TileLeaf', () => ({
-  TileLeaf: ({ sessionId }: { sessionId: string }) => (
-    <div data-testid="lane-agent" data-session-id={sessionId} />
-  ),
+// The stand-in reads the REAL LaneSlotContext, so the suite proves each
+// lane's content is inside its own provider — the wiring Lane History's ↶
+// chip depends on, which no lane-history test can see on its own.
+vi.mock('@renderer/workspace/tile-tree/TileLeaf', async () => {
+  const { useLaneSlot } = await import('@renderer/features/lane-history/LaneSlotContext')
+  return {
+    TileLeaf: ({ sessionId }: { sessionId: string }) => {
+      const laneSlot = useLaneSlot()
+      return <div data-testid="lane-agent" data-session-id={sessionId} data-lane-slot={String(laneSlot)} />
+    },
+  }
+})
+vi.mock('@renderer/features/lane-history/LaneRecentList', () => ({
+  LaneRecentList: ({ laneIndex }: { laneIndex: number }) => <div data-testid="lane-recent" data-lane={laneIndex} />,
 }))
 
 // Loaded through the shared lift: the file on disk is a v2 workspace whose lane
@@ -194,6 +205,17 @@ afterEach(() => {
 })
 
 describe('Grid Dispatch layout', () => {
+  it('draws every lane inside its own lane slot, and an empty lane offers Recently here', () => {
+    const { getAllByTestId } = renderGrid({
+      lanes: [{ selectedSessionId: laneIds[0] }, {}, { selectedSessionId: laneIds[1] }],
+      rows: [{ length: 3 }],
+      focusedLane: 0,
+    })
+
+    expect(getAllByTestId('lane-agent').map(agent => agent.getAttribute('data-lane-slot'))).toEqual(['0', '2'])
+    expect(getAllByTestId('lane-recent').map(list => list.getAttribute('data-lane'))).toEqual(['1'])
+  })
+
   it('gives every row its own index list', () => {
     // The structural claim the whole design rests on. One shared full-height
     // sidebar could not answer "whose agents am I listing?" once two rows are

@@ -70,8 +70,23 @@ export function lanePositionLabel(state: WorkspaceState, laneIndex: number): str
 }
 
 /**
+ * Lanes with a Lane Back still waking its target. A second ⌥B (or chip click)
+ * while a hibernated agent wakes would read the SAME unchanged lane, pick the
+ * same target and start a second wake and a second toast (#1511 review).
+ * Keyed by lane index: a pick in another lane is independent and allowed.
+ */
+const placingLanes = new Set<number>()
+
+/** The live workspace state. See goBackInLane for why not `workspace.state`. */
+function liveState(workspace: Workspace): WorkspaceState {
+  return (useAppStore.getState().workspaceState as WorkspaceState | undefined) ?? workspace.state
+}
+
+/**
  * Put `target` (default: the previous agent) back into `laneIndex` and focus
- * that lane. Returns false when there was nothing to go back to.
+ * that lane. Resolves true once the lane really shows the target, false when
+ * there was nothing to go back to, a pick was already in flight, or the wake
+ * failed.
  *
  * Through `selectTiledLaneSession`, never the raw lane writer: a hibernated
  * agent has to wake before it is placed (#690). That same writer records the
@@ -79,35 +94,51 @@ export function lanePositionLabel(state: WorkspaceState, laneIndex: number): str
  * agent you just left becomes the newest history entry, so pressing ⌥B again
  * returns to it, like Alt-Tab.
  *
- * The toast goes to the ARRIVING agent's pane (pane toasts are session-scoped)
- * and names the agent a second ⌥B would return to, so the toggle is
- * discoverable from the first press. `chord` is passed in rather than read
- * here so this stays callable from non-React code with the user's binding.
+ * The toast is shown AFTER the placement is confirmed, on the ARRIVING
+ * agent's pane (pane toasts are session-scoped). The first version toasted
+ * immediately: a cold wake outlived the toast's two seconds, and a wake that
+ * failed still announced "Back to A2" over a lane that never changed (#1511
+ * review). It names the agent a second press returns to, so the toggle is
+ * discoverable from the first press. `chord` is passed in so this stays
+ * callable from non-React code with the user's binding.
  */
-export function goBackInLane(
+export async function goBackInLane(
   workspace: Workspace,
   laneIndex: number,
   options: { target?: SessionId; chord?: string | null } = {},
-): boolean {
+): Promise<boolean> {
   // The LIVE state, not `workspace.state`: callers include an awaited native
   // menu, and the Workspace object captured when it opened carries the state
   // from before. The store's workspace slice is the source the actions write
   // synchronously, so this is the same state they will act on. (The actions
   // themselves read through refs, so a captured Workspace is fine for them.)
-  const state = (useAppStore.getState().workspaceState as WorkspaceState | undefined) ?? workspace.state
+  const state = liveState(workspace)
   const lane = state.stage.lanes[laneIndex]
-  if (!lane) return false
+  if (!lane || placingLanes.has(laneIndex)) return false
   const target = options.target ?? previousLaneSession(state, laneIndex)
   if (!target || target === lane.selectedSessionId || !state.sessions[target]) return false
   const leaving = lane.selectedSessionId && state.sessions[lane.selectedSessionId]
     ? lane.selectedSessionId
     : null
 
-  void workspace.selectTiledLaneSession(laneIndex, target)
+  // Focus first, so the lane the user aimed at is the one their next key
+  // acts on even while a cold wake is still running.
   workspace.setTiledFocusedLane(laneIndex)
+  placingLanes.add(laneIndex)
+  try {
+    await workspace.selectTiledLaneSession(laneIndex, target)
+  } catch {
+    // The wake path reports its own failure globally; Lane Back must just
+    // not claim success over it.
+    return false
+  } finally {
+    placingLanes.delete(laneIndex)
+  }
+  const after = liveState(workspace)
+  if (after.stage.lanes[laneIndex]?.selectedSessionId !== target) return false
 
-  const arriving = laneAgentLabel(state, target) ?? 'agent'
-  const returnTo = leaving ? laneAgentLabel(state, leaving) : null
+  const arriving = laneAgentLabel(after, target) ?? 'agent'
+  const returnTo = leaving ? laneAgentLabel(after, leaving) : null
   const message = returnTo && options.chord
     ? `Back to ${arriving} · ${options.chord} returns to ${returnTo}`
     : `Back to ${arriving}`
