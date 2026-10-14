@@ -117,6 +117,12 @@ describe('newTab places the first agent of a new project', () => {
     // occupied, unlike applyDispatchSpawnFocus (#1013 review B).
     const { hook, getState } = mount(workspace({ lanes: [{ selectedSessionId: 'closed' }], rows: [{ length: 1 }], focusedLane: 0 }))
     await act(async () => { await hook.result.current.newTab('/work/second') })
-    expect(getState().stage.lanes).toEqual([{ selectedSessionId: 'new-session' }])
+    // The replaced id lands in Lane History like any departure, through the
+    // real ⌘T path. It is a dead agent, so the dialog hides it and the next
+    // autosave prunes it — recording it is harmless, NOT recording it would
+    // mean this path bypassed withLaneSession.
+    expect(getState().stage.lanes).toEqual([
+      { selectedSessionId: 'new-session', history: [{ sessionId: 'closed', at: expect.any(Number) }] },
+    ])
   })
 })

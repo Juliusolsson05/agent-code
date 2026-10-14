@@ -35,6 +35,7 @@ import { ProviderSwitchPickerSurface } from '@renderer/features/workspace/surfac
 import { KeyVaultModalSurface } from '@renderer/features/key-vault/surfaces/KeyVaultModalSurface'
 import { NewAgentInSurface } from '@renderer/features/workspace/surfaces/NewAgentInSurface'
 import { ReportHistorySurface } from '@renderer/features/tldr/surfaces/ReportHistorySurface'
+import { LaneHistorySurface } from '@renderer/features/lane-history/LaneHistorySurface'
 import { AgentAnalyticsSurface } from '@renderer/features/agent-analytics/surfaces/AgentAnalyticsSurface'
 import { McpServerDialogSurface } from '@renderer/features/mcp/surfaces/McpServerDialogSurface'
 import { AddSkillDialogSurface } from '@renderer/features/skills/surfaces/AddSkillDialogSurface'
@@ -151,6 +152,10 @@ export const modalSurfaces: SurfaceEntry[] = [
   // because DialogContent portals out. It is a modal; it lives here, appended
   // per the contract above (its portal stacks by open order either way).
   { id: 'remote-panel', Component: RemotePanelSurface },
+  // Appended per the contract above. Opened only from the Lane History
+  // command, which closes the palette first; it paints over anything already
+  // open because it opens later (open order).
+  { id: 'lane-history', Component: LaneHistorySurface },
 ]
 
 /**

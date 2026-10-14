@@ -7,7 +7,7 @@ import type {
   TabId,
   WorkspaceState,
 } from '@renderer/workspace/types'
-import { withLaneSession } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import { withLaneClearedByUser, withLaneSession } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import type { GridShapeRow, LaneInsertSide } from '@renderer/workspace/dispatch/gridShape'
 import {
   clampIndexFraction,
@@ -267,8 +267,12 @@ export function useDispatchActions(
         const tiled = prev.stage
         if (laneIndex < 0 || laneIndex >= tiled.lanes.length) return prev
         if (tiled.lanes[laneIndex]?.selectedSessionId === undefined) return prev
+        // Through the helper, not an inline write: Clear Lane is the one
+        // clear where the agent is still alive, so it must land in Lane
+        // History — "I cleared it, where did it go" is the question the
+        // history answers.
         const lanes = tiled.lanes.map((lane, i) =>
-          i === laneIndex ? { ...lane, selectedSessionId: undefined } : lane,
+          i === laneIndex ? withLaneClearedByUser(lane) : lane,
         )
         return { ...prev, stage: { ...tiled, lanes } }
       })
