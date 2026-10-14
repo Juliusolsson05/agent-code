@@ -623,7 +623,7 @@ Reviewer b: Pi (tests/rendering), report `temp/hermes-loop/review-app/report-b.m
 | 8. the Settings → Hermes sentence is flattened to the generic failure | valid | fixed `8b4db279`: shared curated `HERMES_*_MESSAGE` constants recognised by both launderers; test |
 | 9. pickers mark a signed-in Hermes "Not installed" | valid | fixed `8b4db279`: hint limited to local kinds; test |
 | Suspicion: stateless `?error=` callback ends a sign-in | valid (Hermes only redirects with code+state) | fixed; test |
-| Suspicion: live sockets survive sign-out/URL edit | plausible, not exercised | residual: the socket keeps working until it drops; the next dial is refused. Follow-up candidate |
+| Suspicion: live sockets survive sign-out/URL edit | valid (source-traced) | fixed `fc1ab6f3`: the service emits `disconnect`, panes detach without closing the conversation and do not redial; test |
 | Survivor: skill-reconcile guard | valid | test with a pre-start hook; mutation now fails |
 | Survivor: sudo/secret value validation | valid | test on recorded S6 sudo/secret; mutation now fails |
 
@@ -680,4 +680,9 @@ Reviewer b: Pi (tests/rendering), report `temp/hermes-loop/review-app/report-b.m
 | Verification | MATCH | package check + live 7/7; app `tsc -b` + `npm run check` (results in the PR) |
 | ARCHITECTURE.md | MATCH | §5.2 row, §5.3 column, §5.3.7; no diagram (the table carries it) |
 | Out of scope | follow-up issues filed at PR time |
+- **2026-10-13, task 10:**
+  - App PR #1491 opened (`Fixes #1482`); follow-ups #1485–#1490 filed from Out of scope.
+  - Full `npm run check` at `fc1ab6f3`: 8271 passed, 1 failed (`nodePtyPtmxLeak`, darwin-only, fails identically on origin/main locally).
+  - Merged origin/main (`7cda9612`); `tsc -b` clean and 1249 provider/command/control/Hermes tests pass after the merge.
+  - Full-check drift fixed on the way: an unconditional connection await delayed every local spawn (`0867f925`); the Skills, targets, usage and MCP-domain drift tests now name Hermes; the control reference gained a Hermes page.
 
