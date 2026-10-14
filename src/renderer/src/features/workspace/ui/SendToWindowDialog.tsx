@@ -19,6 +19,8 @@ type Props = {
   sessionLabel: string
   /** How many related agents move with it (linked and orchestration children). */
   relatedCount: number
+  /** The parent this agent leaves behind when it is itself a child, or null. */
+  parentLabel: string | null
   /** Null while the window list is loading. */
   targets: SessionMoveTarget[] | null
   onCancel: () => void
@@ -39,7 +41,7 @@ type Props = {
  * the same OS title, so "Window 2" alone matches nothing on screen. Project
  * titles are what a person actually sees in that window's tab bar.
  */
-export function SendToWindowDialog({ open, sessionLabel, relatedCount, targets, onCancel, onPick }: Props) {
+export function SendToWindowDialog({ open, sessionLabel, relatedCount, parentLabel, targets, onCancel, onPick }: Props) {
   const listRef = useRef<HTMLDivElement | null>(null)
   // One-shot latch: `open` only drops once the parent reacts to onPick, so a
   // fast second Enter would otherwise start a second move of the same agent
@@ -97,6 +99,17 @@ export function SendToWindowDialog({ open, sessionLabel, relatedCount, targets, 
             {' '}moves to the window you choose and appears in its focused lane. Nothing restarts.
           </DialogDescription>
         </DialogHeader>
+
+        {parentLabel !== null ? (
+          // #1481 review: moving a CHILD alone splits it from its parent. The
+          // parent's orchestration tools (wait, read, close) and the linked
+          // close rule only see agents in their own window, so the user is
+          // told before choosing, rather than finding the parent's run lost.
+          <div className="px-4 pt-2 text-[11px] leading-snug text-muted">
+            It leaves its parent, {withVisibleControls(parentLabel)}, in this window. The parent can no longer
+            read, wait on or close it.
+          </div>
+        ) : null}
 
         <div className="px-4 py-3">
           <div

@@ -1,3 +1,4 @@
+import { isProcessSessionKind } from '@shared/types/providerKind'
 import { withNormalizedBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 import { findTabsHoldingDirectory, resolveTabSessions } from '@renderer/workspace/queries'
 import type {
@@ -94,6 +95,14 @@ export function buildSessionMovePacket(
 ): BuildSessionMovePacketResult {
   const sessionIds = collectMoveSubtree(state.sessions, rootSessionId)
   if (sessionIds.length === 0) return { ok: false, message: 'That agent is no longer open.' }
+  // Agents and terminals only. An extension view has no backend to route, and
+  // its view would need the extension installed and running in the other
+  // window, which a row move cannot promise. The rule lives HERE so the
+  // command, the picker and agents.moveToWindow all refuse the same thing
+  // (#1481 review: the capability first accepted what the command hid).
+  if (!isProcessSessionKind(state.sessions[rootSessionId]!.kind)) {
+    return { ok: false, message: 'Extension views stay in their window; only agents and terminals can be moved.' }
+  }
   const sessions: Record<SessionId, SessionMeta> = {}
   for (const id of sessionIds) {
     // Normalized exactly as autosave writes a row: the target persists these

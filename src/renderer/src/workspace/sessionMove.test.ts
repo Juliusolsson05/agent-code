@@ -84,6 +84,17 @@ describe('collectMoveSubtree', () => {
   })
 })
 
+describe('what may be moved', () => {
+  it('refuses an extension view, which has no backend and needs its extension in the other window', () => {
+    const state = source()
+    state.sessions.view = meta('/dev/agent-code', { projectId: 'src-agent-code', joinedAt: 9, kind: 'extension-view' })
+    expect(buildSessionMovePacket(state, {}, 'view')).toMatchObject({ ok: false })
+    // A terminal moves like an agent.
+    state.sessions.shell = meta('/dev/agent-code', { projectId: 'src-agent-code', joinedAt: 10, kind: 'terminal' })
+    expect(buildSessionMovePacket(state, {}, 'shell')).toMatchObject({ ok: true })
+  })
+})
+
 describe('buildSessionMovePacket → receiveMovedSessions', () => {
   function moved() {
     const built = buildSessionMovePacket(source(), { worker: 'half-written prompt', bystander: 'not moving' }, 'coordinator')
@@ -105,7 +116,9 @@ describe('buildSessionMovePacket → receiveMovedSessions', () => {
 
   it('joins a same-folder project, mints a fresh tab for the rest, and keeps every row owned', () => {
     const { packet } = moved()
-    const result = receiveMovedSessions(target(), packet, { now: 100, newTabId: ids('fresh') })
+    // A clock BEHIND the target's own rows (resident joinedAt 50): moved rows
+    // must still append after them, never sort above what the target lists.
+    const result = receiveMovedSessions(target(), packet, { now: 10, newTabId: ids('fresh') })
     if (!result.ok) throw new Error(result.reason)
     const { state } = result
 

@@ -147,3 +147,32 @@ it('refuses to show a terminal while Reader Mode owns the screen, before any nav
   expect(result).toMatchObject({ ok: false, error: { code: 'unavailable' } })
   expect(focusAgentBySessionId).not.toHaveBeenCalled()
 })
+
+// #1481: agents.moveToWindow. Its contract to operators is the outcome split:
+// a refusal or a rolled-back move is `not_started` (safe to retry), and only
+// "this renderer stopped waiting" is `unknown` (observe before retrying).
+it('moves through the workspace and maps failures onto honest outcomes', async () => {
+  // The store holds one agent, `agent`, shown in this window.
+  setup()
+  const sendSessionToWindow = vi.fn()
+  const capability = agentControlCapabilities(() => ({ restoreStatus: 'fresh', sendSessionToWindow }) as unknown as Workspace)
+    .find(item => item.descriptor.id === 'agents.moveToWindow')!
+  const move = (input: unknown) => capability.execute(input, context)
+
+  sendSessionToWindow.mockResolvedValueOnce({ ok: true, movedSessionIds: ['agent'], targetWindowNumber: 2 })
+  expect(await move({ sessionId: 'agent', targetWindowId: 'right' })).toMatchObject({
+    ok: true, value: { sessionId: 'agent', targetWindowId: 'right', targetWindowNumber: 2, movedSessionIds: ['agent'] },
+  })
+  expect(sendSessionToWindow).toHaveBeenCalledWith('agent', 'right')
+
+  sendSessionToWindow.mockResolvedValueOnce({ ok: false, message: 'Window 2 did not confirm the move in time.', reportedByEvent: true })
+  expect(await move({ sessionId: 'agent', targetWindowId: 'right' })).toMatchObject({ ok: false, error: { outcome: 'not_started' } })
+
+  sendSessionToWindow.mockResolvedValueOnce({ ok: false, message: 'No answer from Window 2.', uncertain: true })
+  expect(await move({ sessionId: 'agent', targetWindowId: 'right' })).toMatchObject({ ok: false, error: { outcome: 'unknown' } })
+
+  // A session this window does not show is refused before anything is sent.
+  sendSessionToWindow.mockClear()
+  expect(await move({ sessionId: 'elsewhere', targetWindowId: 'right' })).toMatchObject({ ok: false, error: { code: 'unavailable' } })
+  expect(sendSessionToWindow).not.toHaveBeenCalled()
+})

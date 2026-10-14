@@ -36,12 +36,15 @@ export function SendToWindowSurface() {
   }, [open])
 
   const relatedCount = open && sessionId ? collectMoveSubtree(workspace.state.sessions, sessionId).length - 1 : 0
+  const parentId = meta ? meta.linkedParentId ?? meta.orchestrationParentId : undefined
+  const parentMeta = parentId ? workspace.state.sessions[parentId] : undefined
 
   return (
     <SendToWindowDialog
       open={open}
       sessionLabel={meta ? sessionDisplayTitle(meta) : ''}
       relatedCount={relatedCount}
+      parentLabel={parentMeta ? sessionDisplayTitle(parentMeta) : null}
       targets={targets}
       onCancel={close}
       onPick={windowId => {
