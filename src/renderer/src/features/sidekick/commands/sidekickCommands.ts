@@ -5,12 +5,13 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
 // Sidekick commands (#1493). Titles are noun phrases (docs/command-style.md):
 // "Sidekick" is the panel, the way "Agent Status" is its panel.
 //
-// WHY these act on the panel and never on a "command target": palette
-// commands keep resolving to the focused LANE in v1 (plan ruling, Task 5),
-// so ~150 session commands cannot reach a sidekick by accident — Close,
-// Spotlight, Pin and Merge into Project all assume a project. The panel's
-// own column carries the few actions a sidekick needs: its chip strip
-// switches, and a chip's right-click menu has Reload, Remove and Hide.
+// WHY these act on the panel and not on a "command target": they are the
+// panel's own commands. Agent commands are a different matter since the
+// lane-parity follow-up to #1493: while the keyboard is in the Sidekick, every
+// command that acts on the command target acts on the sidekick
+// (commandTargetSessionIdForState answers the Sidekick first), except the few
+// lane/project-only ones excludeSidekickTargets refuses (sidekickTarget.ts).
+// The v1 ruling "palette commands never target a sidekick" is retired.
 
 export const sidekickCommands: CommandDef[] = [
   {

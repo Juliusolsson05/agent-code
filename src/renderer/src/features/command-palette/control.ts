@@ -1,5 +1,5 @@
 import { commandExecutionRequests, CommandExecutionBusy, CommandExecutionTimeout } from './commandExecutionRequests'
-import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import { commandTargetSessionIdForState, WORKSPACE_KEYBOARD_FLAGS } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { z } from 'zod'
 import { ControlError, defineCapability, pageInput, pageSchema, paginate } from '@control-sdk'
 import { builtInCommandCatalog } from './catalog'
@@ -57,7 +57,7 @@ export function commandControlCapabilities() {
             result.status === 'unavailable' ? result.reason : result.status === 'failed' ? String(result.error) : `Command ${result.status}; inspect the current UI`,
             result.status === 'failed' ? 'unknown' : 'not_started')
           const store = useAppStore.getState()
-          return { commandId: result.id, dispatch: 'ran' as const, selectedSessionId: commandTargetSessionIdForState(store.workspaceState),
+          return { commandId: result.id, dispatch: 'ran' as const, selectedSessionId: commandTargetSessionIdForState(store.workspaceState, undefined, WORKSPACE_KEYBOARD_FLAGS),
             commandPickerOpen: store.commandPaletteOpen, settingsOpen: store.settingsPageOpen }
         } catch (error) {
           if (error instanceof CommandExecutionBusy) throw new ControlError('unavailable', error.message)

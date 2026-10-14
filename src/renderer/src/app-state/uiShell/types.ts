@@ -356,13 +356,23 @@ export type UiShellState = {
    * WHY a flag here and not the workspace's `spotlight` (SpotlightState): lane
    * Spotlight is keyed to a project tab and, while open, makes the
    * spotlighted session the palette's COMMAND TARGET
-   * (commandTargetSessionIdForState). A sidekick has no tab, and the v1 ruling
-   * is that palette commands never target a sidekick — ~150 session commands
-   * assume a project. Reusing SpotlightState would have broken both. So the
+   * (commandTargetSessionIdForState). A sidekick has no tab, and the command
+   * target for a sidekick comes from keyboard ownership instead (the Sidekick
+   * answers first, with lane/project-only commands refused by
+   * excludeSidekickTargets). Reusing SpotlightState would have broken both. So the
    * takeover is the Sidekick column itself growing to fill the main row, with
    * the lanes retained-hidden underneath like any takeover.
    */
   sidekickSpotlight: boolean
+  /**
+   * A command asked to remove this sidekick (Close Focused Session / ⌘W on a
+   * sidekick target, #1493 follow-up). WHY a request in the store and not a
+   * direct call: removal is main-side work (kill + release + index drop) that
+   * lives in useSidekickActions, which only SidekickPanelSurface mounts — the
+   * same store hand-off pendingCommandInvocation uses. The surface clears it
+   * the moment it picks it up and asks for confirmation first.
+   */
+  sidekickRemoveRequest: string | null
   /** Sidekick Picker (#1493). `create` scrolls it to the New Sidekick rows. */
   sidekickPickerOpen: boolean
   sidekickPickerMode: 'switch' | 'create'

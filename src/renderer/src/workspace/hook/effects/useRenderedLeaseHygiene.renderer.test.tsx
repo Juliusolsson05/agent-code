@@ -30,7 +30,11 @@ function fakeWorkspace() {
   useAppStore.setState({ workspaceRuntimes: runtimes as never })
   return {
     runtimes,
-    state: { sessions: { lane: { kind: 'claude', cwd: '/repo' }, sk: { kind: 'claude', cwd: '/home', sidekickId: 'side' } } },
+    state: {
+      sessions: { lane: { kind: 'claude', cwd: '/repo' }, sk: { kind: 'claude', cwd: '/home', sidekickId: 'side' } },
+      // The Sidekick column is on screen; that is what spares its picker.
+      sidekickPanel: { open: true, width: 420, sidekickId: 'side' },
+    },
     readerMode: null,
     spotlight: null,
     pickerCancel: vi.fn(),
@@ -54,5 +58,20 @@ describe('rendered lease hygiene under Sidekick Spotlight', () => {
     useAppStore.setState({ sidekickSpotlight: false })
     render(<Harness workspace={workspace} />)
     expect(workspace.pickerCancel).not.toHaveBeenCalled()
+  })
+  it('a lane Spotlight cancels lane pickers but spares the visible Sidekick\'s (lane parity)', () => {
+    // Copy Assistant now works on the sidekick; a lane Spotlight covers the
+    // lanes, not the Sidekick column, so it must not kill the sidekick picker.
+    const workspace = { ...fakeWorkspace(), spotlight: { tabId: 'tab', focusedSessionId: 'lane' } } as unknown as Workspace & { pickerCancel: ReturnType<typeof vi.fn> }
+    render(<Harness workspace={workspace} />)
+    expect(workspace.pickerCancel).toHaveBeenCalledWith('lane')
+    expect(workspace.pickerCancel).not.toHaveBeenCalledWith('sk')
+  })
+
+  it('Settings hides the Sidekick too, so its picker is cancelled there', () => {
+    const workspace = fakeWorkspace()
+    useAppStore.setState({ settingsPageOpen: true })
+    render(<Harness workspace={workspace} />)
+    expect(workspace.pickerCancel).toHaveBeenCalledWith('sk')
   })
 })

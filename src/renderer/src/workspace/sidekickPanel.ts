@@ -37,3 +37,38 @@ export function coerceSidekickPanel(raw: unknown): SidekickPanelState | undefine
     sidekickId: typeof value.sidekickId === 'string' && value.sidekickId.length > 0 ? value.sidekickId : null,
   }
 }
+
+/**
+ * Who the keyboard is commanding when the Sidekick owns it (#1493 follow-up:
+ * "the sidekick must expose every feature a lane does").
+ *
+ * - `{ owns: false }` — the workspace owns the keyboard; the usual answer
+ *   (takeover, then focused lane) applies.
+ * - `{ owns: true, sessionId }` — the Sidekick owns it, and `sessionId` is the
+ *   row this window holds for the panel's sidekick, or NULL when it holds none
+ *   (asleep, live in another window, attaching, no sidekick yet).
+ *
+ * WHY null and never a fallback to the lane when the Sidekick owns the
+ * keyboard but holds no row: the user is looking at the Sidekick. ⌘W, Reload
+ * or Rewind landing on the lane agent behind it is exactly the silent
+ * re-addressing #816 is about, so "nothing to command" is the honest answer.
+ *
+ * WHY Settings voids ownership: the Sidekick is retained-hidden under Settings
+ * (SidekickPanelSurface), and Settings owns the interaction then.
+ */
+export function sidekickCommandTarget(
+  state: { sidekickPanel?: SidekickPanelState; sessions: Record<string, { sidekickId?: string }> },
+  flags: { keyboardRegion: 'workspace' | 'sidekick'; sidekickSpotlight: boolean; settingsPageOpen: boolean },
+): { owns: false } | { owns: true; sessionId: string | null } {
+  const panel = state.sidekickPanel
+  const owns = panel?.open === true
+    && !flags.settingsPageOpen
+    && (flags.keyboardRegion === 'sidekick' || flags.sidekickSpotlight)
+  if (!owns) return { owns: false }
+  const sidekickId = panel.sidekickId
+  if (!sidekickId) return { owns: true, sessionId: null }
+  for (const [sessionId, meta] of Object.entries(state.sessions)) {
+    if (meta.sidekickId === sidekickId) return { owns: true, sessionId }
+  }
+  return { owns: true, sessionId: null }
+}

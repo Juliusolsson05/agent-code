@@ -11,6 +11,7 @@ import { AGENT_PROVIDER_KINDS, type AgentProviderKind } from '@shared/types/prov
 import { useEnabledAgentProviderKinds } from '@renderer/features/providers/store'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@renderer/components/ui/dialog'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import { isSidekickSession } from '@renderer/workspace/sessionOwnership'
 import { SESSION_START_FAILED_MESSAGE } from '@shared/types/session'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useResizableSplitter } from '@renderer/features/shared/useResizableSplitter'
@@ -103,6 +104,16 @@ export function ConversationsPicker({ open, focusSearch, workspace, onClose }: P
     // The pane the swap is aimed at, read BEFORE the picker closes: it is the
     // one place a failure can still be reported once the picker is gone.
     const targetSessionId = commandTargetSessionId(workspace)
+    // A sidekick is never swapped into (#1517 review). Resume and Search
+    // Conversations are refused for a sidekick target (sidekickTarget.ts), but
+    // the picker can also be opened another way (external control's
+    // ui.* capabilities), and replaceSession — no explicit target — would pull
+    // a stranger's conversation, from any repo, into the sidekick while
+    // inheritedMembership kept it a sidekick. Say so instead of doing it.
+    if (targetSessionId && isSidekickSession(workspace.state.sessions[targetSessionId])) {
+      setResumeError(`Can't resume ${row.label} into the Sidekick. Move the keyboard to a lane to resume it there.`)
+      return
+    }
     if (workspace.activeTab && !targetSessionId) {
       // Nothing to swap into; closing would only hide a no-op.
       setResumeError(`Can't resume ${row.label} here: no agent pane is selected.`)

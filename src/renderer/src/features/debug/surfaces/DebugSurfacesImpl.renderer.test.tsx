@@ -73,6 +73,9 @@ vi.mock('@renderer/features/debug/devDebugConfig', () => ({
 
 vi.mock('@renderer/workspace/hook/selectors/commandTargetSessionId', () => ({
   commandTargetSessionId: () => 'session-1',
+  // Subscription-only hook (re-renders on keyboard-region changes); its value
+  // is never read.
+  useCommandTargetInputs: () => '',
 }))
 
 vi.mock('@renderer/features/debug/ui/DebugPanel', () => ({
