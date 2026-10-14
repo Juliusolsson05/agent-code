@@ -733,7 +733,7 @@ This would get its own issue + plan.
 | L7 | App Stage A: `RemoteStartFailure` stages, curated sentences, `classifySpawnFailure` fix (#1495), journal stage, `openWs` 401/403 wording, turn-lost notice, sudo/secret countdown | doing | 6473dabd4: everything except the countdown and the S25-backed system test. Proven fail-first: reverting the classify branch turns the new session.test case red. |
 | L8 | App Stage C: Copy Assistant on Hermes (C0 reproduction first) | todo | |
 | L9 | App Stage D: lane mode (spawn option `hermesLane`, commands, `hermes:lanes` IPC, chip / notice / divider / busy line, held prompts as a non-blocking condition, `/new` refusal) | todo | |
-| L10 | App Stage E: composer command catalog + picker; `/restart` with confirmation and status polling; side-answer cards | todo | |
+| L10 | App Stage E: composer command catalog + picker; `/restart` with confirmation and status polling; side-answer cards | doing | 75a742118: picker from commands.catalog (S17-tested), refusals, /restart with confirmation + status polling, /bg and /btw notices. Side answers render as notice rows (no dedicated card yet). |
 | L11 | Tailscale phase 1 (`tailnet.ts`, `describeError`, Settings tag + help, memory register steps) | doing | 24c362f43 code + tests; the memory register steps are still owed. |
 | L12 | App tests (startup matrix, first pane, lane, picker, copy); `npx tsc -b`; full vitest once | todo | |
 | L13 | Live matrix workflow in the package; `support/upstream-versions.json` tested releases | todo | |
@@ -749,6 +749,7 @@ This would get its own issue + plan.
 
 ### Progress log
 
+- 2026-10-14: L10 slash picker landed (75a742118). Stage 0: S17–S25 + T1–T8 are being recorded; H2 HOLDS (S23: 0 differing frames).
 - 2026-10-14: L17, L20, L21, L22 done (debug-bundle defects).
 - 2026-10-14: performance in Spotlight and when sending fixed (de879dcb4, e999fd25b); L18/L19 done.
 - 2026-10-14: the owner's debug bundle analysed: 7 real defects → L17–L22. Tailscale phase 1 landed (24c362f43).
