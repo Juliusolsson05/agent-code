@@ -1,6 +1,6 @@
 # Hermes: one thread with Telegram, slash commands, Copy Assistant and honest startup errors
 
-**Status:** IN PROGRESS (owner: "write out the full plan files and then go ahead and build out the full thing", 2026-10-14). The owner did not answer §2, so every decision there is built with its default and is **UNCONFIRMED**. Tailscale phase 1 has its own plan file (`2026-10-14-tailscale-hermes-phase1.md`) and ships in this same PR (ruling in §13). Written 2026-10-14, on branch `feat/hermes-telegram-thread-and-commands` (worktree `.worktrees/hermes-telegram-thread`, branched from `origin/main` at `d0c3df99`).
+**Status:** BUILT, PRs open (agent-code#1503, hermes-headless#2), awaiting the owner's merge. Was: IN PROGRESS (owner: "write out the full plan files and then go ahead and build out the full thing", 2026-10-14). The owner did not answer §2, so every decision there is built with its default and is **UNCONFIRMED**. Tailscale phase 1 has its own plan file (`2026-10-14-tailscale-hermes-phase1.md`) and ships in this same PR (ruling in §13). Written 2026-10-14, on branch `feat/hermes-telegram-thread-and-commands` (worktree `.worktrees/hermes-telegram-thread`, branched from `origin/main` at `d0c3df99`).
 
 **Size:** a long plan with an embedded staged decomposition. The Telegram half meets several of the skill's triggers:
 - a behaviour nobody in this repo has recorded yet (a gateway-owned lane seen from `serve`);
@@ -759,8 +759,8 @@ This would get its own issue + plan.
 | L9 | App Stage D: lane mode (spawn option `hermesLane`, commands, `hermes:lanes` IPC, chip / notice / divider / busy line, held prompts as a non-blocking condition, `/new` refusal) | done | a94e2ded3 + 49e23108a (app test on T5; the notice now shows at once). "Change Telegram Thread…" deferred (R5). |
 | L10 | App Stage E: composer command catalog + picker; `/restart` with confirmation and status polling; side-answer cards | done | 75a742118. Side answers are notice rows; a dedicated card is a possible follow-up. |
 | L11 | Tailscale phase 1 (`tailnet.ts`, `describeError`, Settings tag + help, memory register steps) | done | 24c362f43 + the memory register has the server steps (owner runs them). |
-| L12 | App tests (startup matrix, first pane, lane, picker, copy); `npx tsc -b`; full vitest once | doing | First-pane test landed. Remaining: one full vitest run + tsc -b before the PR. |
-| L13 | Live matrix workflow in the package; `support/upstream-versions.json` tested releases | doing | Package live-matrix.yml (both tags, fails on skip) + TESTED_HERMES_RELEASES; the app accepted 0.22.0. Not yet run on GitHub (needs the package PR); lane live cases depend on the Stage 0 harness. |
+| L12 | App tests (startup matrix, first pane, lane, picker, copy); `npx tsc -b`; full vitest once | done | Full local suite: 8,387 pass; 2 environmental failures outside this PR (unbuilt workflow-mcp dist in a fresh worktree; the PTY-leak test on a busy Mac). CI quality-gate green. |
+| L13 | Live matrix workflow in the package; `support/upstream-versions.json` tested releases | done | live-matrix green on v0.21.7 + v0.22.0 (needed passwordless sudo removed on the runners). |
 | L14 | Read-only VPS probe (U1/U4); record the verdicts | blocked | The REST bearer token lives in Electron safeStorage and cannot be read outside the app without printing a secret. U1/U4 are answered the first time the owner opens a Hermes pane: a refused lookup logs `[hermes] Telegram thread lookup failed` and falls back to a separate chat. |
 | L16 | Bug: the Hermes composer is very slow to type in (owner, 2026-10-14), #1499 | done | Cause: HermesChatFeed was not memoized and every bubble ran react-markdown inline, so each keystroke re-parsed every assistant message. Fail-first: 300 parses for 5 keystrokes on S12, now 0. Fix: memo + TextProse + memoized tool input. |
 | L17 | Bundle bug: a reload during a turn silences the running turn. Rewrite detection fires on a resume-vs-history window mismatch, then the renderer reset gate drops every event until the next `turn_started`. | done | package 7622a6d: rewrite only inside the listing span; an open turn is replayed after a rewrite reset. Both guards proven by reverting. |
@@ -769,13 +769,14 @@ This would get its own issue + plan.
 | L20 | Bundle bug: a dropped connection left pane d9567053 dead 10m42s until a manual reload | done | 181f42a19 + package detach(): a signed-out pane re-attaches on sign-in (a removed connection stays away); 20 s HTTP deadline. Transition journaling NOT added (HermesSession has no journal handle); the start stage is journaled (L7). |
 | L21 | Bundle bug: tool outputs vanish after a reload (187/206 chips "kept on server") | done | package 3f2c7bd ToolResultCache + app bounded per-connection memory cache; JSON envelopes formatted. |
 | L22 | Bundle bug: a prompt sent during a turn shows no queued state (`queued` status dropped in deliverPromptText) | done | 181f42a19: the queued status is shown on the activity line. |
-| L15 | Plan vs built walk-through; package PR, then the app PR (submodule bump + lockfile resync); one review round (2 Claude + 2 Codex reviewers); fix the findings; CI green | todo | Never merge without the owner. |
+| L15 | Plan vs built walk-through; package PR, then the app PR (submodule bump + lockfile resync); one review round (2 Claude + 2 Codex reviewers); fix the findings; CI green | done | agent-code#1503 + hermes-headless#2 open; one review round (2 Claude + 2 Codex), every valid finding fixed with a fail-first test; main merged in (command counts 139); all CI green. Awaiting the owner's merge. |
 
 ### Progress log
 
 - 2026-10-14: v0.22.0 accepted (90/90 deterministic on the v0.22.0 corpus); the Stage B tests on S18–S25 are committed in the package (35f6457, local until the Stage 0 corpus lands).
 - 2026-10-14: L10 slash picker landed (75a742118). Stage 0: S17–S25 + T1–T8 are being recorded; H2 HOLDS (S23: 0 differing frames).
 - 2026-10-14: L17, L20, L21, L22 done (debug-bundle defects).
+- 2026-10-14: review round done, every valid finding fixed; CI all green on both PRs.
 - 2026-10-14: performance in Spotlight and when sending fixed (de879dcb4, e999fd25b); L18/L19 done.
 - 2026-10-14: the owner's debug bundle analysed: 7 real defects → L17–L22. Tailscale phase 1 landed (24c362f43).
 - 2026-10-14: L7 mostly done (6473dabd4). Investigations running: the owner's debug bundle ("Hermes has a lot of issues") and slowness in spotlight.
