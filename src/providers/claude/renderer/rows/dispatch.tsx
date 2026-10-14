@@ -1,3 +1,5 @@
+import { fromMcpCall } from '@providers/shared/renderer/protocols/mcp-call/model'
+import { McpCallRow } from '@providers/shared/renderer/protocols/mcp-call/McpCallRow'
 import type { ReactNode } from 'react'
 
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
@@ -281,8 +283,13 @@ function renderClaudeToolUse(
         : adapted
       return model ? <WriteRow model={model} /> : undefined
     }
-    default:
-      return undefined
+    default: {
+      // Any other MCP tool (#1519): one line instead of name + chip +
+      // "1 param" + "ok: true". After the switch so a provider-specific MCP
+      // card (orchestration, workspace, workflow, tasks above) always wins.
+      const mcp = fromMcpCall(block, context.result ?? null)
+      return mcp ? <McpCallRow model={mcp} block={block} /> : undefined
+    }
   }
 }
 
@@ -406,6 +413,13 @@ function renderClaudeToolResult(
   if (source?.name === 'WebSearch') {
     const model = fromClaudeWebSearchResult(block, source)
     return model ? <ClaudeWebSearchResultRow model={model} /> : undefined
+  }
+  if (source) {
+    // The MCP line shows an acknowledgement as its ✓ and a refusal/error as
+    // its own sentence, so both result rows are absorbed. Real content keeps
+    // the shared result row (undefined → the generic fallback).
+    const mcp = fromMcpCall(source, block)
+    if (mcp && mcp.outcome !== 'content' && mcp.outcome !== 'pending') return null
   }
   return undefined
 }
