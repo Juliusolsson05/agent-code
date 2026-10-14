@@ -18,7 +18,7 @@
 // state until submit, sent once (renderer → main → Hermes), and cleared.
 // Nothing persists it; the condition state never contains it.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
 import { Input } from '@renderer/components/ui/input'
@@ -223,6 +223,20 @@ export const hermesClarifyView = defineView<'hermes.clarify', HermesClarifyCondi
     state?.visible ? <ClarifyCard key={state.requestId} state={state} actions={actions} dispatch={dispatch} /> : null,
 })
 
+/**
+ * "Hermes stops waiting in 1:42" (r3 A5): a sudo prompt silently timed out
+ * after 120 s while the user was typing, and the click then did nothing.
+ */
+function Countdown({ until }: { until: number }) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+  const left = Math.max(0, Math.round((until - now) / 1000))
+  return <span>{left > 0 ? `Hermes stops waiting in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}.` : 'Hermes has stopped waiting.'}</span>
+}
+
 function ValueCard({
   title,
   state,
@@ -244,7 +258,7 @@ function ValueCard({
           {withVisibleControls(state.prompt)}
         </pre>
       )}
-      <p className="mb-1.5 text-[11px] text-muted">{hint}</p>
+      <p className="mb-1.5 text-[11px] text-muted">{hint}{state.expiresAt ? <> <Countdown until={state.expiresAt} /></> : null}</p>
       <form
         onSubmit={(event) => {
           event.preventDefault()

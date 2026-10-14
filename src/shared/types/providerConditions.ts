@@ -352,6 +352,13 @@ export type HermesValueConditionState = {
   /** secret only: the environment variable Hermes will store the value in on the server. */
   envVar: string | null
   queued: number
+  /**
+   * When Hermes stops waiting (epoch ms), for a request this pane saw arrive
+   * live; null for one replayed after a reconnect, whose start is unknown.
+   * The wire carries no deadline: these are Hermes' fixed waits (sudo 120 s,
+   * agent_callbacks.py:256; secret 300 s), research r3 A5.
+   */
+  expiresAt?: number | null
 }
 
 /**

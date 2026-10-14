@@ -125,6 +125,8 @@ export class HermesSession extends EventEmitter implements AgentSession {
   /** Open requests in arrival order; the card shows the oldest per kind. */
   private readonly openRequests: HermesRequest[] = []
   private noticeCounter = 0
+  /** When each live request arrived (sudo/secret countdown). */
+  private readonly requestReceivedAt = new Map<string, number>()
   /** Telegram-thread mode (#1496): the gateway routing key this pane follows. */
   private readonly laneKey: string | null
   /** Prompts held behind a running phone turn (hermes-headless lane state). */
@@ -654,6 +656,7 @@ export class HermesSession extends EventEmitter implements AgentSession {
     // "+1 more waiting" for a request that does not exist.
     if (this.openRequests.some((entry) => entry.id === request.id)) return
     this.openRequests.push(request)
+    this.requestReceivedAt.set(request.id, Date.now())
     this.emitConditions()
   }
 
@@ -689,7 +692,7 @@ export class HermesSession extends EventEmitter implements AgentSession {
     for (const method of Object.keys(KIND_BY_METHOD) as Array<HermesRequest['method']>) {
       const pending = this.openRequests.filter((request) => request.method === method)
       if (pending.length === 0) continue
-      conditions[KIND_BY_METHOD[method]] = conditionRecord(pending[0], pending.length - 1)
+      conditions[KIND_BY_METHOD[method]] = conditionRecord(pending[0], pending.length - 1, this.requestReceivedAt.get(pending[0].id))
     }
     const snapshot: ProviderConditionSnapshot = { provider: 'hermes', conditions, ts: Date.now() }
     this.emit('conditions', snapshot)
@@ -711,7 +714,10 @@ function declineAction(requestId: string, label: string): ConditionCustomAction 
  * view state: the view composes a HERMES_ANSWER payload and resolveCondition
  * validates it against THIS request (`validateAnswer`).
  */
-export function conditionRecord(request: HermesRequest, queued: number): ProviderConditionRecord {
+/** Hermes' own fixed waits for typed answers (r3 A5): the card counts down to them. */
+const VALUE_REQUEST_WAIT_MS: Record<'sudo' | 'secret', number> = { sudo: 120_000, secret: 300_000 }
+
+export function conditionRecord(request: HermesRequest, queued: number, receivedAt?: number): ProviderConditionRecord {
   const params = request.params
   switch (request.method) {
     case 'approval': {
@@ -754,6 +760,9 @@ export function conditionRecord(request: HermesRequest, queued: number): Provide
             : (typeof params.prompt === 'string' ? params.prompt : ''),
           envVar: request.method === 'secret' && typeof params.env_var === 'string' ? params.env_var : null,
           queued,
+          // A replayed request (after a reconnect) arrived at an unknown
+          // point of its wait: no countdown rather than a wrong one.
+          expiresAt: !request.replayed && receivedAt !== undefined ? receivedAt + VALUE_REQUEST_WAIT_MS[request.method] : null,
         },
         actions: [declineAction(request.id, 'Skip')],
       }
