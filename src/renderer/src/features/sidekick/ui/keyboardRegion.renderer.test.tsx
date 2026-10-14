@@ -79,6 +79,18 @@ describe('keyboard region', () => {
     fireEvent.pointerDown(button)
     expect(useAppStore.getState().keyboardRegion).toBe('sidekick')
 
+    // A context menu opened from the panel is portalled under <body>; picking
+    // one of its items must not hand the keyboard to the lane (review round 1).
+    for (const wrap of [{ role: 'menu' }, { 'data-radix-popper-content-wrapper': '' }]) {
+      const menu = document.createElement('div')
+      for (const [name, attr] of Object.entries(wrap)) menu.setAttribute(name, attr)
+      const item = document.createElement('div')
+      menu.append(item)
+      document.body.append(menu)
+      fireEvent.pointerDown(item)
+      expect(useAppStore.getState().keyboardRegion).toBe('sidekick')
+    }
+
     fireEvent.pointerDown(screen.getByLabelText('lane'))
     expect(useAppStore.getState().keyboardRegion).toBe('workspace')
   })

@@ -25,6 +25,21 @@ export function useKeyboardRegionActive(): boolean {
 export const SIDEKICK_PANEL_ATTRIBUTE = 'data-sidekick-panel'
 
 /**
+ * Portalled surfaces that are not a region of their own. Review round 1 added
+ * the menu role and Radix's popper wrapper (not `listbox`: lanes render inline
+ * listboxes, and a click on one must still hand the lane the keyboard): a context menu or select
+ * opened FROM the panel renders under <body>, outside the panel's DOM, so a
+ * click on one of its items used to flip the region to 'workspace' mid-gesture
+ * — and the item's action then ran with the lane owning the keyboard.
+ */
+export const REGION_NEUTRAL_SELECTOR = [
+  '[role="dialog"]',
+  '[role="alertdialog"]',
+  '[role="menu"]',
+  '[data-radix-popper-content-wrapper]',
+].join(', ')
+
+/**
  * Keep the keyboard region where the user's pointer and focus actually go
  * (#1493). Mounted once per window by SidekickPanelSurface.
  *
@@ -39,7 +54,7 @@ export function useKeyboardRegionFollowsPointer(): void {
     const onEvent = (event: Event) => {
       const target = event.target as Element | null
       if (!target || typeof target.closest !== 'function') return
-      if (target.closest('[role="dialog"], [role="alertdialog"]')) return
+      if (target.closest(REGION_NEUTRAL_SELECTOR)) return
       setRegion(target.closest(`[${SIDEKICK_PANEL_ATTRIBUTE}]`) ? 'sidekick' : 'workspace')
     }
     document.addEventListener('pointerdown', onEvent, true)

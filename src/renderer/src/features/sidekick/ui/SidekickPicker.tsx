@@ -68,23 +68,41 @@ export function SidekickPicker({ workspace, actions }: { workspace: Workspace; a
   const summaries = useSidekickSummaries()
   const enabledKinds = useEnabledAgentProviderKinds()
   const hermes = useHermesConnections(open)
+  const restoring = workspace.restoreStatus === 'pending'
 
   const rows: Row[] = useMemo(() => {
     const sidekicks = [...summaries]
       .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
       .map(summary => ({ kind: 'sidekick' as const, summary }))
+    // WHY creation waits for restore: rehydrate's first publish REPLACES
+    // `sessions`, and a sidekick row filed before it would be dropped from
+    // this window while its process and record live on (review round 1).
     const creatable = newSidekickChoices(filterAgentProviderChoices(AGENT_PROVIDER_CHOICES, enabledKinds), hermes)
-      .map(entry => ({ kind: 'new' as const, ...entry }))
+      .map(entry => ({
+        kind: 'new' as const,
+        ...entry,
+        disabledReason: restoring ? 'Restoring the workspace…' : entry.disabledReason,
+      }))
     return [...sidekicks, ...creatable]
-  }, [enabledKinds, hermes, summaries])
+  }, [enabledKinds, hermes, restoring, summaries])
   const firstNewIndex = rows.findIndex(row => row.kind === 'new')
 
   const activate = async (row: Row) => {
     close()
     try {
       if (row.kind === 'sidekick') {
+        // Choosing a sidekick that is live in another window IS the explicit
+        // move (review round 1, F8): the user picked it to use it here, and
+        // landing on a "Live in another window — Open here" body only adds a
+        // second confirmation of the same intent. The panel never takes on
+        // its own; this is a deliberate pick.
+        const elsewhere = sidekickPlace(workspace.state.sessions, row.summary.id).kind === 'elsewhere'
         workspace.setSidekickPanel({ open: true, sidekickId: row.summary.id })
         useAppStore.getState().setKeyboardRegion('sidekick')
+        if (elsewhere) {
+          const result = await actions.openHere(row.summary.id)
+          if (!result.ok) showToast(`Could not open the sidekick here: ${result.reason}`)
+        }
         return
       }
       if (row.disabledReason) {

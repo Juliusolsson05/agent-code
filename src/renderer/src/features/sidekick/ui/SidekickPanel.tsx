@@ -60,25 +60,56 @@ export function SidekickPanel({ workspace, actions }: Props) {
     onDrag: clientX => workspace.setSidekickPanel({ width: clampSidekickPanelWidth(window.innerWidth - clientX, window.innerWidth) }),
   })
 
-  // Attach a sleeping sidekick as soon as the panel shows it. A sidekick live
-  // in another window is NOT taken automatically: that would yank it out of
-  // the window the user may be looking at. "Open here" is the explicit move.
+  // Attach the sidekick as soon as the panel shows it, when no CURRENT lease
+  // holds it elsewhere. WHY 'elsewhere' is attempted too (review round 1, F3):
+  // after this window's renderer reloads, main still files the lease under
+  // this window at the old generation until something re-claims it, and the
+  // index can report it as live in a window — this one. Main is the only side
+  // that can tell "stale lease of mine" from "really in another window":
+  // attach transfers a stale lease and refuses a current one with
+  // 'owned-elsewhere', which simply leaves the "Live in another window" state
+  // up. A sidekick live in another window is never TAKEN automatically —
+  // "Open here" is the explicit move.
   const attachAttempted = useRef<string | null>(null)
+  // Retry must re-run this effect; clearing the ref alone changed no dependency
+  // (review round 1, F6), so the button did nothing.
+  const [attempt, setAttempt] = useState(0)
   // Wait for boot (plan R2): rehydrate's first publish also merges held
   // sidekick rows, so this wait is belt and braces, not load-bearing.
   const bootstrapComplete = workspace.restoreStatus !== 'pending'
   useEffect(() => {
-    if (!panel.sidekickId || place.kind !== 'asleep' || !bootstrapComplete) return
-    if (attachAttempted.current === panel.sidekickId) return
-    attachAttempted.current = panel.sidekickId
+    if (!panel.sidekickId || !bootstrapComplete) return
+    if (place.kind !== 'asleep' && place.kind !== 'elsewhere') return
+    // Keyed by place too: a sidekick refused as 'elsewhere' must be attached
+    // once its window closes and it turns 'asleep'.
+    const key = `${panel.sidekickId}:${place.kind}:${attempt}`
+    if (attachAttempted.current === key) return
+    attachAttempted.current = key
     setBusy('attaching')
     setFailure(null)
     void actions.showSidekick(panel.sidekickId)
-      .then(result => { if (!result.ok) setFailure(failureText(result.reason)) })
+      .then(result => { if (!result.ok && result.reason !== 'owned-elsewhere') setFailure(failureText(result.reason)) })
       .catch(error => setFailure(error instanceof Error ? error.message : String(error)))
       .finally(() => setBusy(null))
-  }, [actions, bootstrapComplete, panel.sidekickId, place.kind])
-  useEffect(() => { attachAttempted.current = null }, [panel.sidekickId])
+  }, [actions, attempt, bootstrapComplete, panel.sidekickId, place.kind])
+
+  // Move the caret into the sidekick whenever it owns the keyboard (F2).
+  // TileLeaf focuses its input only when its `focused` prop CHANGES or focus
+  // is unowned; the first ⌘J mounts the leaf already focused while the caret
+  // still sits in the lane's composer, so Enter submitted to the lane. The
+  // first textarea covers both views: the prose composer and xterm's helper
+  // textarea in terminal view.
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+  const heldSessionId = place.kind === 'here' ? place.sessionId : null
+  useEffect(() => {
+    if (region !== 'sidekick' || !heldSessionId) return
+    const frame = requestAnimationFrame(() => {
+      const body = bodyRef.current
+      if (!body || body.contains(document.activeElement)) return
+      body.querySelector<HTMLElement>('textarea')?.focus()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [region, heldSessionId])
 
   const openHere = useCallback(async () => {
     if (!panel.sidekickId) return
@@ -154,7 +185,7 @@ export function SidekickPanel({ workspace, actions }: Props) {
       <div className="flex min-h-0 flex-1 flex-col">
         {place.kind === 'here' ? (
           <KeyboardRegionContext.Provider value="sidekick">
-            <div className="flex min-h-0 flex-1 flex-col">
+            <div ref={bodyRef} className="flex min-h-0 flex-1 flex-col">
               {renderWorkspaceLeaf(
                 place.sessionId,
                 region === 'sidekick' ? place.sessionId : null,
@@ -173,7 +204,7 @@ export function SidekickPanel({ workspace, actions }: Props) {
             state={busy === 'attaching' ? 'attaching' : failure ? 'failed' : place.kind === 'elsewhere' ? 'elsewhere' : place.kind === 'none' ? 'empty' : 'attaching'}
             failure={failure}
             onOpenHere={() => { void openHere() }}
-            onRetry={() => { attachAttempted.current = null; setFailure(null) }}
+            onRetry={() => { setFailure(null); setAttempt(value => value + 1) }}
             onNew={() => openPicker('create')}
           />
         )}
