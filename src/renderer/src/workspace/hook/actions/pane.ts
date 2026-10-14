@@ -789,6 +789,7 @@ export function usePaneActions(
   splitFocused: (
     kind?: SessionKind,
     continuation?: SplitFocusedContinuation,
+    options?: { hermesLane?: 'default' | 'none' },
   ) => Promise<void>
   startNewAgentPlacement: () => void
   createDetachedSession: (selection: SessionSpawnSelection, projectOverride?: { tabId: TabId; anchorSessionId: SessionId }, continuation?: SplitFocusedContinuation, placement?: { selectCreated: boolean }) => Promise<SessionId | null>
@@ -860,6 +861,7 @@ export function usePaneActions(
     async (
       kind: SessionKind = 'claude',
       continuation?: SplitFocusedContinuation,
+      options?: { hermesLane?: 'default' | 'none' },
     ) => {
       const resumeSessionId = continuation?.resumeSessionId
       const builtInMcpOverrides = continuation?.builtInMcpOverrides
@@ -983,6 +985,7 @@ export function usePaneActions(
           ...(providerRuntime ? { providerRuntime } : {}),
           resumeSessionId,
           builtInMcpOverrides,
+          ...(options?.hermesLane ? { hermesLane: options.hermesLane } : {}),
         })
       } catch (err) {
         showToast(spawnFailureToast(kind === 'terminal' ? 'terminal' : 'agent', err, cwd))

@@ -194,6 +194,10 @@ export const sessionApi = {
   ): Promise<ResolveConditionResult> =>
     ipcRenderer.invoke('session:resolveCondition', sessionId, action),
 
+  /** The provider's slash commands for the composer picker (#1497). */
+  composerCommands: (sessionId: string): Promise<import('@shared/composerCommands/types.js').ComposerCommand[]> =>
+    ipcRenderer.invoke('session:composerCommands', sessionId),
+
   jumpToLatest: (sessionId: string): Promise<{ ok: true } | { ok: false; reason: string }> =>
     ipcRenderer.invoke('session:jumpToLatest', sessionId),
 

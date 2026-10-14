@@ -94,3 +94,13 @@ describe('Hermes connection card', () => {
   })
 })
 
+
+describe('Tailscale tag (#1498)', () => {
+  it('marks a connection that is reached over a tailnet, and only that one', () => {
+    const tailnet = render(<ConnectionCard connection={connection({ baseUrl: 'https://hermes.tail1234.ts.net' })} />)
+    expect(tailnet.getByText('Tailscale')).toBeTruthy()
+    tailnet.unmount()
+    const publicUrl = render(<ConnectionCard connection={connection({ baseUrl: 'https://hermes-agent-pjlj.srv1921318.hstgr.cloud' })} />)
+    expect(publicUrl.queryByText('Tailscale')).toBeNull()
+  })
+})

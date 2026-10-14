@@ -113,6 +113,8 @@ export type SessionRecoverOptions = {
   /** Remote providers (Hermes): the connection, needed only if recovery has
    *  to START a backend (an adopted live one already holds it). */
   remoteConnectionId?: string
+  /** Hermes: the messaging thread the pane follows (SessionMeta.hermesLaneKey). */
+  hermesLaneKey?: string
   /**
    * Opaque renderer-generated generation for this recovery admission.
    *
@@ -202,10 +204,48 @@ export const PROVIDER_CLI_NOT_FOUND_SUFFIX = ' CLI not found. Open Setup (File �
 export const HERMES_NOT_CONNECTED_MESSAGE = 'Hermes needs a connection. Add and sign in to one in Settings → Hermes.'
 export const HERMES_SIGNED_OUT_MESSAGE = 'Signed out of this Hermes connection. Sign in again in Settings → Hermes, then reload the agent.'
 export const HERMES_UNREACHABLE_MESSAGE = 'Could not reach this Hermes server. Check that `hermes serve` is running and reachable from this Mac, then reload the agent.'
-const HERMES_CURATED_MESSAGES = [HERMES_NOT_CONNECTED_MESSAGE, HERMES_SIGNED_OUT_MESSAGE, HERMES_UNREACHABLE_MESSAGE]
+// The stages below were all "Session failed to start" until #1495: the owner's
+// first connection hit a v0.20.4 server whose handshake answered -32601, and
+// nothing on screen said "update Hermes".
+export const HERMES_INCOMPATIBLE_MESSAGE = 'This Hermes server is too old for Agent Code. Update Hermes to v0.21.7 or newer, then reload the agent.'
+export const HERMES_WS_REFUSED_MESSAGE = 'Hermes refused the WebSocket connection. Reload the agent; if it keeps happening, sign in again in Settings → Hermes or check the server’s dashboard host and origin settings.'
+export const HERMES_HANDSHAKE_FAILED_MESSAGE = 'Hermes accepted the connection but did not finish starting the session. The server may be restarting; reload the agent in a moment.'
+export const HERMES_ATTACH_FAILED_MESSAGE = 'Hermes is reachable but could not open this conversation. Reload the agent; if it keeps happening, open a new Hermes chat.'
+export const HERMES_LANE_NOT_FOUND_MESSAGE = 'No Telegram conversation with your Hermes bot was found on this server. Send your bot a message in Telegram, then reload the agent.'
+
+/**
+ * Where a remote provider's start failed, as a fixed enum: what main journals
+ * (`provider.start.end`, `session.spawn.failed`'s signature) so an incident can
+ * be diagnosed without the raw error text, which never leaves main's log.
+ */
+export type RemoteStartStage =
+  | 'not-connected'
+  | 'signed-out'
+  | 'unreachable'
+  | 'incompatible'
+  | 'ws-refused'
+  | 'handshake'
+  | 'attach'
+  | 'lane-not-found'
+
+const HERMES_CURATED: ReadonlyArray<readonly [string, RemoteStartStage]> = [
+  [HERMES_NOT_CONNECTED_MESSAGE, 'not-connected'],
+  [HERMES_SIGNED_OUT_MESSAGE, 'signed-out'],
+  [HERMES_UNREACHABLE_MESSAGE, 'unreachable'],
+  [HERMES_INCOMPATIBLE_MESSAGE, 'incompatible'],
+  [HERMES_WS_REFUSED_MESSAGE, 'ws-refused'],
+  [HERMES_HANDSHAKE_FAILED_MESSAGE, 'handshake'],
+  [HERMES_ATTACH_FAILED_MESSAGE, 'attach'],
+  [HERMES_LANE_NOT_FOUND_MESSAGE, 'lane-not-found'],
+]
 
 export function curatedRemoteProviderMessage(raw: string): string | null {
-  return HERMES_CURATED_MESSAGES.find((message) => raw.includes(message)) ?? null
+  return HERMES_CURATED.find(([message]) => raw.includes(message))?.[0] ?? null
+}
+
+/** The stage a curated remote start sentence stands for (same recognition rule). */
+export function curatedRemoteProviderStage(raw: string): RemoteStartStage | null {
+  return HERMES_CURATED.find(([message]) => raw.includes(message))?.[1] ?? null
 }
 
 /** The actionable message for a Claude proxy (mitmproxy) that would not
@@ -653,6 +693,11 @@ export interface AgentSession extends AgentSessionEmitter {
     | { ok: false; reason: string; lastState?: unknown; failedAtStep?: string }
   >
 
+  /** Optional (Hermes today, #1497): the slash commands the composer's
+   *  command picker offers for this session. Fetched when the picker first
+   *  opens; a provider without it keeps its own slash behaviour. */
+  listComposerCommands?(): Promise<import('@shared/composerCommands/types.js').ComposerCommand[]>
+
   /** Optional (OpenCode Terminal today): scroll the provider's OWN transcript
    *  view to its newest message. For a TUI that pages its transcript on the
    *  alternate screen, xterm's scrollToBottom cannot move anything (#843). The
@@ -716,8 +761,14 @@ export interface AgentSession extends AgentSessionEmitter {
    *  starting head. Keeping both
    *  behind one provider-owned capability lets SessionManager stay ignorant
    *  of which OpenCode runtime was selected. Claude/Codex leave it undefined
-   *  and their provider policies write through io.write instead. */
-  deliverPromptText?(text: string): Promise<void>
+   *  and their provider policies write through io.write instead.
+   *
+   *  Hermes (#1503) may resolve `{ turnStarted: false }`: the message was
+   *  taken but no turn starts for it now (queued behind a running turn, held
+   *  for a Telegram turn, or a slash command main answered itself). The
+   *  delivery adapter reports that as a `queue` acceptance so the composer
+   *  settles its optimistic "submitting" phase. */
+  deliverPromptText?(text: string): Promise<void | { turnStarted: boolean }>
 }
 
 export type PromptAcceptanceOutcome =
@@ -825,6 +876,8 @@ export type SessionOptions = {
    * or a credential, so it is safe to persist and to carry over IPC.
    */
   remoteConnectionId?: string
+  /** Hermes (#1496): follow this gateway routing key (a Telegram thread) instead of one stored conversation. */
+  hermesLaneKey?: string
 }
 
 export type SessionHistoryChunk = {

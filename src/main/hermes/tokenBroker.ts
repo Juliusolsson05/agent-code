@@ -126,6 +126,19 @@ export class HermesTokenBroker {
     return tokens.accessToken
   }
 
+  /**
+   * An access token for a dashboard REST call (HermesRest). `forceRefresh`
+   * is HermesRest's one retry after the server refused the bearer: the same
+   * single-flight refresh as the ticket path, so a REST call and a dial that
+   * both hit an expired token refresh ONCE.
+   */
+  async restAccessToken(options?: { forceRefresh?: boolean }): Promise<string> {
+    if (!options?.forceRefresh) return this.accessToken()
+    const fresh = await this.refresh(await this.current())
+    this.assertLive()
+    return fresh.accessToken
+  }
+
   /** A single-use WebSocket ticket (30 s), retrying once through a refresh. */
   async ticket(): Promise<string> {
     const { baseUrl } = this.deps

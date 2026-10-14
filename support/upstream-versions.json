@@ -22,8 +22,8 @@
       "accepted": "1.18.31",
       "checkedAt": "2026-09-19",
       "notes": [
-        "Added at the app level (remote-v2 rebuild, Refs #996): both OpenCode runtimes wrap this one CLI, and the app-level watch previously had no entry — the packages carry their own files (packages/opencode-terminal-headless and packages/opencode-headless), but nothing compared the npm latest against an APP-accepted version. Acceptance rides the terminal package's review (1.18.30, live-recorded); the structured runtime's SSE vocabulary is stringly-parsed with an unknown_event catch-all, so the same compatibility-pass discipline applies per package before this number moves.",
-        "1.18.31 — accepted as the bundled-runtime pin (Refs #994). Basis: the official release asset verified by archive+binary sha256, the full deterministic suites green (terminal package, app setup/provider-switch, typecheck), and production evidence — the app has been driving 1.18.31 TUI panes, conditions included, in daily use since 2026-09-14. The recorded live compatibility pass could NOT discriminate 1.18.31 from 1.18.30 on 2026-09-19: it times out waiting for the permission condition identically on both versions, including the same 1.18.30 the Stage 0 recordings passed against, so that failure is environmental rather than a pin regression (tracked in #1009). npm latest is 1.18.31, so this acceptance also clears the upstream-watch drift. Re-run #1009's scenario once fixed before treating the live suite as acceptance evidence again."
+        "Added at the app level (remote-v2 rebuild, Refs #996): both OpenCode runtimes wrap this one CLI, and the app-level watch previously had no entry \u2014 the packages carry their own files (packages/opencode-terminal-headless and packages/opencode-headless), but nothing compared the npm latest against an APP-accepted version. Acceptance rides the terminal package's review (1.18.30, live-recorded); the structured runtime's SSE vocabulary is stringly-parsed with an unknown_event catch-all, so the same compatibility-pass discipline applies per package before this number moves.",
+        "1.18.31 \u2014 accepted as the bundled-runtime pin (Refs #994). Basis: the official release asset verified by archive+binary sha256, the full deterministic suites green (terminal package, app setup/provider-switch, typecheck), and production evidence \u2014 the app has been driving 1.18.31 TUI panes, conditions included, in daily use since 2026-09-14. The recorded live compatibility pass could NOT discriminate 1.18.31 from 1.18.30 on 2026-09-19: it times out waiting for the permission condition identically on both versions, including the same 1.18.30 the Stage 0 recordings passed against, so that failure is environmental rather than a pin regression (tracked in #1009). npm latest is 1.18.31, so this acceptance also clears the upstream-watch drift. Re-run #1009's scenario once fixed before treating the live suite as acceptance evidence again."
       ]
     },
     "pi": {
@@ -43,14 +43,19 @@
       "label": "Hermes Agent",
       "repo": "https://github.com/NousResearch/hermes-agent",
       "changelog": "https://github.com/NousResearch/hermes-agent/releases",
-      "accepted": "0.21.7",
+      "accepted": "0.22.0",
       "desktopContract": {
         "tested": 8,
         "minimum": 7
       },
-      "checkedAt": "2026-10-13",
+      "checkedAt": "2026-10-14",
       "notes": [
-        "Added with the Hermes chat pane (Refs #1482). Acceptance rides packages/hermes-headless's Stage 0 corpus, recorded against `hermes serve` built from vendor/hermes-agent-src at 71d34bad (v0.21.7), and its live tier. The source of truth for the runtime check is hermes-headless src/version.ts (backendCompatibility); keep these numbers equal to it. Hermes updates itself on the user's server, so a newer backend is expected: re-record the corpus against it before moving `accepted`."
+        "Added with the Hermes chat pane (Refs #1482). Acceptance rides packages/hermes-headless's Stage 0 corpus, recorded against `hermes serve` built from vendor/hermes-agent-src at 71d34bad (v0.21.7), and its live tier. The source of truth for the runtime check is hermes-headless src/version.ts (backendCompatibility); keep these numbers equal to it. Hermes updates itself on the user's server, so a newer backend is expected: re-record the corpus against it before moving `accepted`.",
+        "2026-10-14 (#1496/#1497): v0.22.0 (e06df9c2) accepted. The deterministic suite passes on the re-recorded v0.22.0 corpus (90/90, same contract 8), plus new v0.22.0 scenarios S17\u2013S24 and Telegram-lane T1\u2013T8; the v0.20.4 handshake failure is recorded as S25. The package's live-matrix.yml runs the live tier against both tags."
+      ],
+      "testedReleases": [
+        "0.21.7",
+        "0.22.0"
       ]
     }
   }

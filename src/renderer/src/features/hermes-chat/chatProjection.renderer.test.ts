@@ -59,7 +59,7 @@ function liveEvents(created: SessionResumeResult, events: ReturnType<typeof s4>[
     requestClosed: () => undefined,
     turnSettled: () => undefined,
     reclaimed: () => undefined,
-    unknown: () => undefined,
+    unknown: () => undefined, notice: () => undefined, noticeCleared: () => undefined, sideAnswer: () => undefined,
   })
   reconciler.applySnapshot(created, 'snapshot')
   for (const event of events) reconciler.applyEvent(event)
@@ -137,7 +137,7 @@ describe('Hermes chat projection on the real pipeline (recorded S4)', () => {
     const reconciler = new ConversationReconciler({
       semantic: (event) => semantic.push(event), committed: (row) => committed.push(row), historyReset: () => undefined,
       historyCaughtUp: () => undefined, activity: () => undefined, session: () => undefined, requestOpened: () => undefined,
-      requestClosed: () => undefined, turnSettled: () => undefined, reclaimed: () => undefined, unknown: () => undefined,
+      requestClosed: () => undefined, turnSettled: () => undefined, reclaimed: () => undefined, unknown: () => undefined, notice: () => undefined, noticeCleared: () => undefined, sideAnswer: () => undefined,
     })
     reconciler.applySnapshot(created, 'snapshot')
     for (const event of events) reconciler.applyEvent(event)

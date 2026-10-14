@@ -9,12 +9,14 @@
 import { EventEmitter } from 'node:events'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import WebSocket from 'ws'
-
 import {
   HermesAuthError,
+  HermesHeadless,
+  HermesRest,
+  HermesStartError,
   backendCompatibility,
   buildWsUrl,
+  wsTicketProtocols,
   normalizeBaseUrl,
   probe,
   type FetchLike,
@@ -27,6 +29,8 @@ import { loadHermesConnections, saveHermesConnections, type StoredHermesConnecti
 import { HermesTokenStore } from '@main/hermes/tokenStore.js'
 import { HermesSignedOutError, HermesTokenBroker } from '@main/hermes/tokenBroker.js'
 import { runNativeSignIn, SignInCancelledError } from '@main/hermes/nativeSignIn.js'
+import { openWs } from '@main/hermes/openWs.js'
+import { tailnetKindOfUrl } from '@shared/hermes/tailnet.js'
 import {
   validateHermesConnectionName,
   type HermesConnectionDraft,
@@ -35,12 +39,6 @@ import {
   type HermesTestResult,
 } from '@shared/hermes/types.js'
 
-// Hermes' own client allows 15 s for the socket to open (json-rpc-gateway.ts
-// DEFAULT_CONNECT_TIMEOUT_MS); a VPS over a VPN can be slow, never longer.
-const OPEN_TIMEOUT_MS = 15_000
-// A resume of a long conversation is one frame (S12: 120 rows); Hermes caps
-// transcripts it will send far below this.
-const MAX_PAYLOAD_BYTES = 64 * 1024 * 1024
 
 export type HermesServiceDeps = {
   stateDir: string
@@ -48,7 +46,7 @@ export type HermesServiceDeps = {
   openExternal: (url: string) => Promise<void> | void
   fetchImpl?: FetchLike
   /** Socket factory; tests inject a fake. */
-  openSocket?: (url: string) => Promise<WebSocketLike>
+  openSocket?: (url: string, protocols: string[]) => Promise<WebSocketLike>
 }
 
 type RuntimeState = {
@@ -189,7 +187,7 @@ export class HermesConnectionService extends EventEmitter {
       this.patchRuntime(id, { backend: { version: result.version, desktopContract: this.runtime.get(id)?.backend?.desktopContract ?? null, compatibility: this.runtime.get(id)?.backend?.compatibility ?? null } })
       return { ok: true, version: result.version, authRequired: result.authRequired, providers: result.providers.map((provider) => provider.displayName) }
     } catch (error) {
-      return { ok: false, error: describeError(error) }
+      return { ok: false, error: describeError(error, connection.baseUrl) }
     }
   }
 
@@ -215,6 +213,10 @@ export class HermesConnectionService extends EventEmitter {
       this.revoke(id)
       if (!(await this.tokens.set(id, connection.baseUrl, tokens, owns))) throw new SignInCancelledError()
       this.patchRuntime(id, { state: 'ready', identity: { userId: tokens.userId, provider: tokens.provider }, lastError: null })
+      // Panes that let go of this connection when its sign-in died come back
+      // on their own now (owner's debug bundle: a pane sat dead for 10m42s
+      // after a fresh sign-in, until a manual reload).
+      this.emit('signed-in', id)
     } catch (error) {
       // A superseded attempt publishes nothing: the newer sign-in, Sign out,
       // edit or removal that replaced it owns the state now (round-2 c2 #2).
@@ -225,7 +227,7 @@ export class HermesConnectionService extends EventEmitter {
       const tokens = await this.tokens.get(id, connection.baseUrl).catch(() => null)
       this.patchRuntime(id, {
         state: tokens ? 'ready' : 'signed-out',
-        lastError: error instanceof SignInCancelledError && !controller.signal.aborted ? error.message : error instanceof SignInCancelledError ? null : describeError(error),
+        lastError: error instanceof SignInCancelledError && !controller.signal.aborted ? error.message : error instanceof SignInCancelledError ? null : describeError(error, connection.baseUrl),
       })
       if (!(error instanceof SignInCancelledError)) throw error
     } finally {
@@ -268,7 +270,7 @@ export class HermesConnectionService extends EventEmitter {
   reportReachability(id: string, reachable: boolean, error?: unknown): void {
     const state = this.runtime.get(id)?.state
     if (!state || state === 'signed-out' || state === 'signing-in') return
-    this.patchRuntime(id, reachable ? { state: 'ready', lastError: null } : { state: 'unreachable', lastError: describeError(error) })
+    this.patchRuntime(id, reachable ? { state: 'ready', lastError: null } : { state: 'unreachable', lastError: describeError(error, this.connections.find((entry) => entry.id === id)?.baseUrl) })
   }
 
   /**
@@ -282,10 +284,85 @@ export class HermesConnectionService extends EventEmitter {
       const ticket = await broker.ticket()
       // Signed out (or URL edited) while the ticket was being minted.
       broker.assertLive()
-      const url = buildWsUrl(connection.baseUrl, ticket)
-      return this.deps.openSocket ? this.deps.openSocket(url) : openWs(url)
+      const url = buildWsUrl(connection.baseUrl)
+      const protocols = wsTicketProtocols(ticket)
+      return this.deps.openSocket ? this.deps.openSocket(url, protocols) : openWs(url, protocols)
     }
   }
+
+  /**
+   * The dashboard REST client for a connection (Telegram lane lookup,
+   * gateway restart). Same broker as the WebSocket, so REST never holds a
+   * second copy of the tokens or refreshes on its own schedule.
+   */
+  restFor(id: string): HermesRest {
+    // WHY a fresh client per CALL, built from one snapshot of the connection
+    // and ITS broker (review #1503, high): a lane session keeps this object
+    // for its lifetime. Capturing the URL once while resolving the broker per
+    // call meant that after the user edited the URL and signed in to the new
+    // server, the next lane refresh sent the NEW server's bearer to the OLD
+    // URL. Now the URL and the token always come from the same connection
+    // record (the broker is itself bound to that URL), whatever changes.
+    const current = (): HermesRest => {
+      const connection = this.require(id)
+      const broker = this.broker(connection)
+      return new HermesRest({
+        baseUrl: connection.baseUrl,
+        accessToken: (options) => broker.restAccessToken(options),
+        fetchImpl: this.deps.fetchImpl,
+      })
+    }
+    return {
+      listSessions: (query?: Parameters<HermesRest['listSessions']>[0]) => current().listSessions(query),
+      latestDescendant: (sessionId: string, profile?: string) => current().latestDescendant(sessionId, profile),
+      restartGateway: () => current().restartGateway(),
+    } as HermesRest
+  }
+
+  /**
+   * The Telegram DM thread a new Hermes pane follows by default (#1496, plan
+   * Decision 3, UNCONFIRMED), as its gateway routing key; null when the
+   * server has none or cannot be asked. Never throws: a failed lookup means
+   * a separate chat, not a failed pane.
+   */
+  async defaultLaneKey(id: string): Promise<string | null> {
+    try {
+      this.laneLookupFailedAt.delete(id)
+      return (await HermesHeadless.defaultLane(this.restFor(id)))?.sessionKey ?? null
+    } catch (error) {
+      console.warn('[hermes] Telegram thread lookup failed:', describeError(error))
+      // The pane that is about to open as a separate chat says why
+      // (consumeLaneLookupFailure); silently opening a desktop-only chat
+      // when the owner expects the thread was a review finding (#1503).
+      this.laneLookupFailedAt.set(id, Date.now())
+      return null
+    }
+  }
+
+  /** True once, for the pane spawned right after a failed thread lookup on this connection. */
+  consumeLaneLookupFailure(id: string): boolean {
+    const at = this.laneLookupFailedAt.get(id)
+    this.laneLookupFailedAt.delete(id)
+    return at !== undefined && Date.now() - at < 60_000
+  }
+
+  /** Unauthenticated `/api/status`: is the messaging gateway running? Null when unreachable. */
+  async gatewayRunning(id: string): Promise<boolean | null> {
+    try {
+      // Inside the try: a connection removed mid-poll is "unknown", never an
+      // unhandled rejection from a fire-and-forget restart watcher (review).
+      const connection = this.require(id)
+      const fetchImpl = this.deps.fetchImpl ?? fetch
+      const response = await fetchImpl(`${connection.baseUrl.replace(/\/+$/, '')}/api/status`, { signal: AbortSignal.timeout(10_000) })
+      if (!response.ok) return null
+      const body = (await response.json()) as { gateway_running?: unknown }
+      return body.gateway_running === true
+    } catch {
+      return null
+    }
+  }
+
+  private readonly laneLookupFailedAt = new Map<string, number>()
 
   // ── internals ──────────────────────────────────────────────────────────────
 
@@ -371,8 +448,19 @@ export class HermesConnectionService extends EventEmitter {
   }
 }
 
-export function describeError(error: unknown): string {
+export function describeError(error: unknown, baseUrl?: string): string {
+  // A start() failure arrives wrapped with its stage; the words are about the cause.
+  if (error instanceof HermesStartError) return describeError(error.cause, baseUrl)
   if (error instanceof HermesSignedOutError) return error.message
+  const code = error instanceof HermesAuthError && error.kind === 'transport'
+    ? error.causeCode
+    : (error as { code?: unknown } | null)?.code
+  // A tailnet address that cannot be reached is almost always Tailscale
+  // itself (not connected on this Mac, or the ACL does not allow this
+  // device), not `hermes serve` (#1498). Say that first.
+  if (baseUrl && tailnetKindOfUrl(baseUrl) && typeof code === 'string' && TAILNET_NETWORK_CODES.has(code)) {
+    return `This is a Tailscale address. Check that Tailscale is connected on this Mac and that this device is allowed to reach ${hostOf(baseUrl)}.`
+  }
   if (error instanceof HermesAuthError) {
     if (error.kind === 'transport') {
       if (error.causeCode === 'ECONNREFUSED') return 'Hermes refused the connection. Is `hermes serve` running on the server?'
@@ -386,28 +474,12 @@ export function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-function openWs(url: string): Promise<WebSocketLike> {
-  return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url, { maxPayload: MAX_PAYLOAD_BYTES, handshakeTimeout: OPEN_TIMEOUT_MS })
-    const fail = (error: Error) => {
-      socket.removeAllListeners('open')
-      reject(error)
-    }
-    socket.once('open', () => {
-      socket.removeAllListeners('error')
-      // `ws` emits 'error' before 'close'; a listener must exist or Node
-      // treats it as unhandled. RpcConnection reacts to the close event.
-      socket.on('error', () => undefined)
-      resolve(socket as unknown as WebSocketLike)
-    })
-    socket.once('error', fail)
-    // 4401/4403 arrive as an HTTP refusal of the upgrade; surface it in words.
-    socket.once('unexpected-response', (request, response) => {
-      // With this listener attached `ws` leaves the refused request open.
-      request.destroy()
-      fail(new Error(response.statusCode === 401 || response.statusCode === 403
-        ? 'Hermes refused the connection ticket. Sign in again.'
-        : `Hermes refused the WebSocket (HTTP ${response.statusCode}).`))
-    })
-  })
+const TAILNET_NETWORK_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH'])
+
+function hostOf(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).host
+  } catch {
+    return baseUrl
+  }
 }

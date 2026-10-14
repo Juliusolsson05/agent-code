@@ -1908,7 +1908,7 @@ describe('history reset of a DIFFERENT conversation', () => {
     const reconciler = new ConversationReconciler({
       semantic: (event) => out.push(event), committed: () => undefined, historyReset: () => undefined, historyCaughtUp: () => undefined,
       activity: () => undefined, session: () => undefined, requestOpened: () => undefined, requestClosed: () => undefined,
-      turnSettled: () => undefined, reclaimed: () => undefined, unknown: () => undefined,
+      turnSettled: () => undefined, reclaimed: () => undefined, unknown: () => undefined, notice: () => undefined, noticeCleared: () => undefined, sideAnswer: () => undefined,
     })
     reconciler.applySnapshot(created as never, 'snapshot')
     for (const frame of frames) {
