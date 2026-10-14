@@ -1,6 +1,6 @@
 # Hermes: one thread with Telegram, slash commands, Copy Assistant and honest startup errors
 
-**Status:** PLAN, not started. Written 2026-10-14, on branch `feat/hermes-telegram-thread-and-commands` (worktree `.worktrees/hermes-telegram-thread`, branched from `origin/main` at `d0c3df99`).
+**Status:** IN PROGRESS (owner: "write out the full plan files and then go ahead and build out the full thing", 2026-10-14). The owner did not answer §2, so every decision there is built with its default and is **UNCONFIRMED**. Tailscale phase 1 has its own plan file (`2026-10-14-tailscale-hermes-phase1.md`) and ships in this same PR (ruling in §13). Written 2026-10-14, on branch `feat/hermes-telegram-thread-and-commands` (worktree `.worktrees/hermes-telegram-thread`, branched from `origin/main` at `d0c3df99`).
 
 **Size:** a long plan with an embedded staged decomposition. The Telegram half meets several of the skill's triggers:
 - a behaviour nobody in this repo has recorded yet (a gateway-owned lane seen from `serve`);
@@ -716,3 +716,8 @@ This would get its own issue + plan.
 ## 13. Stage results and execution notes
 
 *(Filled in during execution: Stage 0 results with numbers, hypothesis verdicts H1–H6 as HOLDS / REFINED / DISPROVEN with evidence paths, a graveyard for disproven ideas, rulings, and deviations from this plan, each recorded in the same commit as the change.)*
+
+### Rulings
+
+- **R1: all §2 decisions default, UNCONFIRMED.** The owner asked to build without answering them. Each default is restated in the PR body under "UNCONFIRMED product calls". The cost if wrong is a small UI change per decision; none of them changes the data model.
+- **R2: Tailscale phase 1 ships in this PR.** "Build out the full thing" covers it, and phase 1 is small and Hermes-scoped (URL recognition, connection hint, setup docs). Phase 2 (local Tailscale detection, team rollout) stays a follow-up issue. Plan: `docs/plans/2026-10-14-tailscale-hermes-phase1.md`. The cost if wrong is one reverted commit.
