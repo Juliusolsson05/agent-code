@@ -17,6 +17,7 @@
 
 import { mkdir, readFile, rm, writeFile, rename } from 'node:fs/promises'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 
 import type { SecretCodec } from '@main/keyVault/vaultStore.js'
 import type { HermesTokens } from 'hermes-headless'
@@ -28,7 +29,25 @@ const PREFIX = 'agent-code/hermes-tokens/v1:'
 const SAFE_ID = /^[A-Za-z0-9_-]{1,80}$/
 
 export class HermesTokenStore {
+  /**
+   * Per-connection queue of writes and deletes. Several owners touch one
+   * blob (a sign-in, a refreshing broker, Sign out, a URL edit, Remove) and
+   * each of their steps is async; unserialized, an OLD owner's slow write
+   * landed after a NEWER sign-in and its cleanup then deleted the new pair
+   * (round-2 review c2 #2). Queued, and with the owner check made at the
+   * moment a write runs (`isCurrent`), a stale owner can neither overwrite
+   * nor delete a later owner's tokens.
+   */
+  private readonly chains = new Map<string, Promise<unknown>>()
+
   constructor(private readonly dir: string, private readonly codec: SecretCodec) {}
+
+  private exclusive<T>(connectionId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.chains.get(connectionId) ?? Promise.resolve()
+    const next = previous.catch(() => undefined).then(operation)
+    this.chains.set(connectionId, next.catch(() => undefined))
+    return next
+  }
 
   available(): boolean {
     try {
@@ -71,16 +90,30 @@ export class HermesTokenStore {
     }
   }
 
-  async set(connectionId: string, baseUrl: string, tokens: HermesTokens): Promise<void> {
-    if (!this.available()) throw new Error('Secure storage is not available on this system, so Hermes sign-in cannot be saved.')
-    await mkdir(this.dir, { recursive: true })
+  /**
+   * Write the pair, unless `isCurrent` says the writer no longer owns the
+   * connection by the time its turn comes. Resolves whether it wrote.
+   */
+  async set(connectionId: string, baseUrl: string, tokens: HermesTokens, isCurrent: () => boolean = () => true): Promise<boolean> {
     const target = this.path(connectionId)
-    const temporary = `${target}.${process.pid}.${Date.now()}.tmp`
-    await writeFile(temporary, this.codec.encrypt(PREFIX + JSON.stringify({ baseUrl, tokens })), { mode: 0o600 })
-    await rename(temporary, target)
+    return this.exclusive(connectionId, async () => {
+      if (!isCurrent()) return false
+      if (!this.available()) throw new Error('Secure storage is not available on this system, so Hermes sign-in cannot be saved.')
+      await mkdir(this.dir, { recursive: true })
+      const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`
+      await writeFile(temporary, this.codec.encrypt(PREFIX + JSON.stringify({ baseUrl, tokens })), { mode: 0o600 })
+      await rename(temporary, target)
+      return true
+    })
   }
 
-  async delete(connectionId: string): Promise<void> {
-    await rm(this.path(connectionId), { force: true })
+  /** Delete the pair, with the same owner check as set(). Resolves whether it deleted. */
+  async delete(connectionId: string, isCurrent: () => boolean = () => true): Promise<boolean> {
+    const target = this.path(connectionId)
+    return this.exclusive(connectionId, async () => {
+      if (!isCurrent()) return false
+      await rm(target, { force: true })
+      return true
+    })
   }
 }

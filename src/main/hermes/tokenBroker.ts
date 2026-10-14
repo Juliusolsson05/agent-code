@@ -70,10 +70,9 @@ export class HermesTokenBroker {
 
   /** The refused credentials are dead: forget them and tell the owner. */
   private async signedOut(error: HermesAuthError, message: string): Promise<never> {
-    if (!this.revoked) {
-      await this.deps.store.delete(this.deps.connectionId)
-      this.deps.onSignedOut(error.message)
-    }
+    // Only while still the owner: a revoked broker's late refusal must not
+    // delete whatever a newer sign-in has written since.
+    if (await this.deps.store.delete(this.deps.connectionId, () => !this.revoked)) this.deps.onSignedOut(error.message)
     throw new HermesSignedOutError(this.deps.connectionId, `${message} ${error.message}`)
   }
 
@@ -99,14 +98,13 @@ export class HermesTokenBroker {
         return refreshTokens({ baseUrl, refreshToken: stale.refreshToken, provider: stale.provider }, this.deps.fetchImpl)
       })
       .then(async (fresh) => {
+        // Written only if this broker is still the owner when the write's turn
+        // comes (the store serializes per connection): a Sign out, URL edit
+        // or newer sign-in queued meanwhile wins, and nothing of ours lands
+        // after it.
+        await this.deps.store.set(this.deps.connectionId, baseUrl, fresh, () => !this.revoked)
+        // Not written means revoked: this throws HermesSignedOutError then.
         this.assertLive()
-        await this.deps.store.set(this.deps.connectionId, baseUrl, fresh)
-        // Sign-out can run DURING the write; its delete may land first. Undo
-        // ours so a revoked connection never keeps a usable pair on disk.
-        if (this.revoked) {
-          await this.deps.store.delete(this.deps.connectionId)
-          this.assertLive()
-        }
         return fresh
       })
       .catch(async (error: unknown) => {

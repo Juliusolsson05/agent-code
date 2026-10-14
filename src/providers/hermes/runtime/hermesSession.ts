@@ -112,8 +112,18 @@ export class HermesSession extends EventEmitter implements AgentSession {
   private committedRows: HermesEntryPayload[] = []
   private unregisterHistory: (() => void) | null = null
   private signedOut = false
+  /** A notice to show once the next history snapshot has caught up. */
+  private pendingNotice: string | null = null
   /** A reconnect attempt is running; see reconnect() for why only one may. */
   private reconnecting = false
+  /**
+   * The conversation is bound on the CURRENT socket. hermes-headless reports
+   * a connection `ready` once the socket handshakes, which is BEFORE start()
+   * or a reconnect re-attaches the conversation; a prompt sent in that gap
+   * named the old runtime id, which a restarted backend refuses, and the
+   * refusal is final (round-2 review c2 #4). Input opens only when attached.
+   */
+  private attached = false
   private readonly onServiceDisconnect = (id: string, reason: HermesDisconnectReason = 'signed-out'): void => {
     if (id !== this.connectionId) return
     this.detach(reason)
@@ -190,7 +200,10 @@ export class HermesSession extends EventEmitter implements AgentSession {
     })
     headless.on('session', (state: HermesSessionState) => this.onSession(state))
     headless.on('session-replaced', ({ previousStoredSessionId }: { previousStoredSessionId: string }) => {
-      this.emitNotice(`The previous Hermes conversation (${previousStoredSessionId}) is gone from the server, so this pane started a new one.`)
+      // Held until the new conversation's history has caught up: the reset
+      // that follows `session-replaced` wipes every row before it, so a notice
+      // emitted now never reached the screen (round-2 review x1 #2).
+      this.pendingNotice = `The previous Hermes conversation (${previousStoredSessionId}) is gone from the server, so this pane started a new one.`
     })
     headless.on('request', (request: HermesRequest) => this.onRequest(request))
     headless.on('request-closed', ({ id }: { id: string }) => this.onRequestClosed(id))
@@ -216,6 +229,7 @@ export class HermesSession extends EventEmitter implements AgentSession {
       throw new Error(`Could not open the Hermes conversation: ${describeError(error)}`)
     }
     service.reportReachability(this.connectionId, true)
+    this.openInput()
     this.emit('started', {})
     return {}
   }
@@ -256,8 +270,17 @@ export class HermesSession extends EventEmitter implements AgentSession {
    * `/` is a slash command: Hermes routes those itself (slash.exec /
    * command.dispatch), and printing output appears as a notice in the chat.
    */
+  private openInput(): void {
+    if (this.stopped || this.signedOut) return
+    this.attached = true
+    this.emit('input-readiness', { ready: true, reason: 'ready' })
+  }
+
   async deliverPromptText(text: string): Promise<void> {
     if (!this.headless) throw new HermesPromptError('not-ready', 'The Hermes conversation has not started.')
+    // `not-ready` is retry-safe: the composer keeps the message for after
+    // the re-attach instead of losing it to a dead runtime id.
+    if (!this.attached) throw new HermesPromptError('not-ready', 'Hermes is reconnecting; send again in a moment.')
     if (/^\/[a-z0-9]/i.test(text.trim())) {
       const outcome = await this.headless.runSlash(text.trim())
       if (outcome.kind === 'output' && outcome.text.trim()) this.emitNotice(outcome.text.trim())
@@ -322,6 +345,11 @@ export class HermesSession extends EventEmitter implements AgentSession {
       ...(boundary.type === 'reset' && boundary.reason === 'new-conversation' ? { conversationChanged: true } : {}),
       file: hermesTranscriptSource(this.connectionId, this.storedSessionId ?? ''),
     })
+    if (boundary.type === 'caught-up' && this.pendingNotice) {
+      const text = this.pendingNotice
+      this.pendingNotice = null
+      this.emitNotice(text)
+    }
   }
 
   private onSession(state: HermesSessionState): void {
@@ -354,11 +382,13 @@ export class HermesSession extends EventEmitter implements AgentSession {
   private onConnection(state: HermesConnectionState): void {
     if (this.stopped || this.signedOut) return
     if (state.kind === 'ready') {
+      // Socket up, conversation not yet attached: start() and reconnect()
+      // open input themselves once they finish.
       this.connectedAt = Date.now()
-      this.emit('input-readiness', { ready: true, reason: 'ready' })
       return
     }
     if (state.kind === 'disconnected') {
+      this.attached = false
       this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
       this.emit('process-state', { active: false, status: 'Reconnecting to Hermes…' })
       // A socket that lived less than STABLE_AFTER_MS was a failed attempt:
@@ -395,6 +425,7 @@ export class HermesSession extends EventEmitter implements AgentSession {
     try {
       await this.headless.reconnect()
       service.reportReachability(this.connectionId, true)
+      this.openInput()
     } catch (error) {
       // Not transient: retrying a dead sign-in or a removed connection would
       // spin forever. The pane says what to do instead.

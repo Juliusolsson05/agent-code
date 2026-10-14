@@ -360,3 +360,137 @@ describe('HermesConnectionService', () => {
     expect(JSON.stringify(reloaded.list())).not.toMatch(/SECRET-/)
   })
 })
+
+// Round-2 review c2 #2/#3 (reviewer's probes, kept): ownership races with real
+// S1/S14 response bodies and real storage. Each failed before the per-connection
+// write queue with owner checks, and before Sign out aborted a running sign-in.
+describe('credential ownership across sign-in, refresh and sign-out', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  function deferred<T = void>() {
+    let resolve!: (value: T) => void
+    const promise = new Promise<T>((done) => { resolve = done })
+    return { promise, resolve }
+  }
+
+  async function browserReturn(authorization: string) {
+    const url = new URL(authorization)
+    await fetch(`${url.searchParams.get('redirect_uri')}?code=review-code&state=${url.searchParams.get('state')}`)
+  }
+
+  it('does not delete a newer URL sign-in when an older token write completes', async () => {
+    const exchange = recordedExchanges('S1').find((entry) => entry.path === '/auth/native/token' && entry.status === 200)!
+    const authorizeA = deferred<string>()
+    const authorizeB = deferred<string>()
+    const enteredWrite = deferred()
+    const releaseWrite = deferred()
+    let opens = 0
+    const hermes = new HermesConnectionService({
+      stateDir: dir, codec,
+      openExternal: (url) => { (++opens === 1 ? authorizeA : authorizeB).resolve(url) },
+      fetchImpl: async () => new Response(JSON.stringify(exchange.body), { status: 200 }),
+    })
+    await hermes.initialize()
+    const connection = await hermes.add({ name: 'VPS', baseUrl: URL_A })
+    const realSet = HermesTokenStore.prototype.set
+    let writes = 0
+    // Stand in for an old token-file write delayed in mkdir/write/rename.
+    vi.spyOn(HermesTokenStore.prototype, 'set').mockImplementation(async function (this: HermesTokenStore, ...args) {
+      if (++writes === 1) { enteredWrite.resolve(); await releaseWrite.promise }
+      return realSet.apply(this, args)
+    })
+    const first = hermes.signIn(connection.id)
+    await browserReturn(await authorizeA.promise)
+    await enteredWrite.promise
+    const urlB = 'https://hermes-b.example'
+    await hermes.update(connection.id, { name: 'VPS', baseUrl: urlB })
+    const second = hermes.signIn(connection.id)
+    await browserReturn(await authorizeB.promise)
+    await second
+    const store = new HermesTokenStore(join(dir, 'hermes', 'tokens'), codec)
+    expect(await store.get(connection.id, urlB)).not.toBeNull()
+    expect(hermes.get(connection.id)?.state).toBe('ready')
+    releaseWrite.resolve()
+    await first
+    expect(await store.get(connection.id, urlB)).not.toBeNull()
+    expect(hermes.get(connection.id)?.state).toBe('ready')
+  })
+
+  it('does not commit a sign-in after explicit sign-out during its exchange', async () => {
+    const exchange = recordedExchanges('S1').find((entry) => entry.path === '/auth/native/token' && entry.status === 200)!
+    const authorize = deferred<string>()
+    const enteredExchange = deferred()
+    const releaseExchange = deferred()
+    const hermes = new HermesConnectionService({
+      stateDir: dir, codec, openExternal: authorize.resolve,
+      fetchImpl: async () => {
+        enteredExchange.resolve()
+        await releaseExchange.promise
+        return new Response(JSON.stringify(exchange.body), { status: 200 })
+      },
+    })
+    await hermes.initialize()
+    const connection = await hermes.add({ name: 'VPS', baseUrl: URL_A })
+    const signingIn = hermes.signIn(connection.id)
+    await browserReturn(await authorize.promise)
+    await enteredExchange.promise
+    await hermes.signOut(connection.id)
+    releaseExchange.resolve()
+    await signingIn
+    expect.soft(hermes.get(connection.id)?.state).toBe('signed-out')
+    expect.soft(await new HermesTokenStore(join(dir, 'hermes', 'tokens'), codec).get(connection.id, URL_A)).toBeNull()
+  })
+
+  it('does not let an already-writing revoked broker erase a newer sign-in', async () => {
+    const exchange = recordedExchanges('S1').find((entry) => entry.path === '/auth/native/token' && entry.status === 200)!
+    const refresh = recordedExchanges('S14').find((entry) => entry.path === '/auth/native/refresh' && entry.status === 200)!
+    const authorize = deferred<string>()
+    const enteredWrite = deferred()
+    const releaseWrite = deferred()
+    const hermes = new HermesConnectionService({
+      stateDir: dir, codec, openExternal: authorize.resolve,
+      fetchImpl: async (url) => new Response(JSON.stringify(new URL(url).pathname === '/auth/native/refresh' ? refresh.body : exchange.body), { status: 200 }),
+    })
+    await hermes.initialize()
+    const connection = await hermes.add({ name: 'VPS', baseUrl: URL_A })
+    const store = new HermesTokenStore(join(dir, 'hermes', 'tokens'), codec)
+    await store.set(connection.id, URL_A, tokens({ expiresAt: 0 }))
+    const realSet = HermesTokenStore.prototype.set
+    let writes = 0
+    vi.spyOn(HermesTokenStore.prototype, 'set').mockImplementation(async function (this: HermesTokenStore, ...args) {
+      if (++writes === 1) { enteredWrite.resolve(); await releaseWrite.promise }
+      return realSet.apply(this, args)
+    })
+    const dial = hermes.dialFor(connection.id)().catch(error => error)
+    await enteredWrite.promise
+    await hermes.signOut(connection.id)
+    const signingIn = hermes.signIn(connection.id)
+    await browserReturn(await authorize.promise)
+    await signingIn
+    expect(await store.get(connection.id, URL_A)).not.toBeNull()
+    releaseWrite.resolve()
+    expect(await dial).toBeInstanceOf(HermesSignedOutError)
+    expect(await store.get(connection.id, URL_A)).not.toBeNull()
+  })
+})
+
+// Round-2 review c2 #1: two windows editing Settings at once.
+describe('concurrent connection edits', () => {
+  afterEach(() => vi.restoreAllMocks())
+  it('retains both connections added concurrently by two Settings windows', async () => {
+    const hermes = new HermesConnectionService({ stateDir: dir, codec, openExternal: () => undefined })
+    await hermes.initialize()
+    // Separate timestamp temp names: prove the snapshot overwrite even when
+    // there is no same-millisecond temporary-file collision.
+    let now = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => ++now)
+    const results = await Promise.allSettled([
+      hermes.add({ name: 'Server A', baseUrl: URL_A }),
+      hermes.add({ name: 'Server B', baseUrl: 'https://hermes-b.example' }),
+    ])
+    expect(results.every(result => result.status === 'fulfilled')).toBe(true)
+    expect.soft(hermes.list().map(c => c.name).sort()).toEqual(['Server A', 'Server B'])
+    const disk = JSON.parse(await readFile(join(dir, 'hermes', 'connections.json'), 'utf8'))
+    expect.soft(disk.connections.map((c: { name: string }) => c.name).sort()).toEqual(['Server A', 'Server B'])
+  })
+})

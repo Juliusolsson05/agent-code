@@ -113,7 +113,33 @@ export class HermesConnectionService extends EventEmitter {
     return this.connections.some((connection) => this.runtime.get(connection.id)?.state !== 'signed-out')
   }
 
-  async add(draft: HermesConnectionDraft): Promise<HermesConnectionInfo> {
+  /**
+   * Settings edits run one at a time, each reading the list as the previous
+   * one left it. Two windows adding a connection at once both built their
+   * document from the same old list, and the second write erased the first
+   * acknowledged addition (round-2 review c2 #1). Serializing only the WRITES
+   * would not help: the stale list is read before the write.
+   */
+  private mutation: Promise<unknown> = Promise.resolve()
+  private serialized<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.mutation.catch(() => undefined).then(operation)
+    this.mutation = next.catch(() => undefined)
+    return next
+  }
+
+  add(draft: HermesConnectionDraft): Promise<HermesConnectionInfo> {
+    return this.serialized(() => this.addNow(draft))
+  }
+
+  update(id: string, draft: HermesConnectionDraft): Promise<HermesConnectionInfo> {
+    return this.serialized(() => this.updateNow(id, draft))
+  }
+
+  remove(id: string): Promise<void> {
+    return this.serialized(() => this.removeNow(id))
+  }
+
+  private async addNow(draft: HermesConnectionDraft): Promise<HermesConnectionInfo> {
     const { name, baseUrl } = this.validateDraft(draft, null)
     const connection: StoredHermesConnection = { id: randomUUID(), name, baseUrl, createdAt: Date.now() }
     await this.persist([...this.connections, connection])
@@ -122,7 +148,7 @@ export class HermesConnectionService extends EventEmitter {
     return this.info(connection)
   }
 
-  async update(id: string, draft: HermesConnectionDraft): Promise<HermesConnectionInfo> {
+  private async updateNow(id: string, draft: HermesConnectionDraft): Promise<HermesConnectionInfo> {
     const existing = this.require(id)
     const { name, baseUrl } = this.validateDraft(draft, id)
     const next = { ...existing, name, baseUrl }
@@ -141,7 +167,7 @@ export class HermesConnectionService extends EventEmitter {
     return this.info(next)
   }
 
-  async remove(id: string): Promise<void> {
+  private async removeNow(id: string): Promise<void> {
     this.require(id)
     this.signIns.get(id)?.abort()
     this.revoke(id)
@@ -175,27 +201,27 @@ export class HermesConnectionService extends EventEmitter {
     this.patchRuntime(id, { state: 'signing-in', lastError: null })
     try {
       const tokens = await runNativeSignIn(connection.baseUrl, { openExternal: this.deps.openExternal, fetchImpl: this.deps.fetchImpl }, controller.signal)
-      // Commit only if this attempt still owns the connection: it was not
-      // cancelled or superseded, and the connection still exists at the URL
-      // the tokens were issued for (review a #7).
-      const owner = this.connections.find((entry) => entry.id === id)
-      if (controller.signal.aborted || this.signIns.get(id) !== controller || owner?.baseUrl !== connection.baseUrl) {
-        throw new SignInCancelledError()
-      }
+      // This attempt owns the connection while it was not cancelled or
+      // superseded (Cancel, Sign out, another sign-in, a URL edit, Remove all
+      // abort it) and the connection still exists at the URL the tokens were
+      // issued for (review a #7). Checked now AND when the queued write runs.
+      const owns = () =>
+        !controller.signal.aborted &&
+        this.signIns.get(id) === controller &&
+        this.connections.find((entry) => entry.id === id)?.baseUrl === connection.baseUrl
+      if (!owns()) throw new SignInCancelledError()
       // A fresh pair: the old broker (and anything it was refreshing) is
-      // stale. Revoke BEFORE the write so its failing refresh cannot delete
-      // the new pair (round-1 review c1 suspicion).
+      // stale, so it can no longer write or delete (round-1 review c1).
       this.revoke(id)
-      await this.tokens.set(id, connection.baseUrl, tokens)
-      // Remove or a URL edit can run during that write; their delete may land
-      // first. Re-check and undo ours, so no blob outlives its connection.
-      const stillOwner = this.connections.find((entry) => entry.id === id)
-      if (controller.signal.aborted || this.signIns.get(id) !== controller || stillOwner?.baseUrl !== connection.baseUrl) {
-        await this.tokens.delete(id)
-        throw new SignInCancelledError()
-      }
+      if (!(await this.tokens.set(id, connection.baseUrl, tokens, owns))) throw new SignInCancelledError()
       this.patchRuntime(id, { state: 'ready', identity: { userId: tokens.userId, provider: tokens.provider }, lastError: null })
     } catch (error) {
+      // A superseded attempt publishes nothing: the newer sign-in, Sign out,
+      // edit or removal that replaced it owns the state now (round-2 c2 #2).
+      if (this.signIns.get(id) !== controller) {
+        if (!(error instanceof SignInCancelledError)) throw error
+        return this.info(connection)
+      }
       const tokens = await this.tokens.get(id, connection.baseUrl).catch(() => null)
       this.patchRuntime(id, {
         state: tokens ? 'ready' : 'signed-out',
@@ -216,7 +242,9 @@ export class HermesConnectionService extends EventEmitter {
     this.require(id)
     // Hermes' bearer tokens have no revoke endpoint for native clients; the
     // password provider's are stateless. Forgetting them locally is what
-    // signing out can do.
+    // signing out can do. A sign-in still exchanging its code must not land
+    // after this (round-2 review c2 #3).
+    this.signIns.get(id)?.abort()
     this.revoke(id)
     this.disconnect(id, 'signed-out')
     await this.tokens.delete(id)
