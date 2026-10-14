@@ -26,6 +26,9 @@ vi.mock('@renderer/features/hermes-chat/useHermesConnections', () => ({ useHerme
 // (index sync over IPC, persistence to main) are not what it is about.
 vi.mock('@renderer/features/sidekick/state/useSidekickIndexSync', () => ({ useSidekickIndexSync: () => {} }))
 vi.mock('@renderer/features/sidekick/actions/useSidekickPersistence', () => ({ useSidekickPersistence: () => {} }))
+// The real confirm needs the ConfirmHost; what these tests own is WHO asks.
+const confirmRemove = vi.hoisted(() => vi.fn(async (_actions: unknown, _sidekickId: string, _toast: unknown) => undefined))
+vi.mock('@renderer/features/sidekick/ui/confirmRemoveSidekick', () => ({ confirmRemoveSidekick: confirmRemove }))
 const surfaceDeps = vi.hoisted(() => ({ workspace: null as unknown, actions: null as unknown }))
 vi.mock('@renderer/workspace/WorkspaceContext', () => ({ useWorkspaceContext: () => surfaceDeps.workspace }))
 vi.mock('@renderer/features/sidekick/actions/useSidekickActions', async importOriginal => ({
@@ -270,5 +273,18 @@ describe('Sidekick Spotlight (#1493 follow-up)', () => {
     expect(useAppStore.getState().keyboardRegion).toBe('workspace')
     act(() => { useAppStore.getState().closeSettingsPage() })
     expect(useAppStore.getState().keyboardRegion).toBe('sidekick')
+  })
+  it('runs a ⌘W remove request through the confirm, once, and clears it', () => {
+    // close-pane on a sidekick target posts the request (paneCommands); the
+    // surface owns the main-side removal.
+    useSidekickIndexStore.getState().accept(view([summary('this-window')]))
+    surfaceDeps.workspace = workspaceWith({ sk: { kind: 'claude', cwd: HOME, sidekickId: ID } })
+    surfaceDeps.actions = actionsWith(vi.fn())
+    confirmRemove.mockClear()
+    render(<SidekickPanelSurface />)
+    act(() => { useAppStore.getState().requestSidekickRemove(ID) })
+    expect(confirmRemove).toHaveBeenCalledTimes(1)
+    expect(confirmRemove.mock.calls[0]?.[1]).toBe(ID)
+    expect(useAppStore.getState().sidekickRemoveRequest).toBeNull()
   })
 })

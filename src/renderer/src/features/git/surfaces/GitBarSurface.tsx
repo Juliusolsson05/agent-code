@@ -1,7 +1,7 @@
 import { GitBar } from '@renderer/features/git/ui/GitBar'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
-import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import { commandTargetSessionId, useCommandTargetInputs } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
 // Side panel (#494): conditionally MOUNTED (not open-prop) — exactly the
 // `{gitBarOpen && <GitBar/>}` semantics App.tsx had. Renders inside the
@@ -11,6 +11,8 @@ export function GitBarSurface() {
   const open = useAppStore(state => state.gitBarOpen)
   const toggle = useAppStore(state => state.toggleGitBar)
   if (!open) return null
+  // Follows the keyboard into and out of the Sidekick (useCommandTargetInputs WHY).
+  useCommandTargetInputs()
   const targetId = commandTargetSessionId(workspace)
   return (
     <GitBar

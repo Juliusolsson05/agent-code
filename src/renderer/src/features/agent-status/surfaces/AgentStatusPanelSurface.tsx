@@ -1,7 +1,7 @@
 import { AgentStatusPanel } from '@renderer/features/agent-status/ui/AgentStatusPanel'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
-import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import { commandTargetSessionId, useCommandTargetInputs } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
 export function AgentStatusPanelSurface() {
   const workspace = useWorkspaceContext()
@@ -10,6 +10,8 @@ export function AgentStatusPanelSurface() {
   if (!open) return null
   // App.tsx's guard was `agentStatusPanelOpen && commandTargetId` — no
   // target session means no panel, not an empty panel.
+  // Follows the keyboard into and out of the Sidekick (useCommandTargetInputs WHY).
+  useCommandTargetInputs()
   const targetId = commandTargetSessionId(workspace)
   if (!targetId) return null
   return <AgentStatusPanel sessionId={targetId} workspace={workspace} onClose={close} />

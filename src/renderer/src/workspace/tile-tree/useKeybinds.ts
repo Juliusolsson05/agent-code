@@ -294,6 +294,27 @@ export const SIDEKICK_REGION_COMMAND_IDS: ReadonlySet<string> = new Set([
   // Spotlight works on the sidekick too (#1493 follow-up): the command itself
   // decides which Spotlight the chord means (spotlightCommands.ts).
   'toggle-spotlight',
+  // Every chord a lane agent answers to (#1493 follow-up, "the sidekick must
+  // expose every feature a lane does"). Each acts on the COMMAND TARGET, which
+  // is the sidekick while the keyboard is here (commandTargetSessionIdForState
+  // answers the Sidekick first), so they pass the same visible-owner test as
+  // Spotlight's Tail and Jump Latest. Palette-only agent commands (Copy
+  // Assistant Message, Copy Code Block, Rewind, Switch Provider, Set Title,
+  // MCP Servers…) need no entry: the palette is already admitted.
+  //
+  // Deliberately NOT here: lane/layout grammar (all 'dispatch' context),
+  // creation chords (⌘N, ⌥D, ⌥C… spawn into a LANE via
+  // resolveDispatchSpawnTarget), Close Tab ⌘⇧W, Reader ⌥R, Browser Pocket
+  // ⌘⇧B, Resume ⌘⇧R and Goal Loop ⌘⇧G — each refuses or means a lane.
+  'close-pane',
+  'reload-agent',
+  'soft-reload-agent',
+  'set-agent-view-mode',
+  'prompt-template',
+  'view-prompts',
+  'toggle-tail',
+  'jump-latest-message',
+  'toggle-debug-panel',
 ])
 
 /** Chord -> candidate commands, built once per override change. */
@@ -799,11 +820,17 @@ export function useKeybinds(
       // are active (shouldn't happen — picker is feed-only — but the
       // ordering keeps the intent local).
       const focusedSessionId = commandTargetSessionId(workspace)
+      // A sidekick target is drawn in the Sidekick column, which stays on
+      // screen beside a lane Spotlight or Reader (#1493 follow-up): those
+      // takeovers hide the LANES, not it. Only Settings covers the Sidekick.
+      // Without this, Copy Assistant / Copy Code Block navigation in the
+      // Sidekick died whenever a lane Spotlight happened to be open.
+      const focusedIsSidekick = focusedSessionId !== null
+        && workspace.state.sessions[focusedSessionId]?.sidekickId !== undefined
       const renderedPickerSurfaceVisible = focusedSessionId
         ? renderedAgentSurfaceIsVisible(workspace, agentViewMode, focusedSessionId) &&
-          !workspace.spotlight &&
-          workspace.readerMode === null &&
-          !settingsPageOpen
+          !settingsPageOpen &&
+          (focusedIsSidekick || (!workspace.spotlight && workspace.readerMode === null))
         : false
       const picker = focusedSessionId ? workspace.runtimes[focusedSessionId]?.assistantPicker : null
       if (picker && focusedSessionId && renderedPickerSurfaceVisible) {
@@ -893,6 +920,38 @@ export function useKeybinds(
         // Other keys fall through, same as the assistant picker.
       }
 
+      // The goal loop overlay is not a hold gesture, so it does not share the
+      // TLDR hold path — but it shares that path's editor rule, and for
+      // the same reason: Monaco owns Cmd+Shift+G as Find Previous exactly as it
+      // owns Cmd+G as Find Next and Cmd+L as Select Line (#1045 review
+      // reproduced the collision — the overlay latched on top of Monaco's find,
+      // and the latch gate then swallowed every keystroke until Escape).
+      // Yielding means returning WITHOUT preventDefault, so the editor's own
+      // handler still runs.
+      const editorOwnsRoutedCommand = (commandId: string | null): boolean =>
+        commandId === 'goal-loop-preview'
+        && (fullscreenEditorOwnsWorkspace || (eventElement?.closest(MONACO_TARGET_SELECTOR) ?? null) !== null)
+
+      const handleTldrHold = (commandId: string | null): boolean => {
+        // Goal (#936) shares TLDR's synchronous hold path, including the
+        // Spotlight admission below and the editor yield: Monaco owns Cmd+G as
+        // Find Next exactly as it owns Cmd+L as Select Line.
+        const preview = commandId === 'tldr-preview' ? 'tldr' : commandId === 'goal-preview' ? 'goal' : null
+        if (!preview) return false
+        // The editor owns Select Line, including after a rebind. Both ordinary
+        // panes and Spotlight must start synchronously: queueing the palette
+        // toggle could reopen the preview after keyup, leaving it latched.
+        if (!editorOwnsTarget && !fullscreenEditorOwnsWorkspace) {
+          e.preventDefault()
+          e.stopPropagation()
+          tldrHold.start(e, preview)
+        }
+        return true
+      }
+
+      // (Both helpers sit above the Sidekick gate so it can share them: the
+      // Sidekick's TLDR/Goal peeks must HOLD, not latch — #1493 follow-up.)
+
       // The Sidekick panel owns the keyboard (#1493, review round 1 F1). Every
       // routed command below targets the WORKSPACE's focused pane or layout —
       // ⌘W would close the lane agent the user is not looking at, ⌥J would
@@ -925,7 +984,24 @@ export function useKeybinds(
           appState.setSidekickSpotlight(false)
           return
         }
-        const sidekickCommandId = routedCommandForEvent(e, bindingIndex, GLOBAL_CONTEXT_ONLY)
+        // The Sidekick renders a real TileLeaf, so — like Spotlight — its
+        // visible feed keeps the feed-scoped bindings (End = Jump to Latest)
+        // when the user is not typing. 'dispatch' is never admitted: those
+        // are the lane grammar, and the lanes are not what is in front of
+        // the keyboard.
+        const sidekickContexts = focusedSessionId
+          && focusedIsSidekick
+          && renderedAgentSurfaceIsVisible(workspace, agentViewMode, focusedSessionId)
+          && !isTextEditingTarget(e.target)
+          ? GLOBAL_AND_FEED_CONTEXTS
+          : GLOBAL_CONTEXT_ONLY
+        const sidekickCommandId = routedCommandForEvent(e, bindingIndex, sidekickContexts, {
+          textEditingTarget: isTextEditingTarget(e.target),
+        })
+        // TLDR (⌘L) and Goal (⌘G) are hold gestures over the sidekick's own
+        // pane, the same synchronous path a lane and Spotlight use.
+        if (handleTldrHold(sidekickCommandId)) return
+        if (editorOwnsRoutedCommand(sidekickCommandId)) return
         if (sidekickCommandId && SIDEKICK_REGION_COMMAND_IDS.has(sidekickCommandId)) {
           e.preventDefault()
           requestCommandInvocation(sidekickCommandId, 'keybinding')
@@ -952,35 +1028,6 @@ export function useKeybinds(
         e.preventDefault()
         closeSettingsPage()
         return
-      }
-
-      // The goal loop overlay is not a hold gesture, so it does not share the
-      // TLDR hold path below — but it shares that path's editor rule, and for
-      // the same reason: Monaco owns Cmd+Shift+G as Find Previous exactly as it
-      // owns Cmd+G as Find Next and Cmd+L as Select Line (#1045 review
-      // reproduced the collision — the overlay latched on top of Monaco's find,
-      // and the latch gate then swallowed every keystroke until Escape).
-      // Yielding means returning WITHOUT preventDefault, so the editor's own
-      // handler still runs.
-      const editorOwnsRoutedCommand = (commandId: string | null): boolean =>
-        commandId === 'goal-loop-preview'
-        && (fullscreenEditorOwnsWorkspace || (eventElement?.closest(MONACO_TARGET_SELECTOR) ?? null) !== null)
-
-      const handleTldrHold = (commandId: string | null): boolean => {
-        // Goal (#936) shares TLDR's synchronous hold path, including the
-        // Spotlight admission below and the editor yield: Monaco owns Cmd+G as
-        // Find Next exactly as it owns Cmd+L as Select Line.
-        const preview = commandId === 'tldr-preview' ? 'tldr' : commandId === 'goal-preview' ? 'goal' : null
-        if (!preview) return false
-        // The editor owns Select Line, including after a rebind. Both ordinary
-        // panes and Spotlight must start synchronously: queueing the palette
-        // toggle could reopen the preview after keyup, leaving it latched.
-        if (!editorOwnsTarget && !fullscreenEditorOwnsWorkspace) {
-          e.preventDefault()
-          e.stopPropagation()
-          tldrHold.start(e, preview)
-        }
-        return true
       }
 
       // Reader and Spotlight are inline full-screen takeovers rather than

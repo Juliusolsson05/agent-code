@@ -4,7 +4,7 @@ import { defineCapability, placementSchema, workspaceObservationSchema } from '@
 import { useAppStore } from '@renderer/app-state/store'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
-import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import { commandTargetSessionIdForState, WORKSPACE_KEYBOARD_FLAGS } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { dispatchRowTitle } from '@renderer/workspace/dispatch/rowTitle'
 import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
@@ -53,7 +53,9 @@ export function observeWorkspace(getWorkspace: () => Pick<Workspace, 'restoreSta
     for (const rows of placements.values()) for (const placement of rows) placement.visible = false
     add(takeover.focusedSessionId, { kind: reader ? 'reader' : 'spotlight', tabId: takeover.tabId, visible: true })
   }
-  const focusedSessionId = takeover?.focusedSessionId ?? commandTargetSessionIdForState(state)
+  // Lane semantics on purpose: sidekicks are filtered out of this projection
+  // (#1493), so the operator is never told a sidekick is focused.
+  const focusedSessionId = takeover?.focusedSessionId ?? commandTargetSessionIdForState(state, undefined, WORKSPACE_KEYBOARD_FLAGS)
   const sessions = state.sessions
   const dispatchRows = buildVisibleDispatchRows(state)
   const identity = (sessionId: string, meta: (typeof sessions)[string]) => {
