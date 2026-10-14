@@ -782,6 +782,26 @@ This would get its own issue + plan.
 - 2026-10-14: L16 fixed (#1499). Package b6c610e pushed: lane mode, slash routes, typed errors, events (tests pending Stage 0).
 - 2026-10-14: plan + Tailscale plan committed; issues #1495–#1498 opened; Stage 0 agent started; L1/L2/L3 package code written, plus `HermesRest`, `lanes.ts` and `laneBusy.ts`.
 
+### Plan vs built (2026-10-14, before the PR)
+
+| Item | Verdict | Note |
+|---|---|---|
+| D1 start errors say why | MATCH | 8 curated stages, journaled stage + code, B1 fixed (#1495); first-pane test on S25 |
+| D2 open the Telegram thread | DRIFT | No separate "Open Hermes Telegram Thread" command. Per Decision 3, **New Hermes** itself follows the thread when one exists, and **New Separate Hermes Chat** opts out. Same reach, one fewer command. |
+| D3 phone messages appear | MATCH | `sessions.changed` (214–854 ms) → refresh, plus a 30 s backstop |
+| D4 hold while a phone turn runs | MATCH | Held card with Send now / Cancel. Busy rule refined by Stage 0 (lease wait). |
+| D5 follow /new and compression | MATCH | lane-moved → reset as a new conversation + divider line; in-place compression = history rewrite |
+| D6 "not on your phone" notice | DRIFT | A one-time chat line per pane lifetime, not a collapsible chip (R5) |
+| D7 slash picker, /restart | MATCH | Catalog-driven picker (S17), refusals, /restart with confirmation and status polling |
+| D8 Copy Assistant | DRIFT (blocked) | C0 shows it works on committed rows; the streaming-reply copy is not built. Waiting for the owner's repro (U6). |
+| D9 cards answered elsewhere close | MATCH | S22 |
+| D10 tests | MATCH, with a boundary | v0.22.0 corpus, lane T1–T8, first-pane test; live-matrix.yml written but runs only on GitHub after the package PR |
+| Stage B events | MATCH | notification / review / subagent / tool-risk / connection / bg+btw |
+| Stage F deployment smoke | MISSING | The opt-in VPS smoke was not built; the VPS probe (L14) is blocked on credentials living in safeStorage. Follow-up. |
+| "Change Telegram Thread…" | MISSING | Deferred (R5); follow-up issue |
+| Tailscale phase 1 | MATCH | #1498 |
+| Added scope (owner reports) | ADDED | #1499 performance (typing, sending, Spotlight) and the debug-bundle defects L17–L22 |
+
 ### Rulings
 
 - **R1: all §2 decisions default, UNCONFIRMED.** The owner asked to build without answering them. Each default is restated in the PR body under "UNCONFIRMED product calls". The cost if wrong is a small UI change per decision; none of them changes the data model.
