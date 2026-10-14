@@ -12,6 +12,9 @@ import { discoverCodexSkillRoots } from '@providers/codex/runtime/skillDiscovery
 import { discoverOpencodeSkillRoots } from '@providers/opencode/runtime/skillDiscovery'
 import { opencodeTranscriptFile, parseOpencodeTranscriptFile } from 'opencode-terminal-headless'
 import { readOpencodeSessionInfo } from '@providers/opencode/runtime/opencodeDatabase'
+import { HermesSession } from '@providers/hermes/runtime/hermesSession.js'
+import { deliverHermesPrompt } from '@providers/hermes/runtime/promptDelivery.js'
+import { discoverHermesSkillRoots } from '@providers/hermes/runtime/skillDiscovery.js'
 import { PiSession } from '@providers/pi/runtime/piSession.js'
 import { deliverPiPrompt } from '@providers/pi/runtime/promptDelivery.js'
 import { discoverPiSkillRoots } from '@providers/pi/runtime/skillDiscovery.js'
@@ -206,6 +209,25 @@ const piMain: MainProviderConfig = {
   deliverPrompt: deliverPiPrompt,
 }
 
+const hermesMain: MainProviderConfig = {
+  id: 'hermes',
+  name: 'Hermes',
+  discoverSkillRoots: discoverHermesSkillRoots,
+  personalAgentSkills: {
+    supported: false,
+    reason: 'Hermes runs on your server and manages its own skills there; skills installed on this Mac never reach it.',
+  },
+  // One runtime: a chat over the network. There is no terminal runtime to
+  // offer (CHAT_SURFACE_PROVIDER_KINDS pins the pane to the chat surface).
+  createSession: (opts) => new HermesSession(opts),
+  // No local project directory: the agent's working directory is on the VPS.
+  // Consumers only display this; the pane's local cwd is harmless metadata.
+  getProjectDir: async (cwd) => cwd,
+  // The conversation lives in the VPS's state.db, not in a local file.
+  resolveTranscriptPath: async () => null,
+  deliverPrompt: deliverHermesPrompt,
+}
+
 // Typed as Record<AgentProviderKind, …> (not Record<string, …>) so that
 // adding a kind to AGENT_PROVIDER_KINDS without registering a config here
 // is a COMPILE error, not a runtime "Unknown provider" surprise. That is
@@ -216,6 +238,7 @@ const mainProviders: Record<AgentProviderKind, MainProviderConfig> = {
   opencode: opencodeMain,
   grok: grokMain,
   pi: piMain,
+  hermes: hermesMain,
 }
 
 // Accepts a bare string (callers pass IPC args / persisted `kind` values)

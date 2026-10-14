@@ -314,6 +314,64 @@ export type GrokConditionSnapshot = {
   ts: number
 }
 
+// Hermes conditions (#1482): the four server→client requests a remote Hermes
+// agent blocks on (tui_gateway/contracts/server_requests.py), one record per
+// kind showing the OLDEST open request of that kind. Every action is a
+// `custom` action answered over the WebSocket (HermesSession.resolveCondition
+// → HermesHeadless.answerRequest), never a keystroke. The states carry what
+// the cards render and the request id the answer must name; they NEVER carry
+// an answer (a sudo password or secret the user typed travels once, main →
+// Hermes, and is not kept anywhere).
+
+export type HermesApprovalConditionState = {
+  visible: boolean
+  requestId: string
+  /** The command, already redacted server-side by Hermes. */
+  command: string
+  description: string
+  /** Hermes' offered choices, in its order (`once` | `session` | `always` | `deny`). */
+  choices: string[]
+  /** Open requests of this kind behind this one (shown as "+N more"). */
+  queued: number
+}
+
+export type HermesClarifyQuestion = { qid: string; question: string; choices: string[]; multiSelect: boolean }
+
+export type HermesClarifyConditionState = {
+  visible: boolean
+  requestId: string
+  questions: HermesClarifyQuestion[]
+  queued: number
+}
+
+export type HermesValueConditionState = {
+  visible: boolean
+  requestId: string
+  /** sudo: the command needing a password. secret: the prompt text. */
+  prompt: string
+  /** secret only: the environment variable Hermes will store the value in on the server. */
+  envVar: string | null
+  queued: number
+}
+
+export type HermesCondition =
+  | { kind: 'hermes.approval'; state: HermesApprovalConditionState; actions: ConditionAction[] }
+  | { kind: 'hermes.clarify'; state: HermesClarifyConditionState; actions: ConditionAction[] }
+  | { kind: 'hermes.sudo'; state: HermesValueConditionState; actions: ConditionAction[] }
+  | { kind: 'hermes.secret'; state: HermesValueConditionState; actions: ConditionAction[] }
+
+export type HermesConditionKind = HermesCondition['kind']
+
+export type HermesConditionMap = Partial<{
+  [K in HermesConditionKind]: Extract<HermesCondition, { kind: K }>
+}>
+
+export type HermesConditionSnapshot = {
+  provider: 'hermes'
+  conditions: HermesConditionMap
+  ts: number
+}
+
 export type CodexConditionKind = CodexCondition['kind']
 
 export type CodexConditionMap = Partial<{

@@ -110,6 +110,9 @@ export type SessionRecoverOptions = {
    *  Used only if recovery has to START a backend; an adopted one keeps the
    *  servers it was launched with. */
   userMcpOverrides?: Record<string, boolean>
+  /** Remote providers (Hermes): the connection, needed only if recovery has
+   *  to START a backend (an adopted live one already holds it). */
+  remoteConnectionId?: string
   /**
    * Opaque renderer-generated generation for this recovery admission.
    *
@@ -790,6 +793,13 @@ export type SessionOptions = {
    * ownership boundary ignore it.
    */
   beforeResumeOwnershipAcquire?: () => Promise<void>
+  /**
+   * Remote providers only (REMOTE_PROVIDER_KINDS, Hermes #1482): which
+   * configured connection (Settings → Hermes) this pane talks to. Provider
+   * neutral on purpose: it names a main-owned connection record, never a URL
+   * or a credential, so it is safe to persist and to carry over IPC.
+   */
+  remoteConnectionId?: string
 }
 
 export type SessionHistoryChunk = {

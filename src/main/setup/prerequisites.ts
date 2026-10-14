@@ -8,7 +8,7 @@ import { isBundledArchiveAvailable } from '@main/setup/runtimeTools.js'
 import type { BundledToolId } from '@main/setup/runtimeTools.js'
 import { loadSetupState, updateToolPaths } from '@main/setup/setupState.js'
 import { listProviderSetupDescriptors } from '@providers/registry.setup.js'
-import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind.js'
+import { LOCAL_PROVIDER_KINDS } from '@shared/types/providerKind.js'
 import { refreshToolchainFromState } from '@main/setup/toolchain.js'
 import { deriveReadiness } from '@shared/setup/readiness.js'
 
@@ -89,8 +89,9 @@ const TOOL_META: Record<SetupToolId, Omit<SetupToolStatus, 'found' | 'path'>> = 
 }
 
 // Display/check order: brew first (it unlocks installs), then every
-// registered provider in AGENT_PROVIDER_KINDS order, then the rest.
-const CHECK_ORDER: SetupToolId[] = ['brew', ...AGENT_PROVIDER_KINDS, 'git', 'mitmdump']
+// LOCAL provider in AGENT_PROVIDER_KINDS order, then the rest. Remote
+// providers (Hermes) have no binary to find; see SetupToolId.
+const CHECK_ORDER: SetupToolId[] = ['brew', ...LOCAL_PROVIDER_KINDS, 'git', 'mitmdump']
 
 export async function checkPrerequisites(): Promise<SetupCheckResult> {
   const state = await loadSetupState()

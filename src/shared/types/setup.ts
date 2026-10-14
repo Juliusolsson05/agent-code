@@ -1,4 +1,4 @@
-import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import type { AgentProviderKind, LocalProviderKind } from '@shared/types/providerKind.js'
 
 // External tools whose presence the setup gate inspects. Bundled
 // helpers like mitmdump (#119) and tmux (#120) are deliberately NOT
@@ -16,11 +16,14 @@ import type { AgentProviderKind } from '@shared/types/providerKind.js'
 // real one. Registering a provider now automatically makes it a
 // setup-gate tool; its metadata comes from
 // @providers/registry.setup.ts.
+// Remote providers (Hermes) are NOT setup tools: there is nothing to install
+// or find on PATH; their readiness is a signed-in connection (Settings →
+// Hermes), which providerEnablement folds into "detected" separately.
 export type SetupToolId =
   | 'brew'
   | 'git'
   | 'mitmdump'
-  | AgentProviderKind
+  | LocalProviderKind
 
 /**
  * Where a found tool comes from. 'bundled' = Agent Code ships this

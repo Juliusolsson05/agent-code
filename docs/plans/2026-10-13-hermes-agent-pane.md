@@ -548,7 +548,7 @@ Each item goes to a follow-up issue filed at PR time:
   - `src/reconcile/*`.
   - Hands on: the channel event stream.
   - Verified by: the differential and requests tests.
-- [ ] **7. Stage 5: facade + package PR.**
+- [x] **7. Stage 5: facade + package PR.** (hermes-headless#1; review A fixed in `9427867`; review b re-run on Pi)
   - `HermesHeadless`; README; package `npm run check` green.
   - Open the package PR. Do not merge until the app PR is ready, mirroring
     Pi #1140.
@@ -584,6 +584,22 @@ This plan IS the loop ledger. Every pass: re-read this file and `git log`, conti
 - Ruling (2026-10-13): Stage 0 records against the REAL `hermes serve` from `vendor/hermes-agent-src` (v0.21.7), run locally in an isolated `HERMES_HOME` with the auth gate ON (password provider), talking to a scripted OpenAI-compatible model server (`hermes-headless/testing/scripted-model/`). Why: no VPS URL was given, and the wire between Agent Code and Hermes is what we must record; a scripted model makes every turn (tools, approvals, clarify, sudo, secret, errors) deterministic and repeatable, so the same harness doubles as the live integration suite. Cost if wrong: VPS-only behaviour (TLS, reverse-proxy path prefixes, network latency) and the Nous OAuth branch (S2) stay unrecorded. They are reported as UNVERIFIED and re-recorded when the owner provides a VPS.
 - Ruling (2026-10-13): "heavy integration tests" means three tiers. (1) Recorded-corpus system tests that run in CI with no Python. (2) A live tier (`npm run test:live` in the package and an app live test) that boots the real `hermes serve` plus the scripted model and drives `HermesHeadless` / `HermesSession` end to end. (3) Differential tests: a live fold compared with a resume fold of the same conversation. Tier 2 is not in CI: it needs a Python and Hermes install.
 - Ruling (2026-10-13): the Hermes source is a reference checkout under `vendor/` (not `third_party/`). The owner asked for "a third party vendor"; repo CLAUDE.md reserves `third_party/` for shipped runtime artifacts with manifests, and nothing of Hermes ships in Agent Code. It is a shallow submodule at the release commit `71d34bad` (1.25 GB full history).
+
+## Review (2026-10-13, package, one round)
+
+Reviewer a: Codex (correctness/security), report `temp/hermes-loop/review-package/report-a.md`, verdict FIX-BEFORE-MERGE.
+Reviewer b: OpenCode failed at once (provider: "Insufficient balance"); replaced by Pi.
+
+| Finding (review A) | Verdict | Disposition |
+|---|---|---|
+| 1. Replay before activate leaves a gap (text + approval lost) | valid (probed on S8/S10) | fixed in hermes-headless `9427867`: `RpcConnection.acquire` holds every seq'd event across attach + ring read; test `HermesHeadless.system.test.ts` #1 |
+| 2. Delta before the resume response overwritten by the snapshot | valid (probed on S9) | fixed `9427867`: running turn rebuilt from the ring's `message.start`, snapshot inflight not seeded; test #2 |
+| 3. Stale snapshot `open_requests` resurrects a cancelled card | valid | fixed `9427867`: open requests only from the ring, surfaced before parked events release; test #3 (both cases) |
+| 4. Accepted-but-not-started prompt window redirects | valid (S8 1.3 s, S16 6.5 s windows) | fixed `9427867`: `pendingTurns` counted from send until settle; test #4 |
+| 5. Another session's `session.reclaimed` wipes cards | valid (source-derived probe; 0 in corpus) | fixed `9427867`: payload-identity fence + re-attach by stored id; test #5 |
+| 6. `stop()` during a pending dial leaves a live socket/session | valid | fixed `9427867`: connect generation; test #6 |
+| Suspicion: history reply after `/new` commits old rows | overstated (reviewer: inline handlers are serial on the pinned backend) | kept a cheap runtime fence; its mutation survives by design (race unreachable on v0.21.7) |
+| 15 surviving mutations | valid as test gaps | facade + reconciler + auth tests added; every new guard and the redirect/verifier/provider mutations now fail tests (50 core/system tests); remaining survivor: the history fence above |
 
 ## Execution notes
 

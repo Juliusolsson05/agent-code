@@ -65,12 +65,14 @@ import {
   effectiveProviderRuntime,
   isAgentProviderKind,
   isAgentSessionKind,
+  isRemoteProviderKind,
   isSessionKind,
   isTerminalOnlyProviderKind,
 } from '@shared/types/providerKind.js'
 import type {
   AgentProviderKind,
   AgentProviderRuntime,
+  LocalProviderKind,
   SessionKind,
 } from '@shared/types/providerKind.js'
 import type { BuiltInMcpDomain, BuiltInMcpServerConfig } from '@mcp/shared/types.js'
@@ -402,6 +404,22 @@ class RecoveryCancelledError extends Error {
  * turn into `unknown` the day someone rewords the Setup hint. The message itself
  * is unchanged, because the renderer's spawn-error text reads it.
  */
+/**
+ * A remote provider (Hermes) spawned without a usable connection.
+ *
+ * WHY a typed error at spawn, mirroring ProviderCliNotFoundError: for a remote
+ * provider the connection IS what a CLI is for a local one. Failing here,
+ * before any session state exists, surfaces through session:spawn's reject as
+ * a sentence that names where to fix it, instead of a pane that opens and
+ * then sits disconnected.
+ */
+export class RemoteProviderNotConnectedError extends Error {
+  constructor(kind: string) {
+    super(`${kind} needs a connection. Add and sign in to one in Settings → Hermes.`)
+    this.name = 'RemoteProviderNotConnectedError'
+  }
+}
+
 export class ProviderCliNotFoundError extends Error {
   constructor(kind: string) {
     // Names a real place (#995): Setup opens from File › Setup… or the
@@ -3077,14 +3095,23 @@ export class SessionManager extends EventEmitter {
       // (Claude) the already-started mitmproxy leaked. Failing at create
       // time instead surfaces through session:spawn's reject, which the
       // renderer already renders via sessionSpawnErrorMessage.
-      let binary = getToolPath(kind, '')
-      if (!binary) {
+      // Remote providers (Hermes, #1482) run on the user's server: there is no
+      // CLI to resolve, and `cwd` below is local pane metadata the session
+      // never sends anywhere (REMOTE_PROVIDER_KINDS). What a remote spawn
+      // needs instead is a connection, checked here for the same reason the
+      // CLI is: fail before any session state exists.
+      const remote = isRemoteProviderKind(kind)
+      if (remote && !options.remoteConnectionId) {
+        throw new RemoteProviderNotConnectedError(kind)
+      }
+      let binary = remote ? undefined : getToolPath(kind as LocalProviderKind, '')
+      if (!remote && !binary) {
         // One late re-resolve before giving up: launch-from-Finder rescue
         // for the user who installed the CLI after the setup gate ran.
         // Persist a hit through the same updateToolPaths →
         // refreshToolchainFromState pair the setup gate uses so the next
         // spawn takes the fast cache path and PATH augmentation applies.
-        const resolved = await resolveToolPath(kind)
+        const resolved = await resolveToolPath(kind as LocalProviderKind)
         this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
         if (resolved) {
           await updateToolPaths({ [kind]: resolved })
@@ -3094,7 +3121,7 @@ export class SessionManager extends EventEmitter {
           binary = resolved
         }
       }
-      if (!binary) {
+      if (!remote && !binary) {
         throw new ProviderCliNotFoundError(kind)
       }
       // The size this process would have had with no raw view attached. When a
@@ -3139,10 +3166,14 @@ export class SessionManager extends EventEmitter {
         }
         mcpRegistered = true
       }
-      const { servers: userMcpServers, codexShellPolicy: userMcpCodexShellPolicy } =
-        await this.resolveUserMcpServers(sessionId, kind, options)
+      // A remote agent cannot reach anything launched or deployed on this Mac:
+      // no user MCP server (and its secrets must not be resolved for nothing),
+      // no skill reconcile (Hermes' skills live on its host).
+      const { servers: userMcpServers, codexShellPolicy: userMcpCodexShellPolicy } = remote
+        ? { servers: [], codexShellPolicy: undefined }
+        : await this.resolveUserMcpServers(sessionId, kind, options)
       this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
-      if (this.beforeAgentSessionStart) {
+      if (this.beforeAgentSessionStart && !remote) {
         const unavailableSkills = await this.runPreSpawnSkillReconcile(sessionId, options)
         this.throwIfSpawnCancelled(recoveryClaim, codexReplacementHandoff)
         this.reportSkillsUnavailable(sessionId, unavailableSkills)
@@ -3200,6 +3231,7 @@ export class SessionManager extends EventEmitter {
         builtInMcpServers,
         userMcpServers,
         ...(userMcpCodexShellPolicy ? { userMcpCodexShellPolicy } : {}),
+        ...(remote ? { remoteConnectionId: options.remoteConnectionId } : {}),
         ...(kind === 'codex' && codexReplacementHandoff
           ? {
               // WHY the provider receives execution timing, not policy: Codex

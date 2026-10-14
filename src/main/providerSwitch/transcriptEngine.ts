@@ -7,7 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 
 import { opencodeTranscriptFile } from 'opencode-terminal-headless'
 
-import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import { isLocalProviderKind, type AgentProviderKind } from '@shared/types/providerKind.js'
 import { unwrapClaudePastedContent } from '@shared/claude/pastedContent.js'
 import { attachmentOnlyLabel, rewindAttachments } from '@main/providerSwitch/rewindAttachments.js'
 import type { RewindAttachment } from '@main/providerSwitch/rewindAttachments.js'
@@ -579,6 +579,10 @@ export function getHostTranscriptAdapter(provider: AgentProviderKind): HostTrans
 }
 
 async function installedVersion(provider: AgentProviderKind): Promise<string> {
+  // Only providers with a transcript adapter reach here, and a remote
+  // provider (Hermes) has none: its featureCapabilities declare no switch,
+  // duplicate or rewind. The guard keeps the local-binary lookup typed.
+  if (!isLocalProviderKind(provider)) return '0.0.0-remote'
   const binary = getToolPath(provider, provider)
   const result = await readInstalledVersion(binary)
   // The wire field is required by both providers, but failure to probe a CLI

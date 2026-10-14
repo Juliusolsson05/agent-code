@@ -169,6 +169,21 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
     switchTargets: ['claude', 'codex', 'opencode', 'grok'],
     verifiedExternalResumeCommand: true,
   },
+  // Hermes (#1482, remote chat): only in-app resume. Reload Agent re-binds the
+  // pane to its conversation by stored id over `session.resume` (recorded and
+  // live-tested in hermes-headless). Everything transcript-shaped is off: the
+  // conversation lives in the VPS's state.db, there is no local file and no
+  // agent-transcript-parser codec (parser#5), so rewind, duplicate, prompt
+  // extraction and switching would have nothing to read or write. There is no
+  // CLI to hand a resume command for.
+  hermes: {
+    transcriptRewind: false,
+    transcriptDuplicate: false,
+    promptHistoryExtraction: false,
+    inAppResume: true,
+    switchTargets: [],
+    verifiedExternalResumeCommand: false,
+  },
 }
 
 /**

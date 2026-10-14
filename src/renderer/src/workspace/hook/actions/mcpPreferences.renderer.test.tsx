@@ -95,7 +95,7 @@ describe('global MCP preferences at actual provider replacement', () => {
   it('applies each provider its own built-in defaults (#1143)', async () => {
     const h = setup({ builtInMcpDomains: [], builtInMcpOverrides: {} })
     h.refs.defaultBuiltInMcpDomainsRef.current = {
-      claude: ['tldr'], codex: ['orchestration'], opencode: [], grok: [], pi: [],
+      claude: ['tldr'], codex: ['orchestration'], opencode: [], grok: [], pi: [], hermes: [],
     }
     await perform(() => h.hook.result.current.provider.reloadSessionAgent(h.focused()))
     // The fixture agent is Codex, so it gets Codex's column and not Claude's.
