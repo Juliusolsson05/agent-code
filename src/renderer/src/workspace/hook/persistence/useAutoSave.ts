@@ -195,6 +195,20 @@ export function useAutoSave(
             })
           }
         }
+        // Moves into this window (#1481), same rule: the source drops its rows
+        // on this call, so it must follow a committed save. A failed confirm
+        // leaves the move pending in main until its deadline, which hands the
+        // agent back to the source; that is the safe direction here too.
+        const pendingMoves = refs.pendingSessionMoveIdsRef.current
+        if (pendingMoves.length > 0) {
+          refs.pendingSessionMoveIdsRef.current = []
+          for (const moveId of pendingMoves) {
+            void window.api.confirmSessionMove(moveId).catch(err => {
+              // eslint-disable-next-line no-console
+              console.warn('[workspace] session move confirmation failed:', err)
+            })
+          }
+        }
         saveSpan.end({
           tabs: projects.length,
           sessions: Object.keys(persisted.sessions).length,
@@ -241,6 +255,7 @@ export function useAutoSave(
     refs.latestRuntimesRef,
     refs.latestStateRef,
     refs.pendingAdoptionWindowIdsRef,
+    refs.pendingSessionMoveIdsRef,
   ])
 
   // The retry callback must always execute the newest serializer closure, but

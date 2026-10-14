@@ -312,3 +312,35 @@ export function collectSessionIds(file: WorkspaceFile): Set<string> {
   }
   return ids
 }
+
+/**
+ * What a person needs to tell one window from another: its project titles and
+ * how many agents it holds, read from that window's last committed workspace.
+ *
+ * WHY this reads the opaque payload at all: every Agent Code window has the
+ * same BrowserWindow title, so "Window 2" alone names nothing the user can see.
+ * The move picker (#1481) needs a label that matches the screen. Like
+ * `collectSessionIds`, it reads only two well-known top-level fields and never
+ * interprets a row, so main still does not model the workspace.
+ *
+ * WHY the saved copy rather than asking the live renderer: it is at most one
+ * autosave (~400 ms) old, it costs no IPC round trip per window while a picker
+ * is opening, and a window that cannot answer still gets a label. Stale by one
+ * keystroke is fine for a label; it is never used to decide ownership.
+ */
+export function describeWindowWorkspace(
+  file: WorkspaceFile,
+  windowId: string,
+): { projectTitles: string[]; sessionCount: number } {
+  const record = file.windows.find(entry => entry.windowId === windowId)
+  if (!record || !isRecord(record.workspace)) return { projectTitles: [], sessionCount: 0 }
+  const sessions = record.workspace.sessions
+  const projects = record.workspace.projects
+  return {
+    // v3 writes `projects`; an older slice has none and simply gets no titles.
+    projectTitles: Array.isArray(projects)
+      ? projects.flatMap(project => (isRecord(project) && typeof project.title === 'string' ? [project.title] : []))
+      : [],
+    sessionCount: isRecord(sessions) ? Object.keys(sessions).length : 0,
+  }
+}

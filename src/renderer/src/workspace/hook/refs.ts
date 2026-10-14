@@ -70,6 +70,15 @@ export type WorkspaceRefs = {
    * this after a save actually commits.
    */
   pendingAdoptionWindowIdsRef: MutableRefObject<string[]>
+  /**
+   * Moves INTO this window (#1481) whose rows are merged in memory but not yet
+   * known to be on disk. Same discipline as `pendingAdoptionWindowIdsRef`, for
+   * the same reason: confirming a move makes the SOURCE window drop its rows,
+   * and until this window's save commits, the source's slice is the only
+   * durable record of those agents. `useAutoSave` drains it after a save
+   * actually commits.
+   */
+  pendingSessionMoveIdsRef: MutableRefObject<string[]>
 }
 
 export function useWorkspaceRefs(
@@ -116,6 +125,7 @@ export function useWorkspaceRefs(
   const undoStackRef = useRef(new UndoCloseStack())
   const bootstrapTimersRef = useRef<Map<SessionId, ReturnType<typeof setTimeout>>>(new Map())
   const pendingAdoptionWindowIdsRef = useRef<string[]>([])
+  const pendingSessionMoveIdsRef = useRef<string[]>([])
   const persistedFeedDebugIdRef = useRef<Record<SessionId, number>>({})
   const inFlightFeedDebugIdRef = useRef<Record<SessionId, number>>({})
   const paneToastTimers = useRef<Record<SessionId, ReturnType<typeof setTimeout>>>({})
@@ -192,6 +202,7 @@ export function useWorkspaceRefs(
     // flushes synchronously.
     saveTimerRef,
     pendingAdoptionWindowIdsRef,
+    pendingSessionMoveIdsRef,
 
     // Guard for the once-only bootstrap effect. Under React 18
     // StrictMode the effect runs twice; the ref makes the second

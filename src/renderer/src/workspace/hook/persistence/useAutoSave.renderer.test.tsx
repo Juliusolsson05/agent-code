@@ -278,6 +278,7 @@ describe('workspace autosave durability retry', () => {
       latestStateRef: ref(state), latestRuntimesRef: ref({ s: emptyRuntime() }),
       saveTimerRef: ref<ReturnType<typeof setTimeout> | null>(null),
       pendingAdoptionWindowIdsRef: ref<string[]>([]),
+      pendingSessionMoveIdsRef: ref<string[]>([]),
     } as unknown as WorkspaceRefs
     let failing = true
     const saveWorkspace = vi.fn(async () => { if (failing) throw ipcError })
@@ -321,6 +322,7 @@ describe('workspace autosave durability retry', () => {
       latestStateRef: ref(base), latestRuntimesRef: ref({ s: emptyRuntime() }),
       saveTimerRef: ref<ReturnType<typeof setTimeout> | null>(null),
       pendingAdoptionWindowIdsRef: ref<string[]>([]),
+      pendingSessionMoveIdsRef: ref<string[]>([]),
     } as unknown as WorkspaceRefs
     const saveWorkspace = vi.fn(async () => { throw new Error("Error invoking remote method 'workspace:save': Error: ENOSPC: no space left on device, write") })
     Object.defineProperty(window, 'api', { configurable: true, value: { saveWorkspace } })

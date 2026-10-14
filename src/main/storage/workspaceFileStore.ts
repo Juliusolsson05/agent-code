@@ -7,6 +7,7 @@ import { withReportingPublicationLock } from '@main/storage/reportingPublication
 import { sweepAbandonedScratch } from '@main/storage/scratchSweep.js'
 import {
   collectSessionIds,
+  describeWindowWorkspace,
   emptyWorkspaceFile,
   parseWorkspaceFile,
   readWindowWorkspaceJson,
@@ -187,6 +188,11 @@ export class WorkspaceFileStore {
   /** Union of every window's committed session ids. */
   sessionIds(): Set<string> {
     return collectSessionIds(this.file)
+  }
+
+  /** Picker label facts for one window (#1481); see describeWindowWorkspace. */
+  describeWindow(windowId: string): { projectTitles: string[]; sessionCount: number } {
+    return describeWindowWorkspace(this.file, windowId)
   }
 
   /**
