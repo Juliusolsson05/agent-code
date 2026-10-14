@@ -76,6 +76,9 @@ describe('HermesChatFeed pane controls', () => {
     const view = render(<Mounted runtime={{ ...emptyRuntime(), entries: rows }} controls={{ pickerSelectedUuid: assistant.uuid }} />)
     const selected = view.container.querySelectorAll('[aria-current="true"]')
     expect(selected).toHaveLength(1)
+    // With replies unboxed (#1505) the ring is the selection's only visible
+    // highlight; losing it would leave the picker invisible.
+    expect(selected[0]!.className).toContain('ring-accent')
     expect(selected[0]!.closest(`[data-entry-uuid="${assistant.uuid}"]`)).not.toBeNull()
   })
 

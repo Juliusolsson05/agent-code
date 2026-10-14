@@ -298,7 +298,7 @@ function ReasoningRow({ item }: { item: Extract<ChatItem, { kind: 'reasoning' }>
 function LazyDetails({ summary, children, className, closedClassName = '', openClassName = '', ...rest }: { summary: ReactNode; children: ReactNode; className: string; closedClassName?: string; openClassName?: string; 'data-chat-role': string; 'data-tool-status'?: string }) {
   const [open, setOpen] = useState(false)
   return (
-    <details className={`${className} ${open ? openClassName : closedClassName}`} {...rest} open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <details className={[className, open ? openClassName : closedClassName].filter(Boolean).join(' ')} {...rest} open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary className="flex cursor-pointer select-none items-center gap-1.5">{summary}</summary>
       {open && children}
     </details>
