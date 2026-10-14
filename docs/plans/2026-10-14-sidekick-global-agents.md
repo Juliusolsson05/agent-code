@@ -2,7 +2,7 @@
 
 Refs #1493.
 Branch `feat/sidekick-global-agent` · Worktree `.worktrees/sidekick-global-agent` · Base `origin/main` @ `d0c3df99` (the Hermes merge, fetched 2026-10-14)
-Status: **plan only, awaiting the owner's go.** The owner asked on 2026-10-14 for the plan as the first step ("the first step is writing a very, very long plan file"). The build starts on an explicit go, then runs as a full build to an open PR. Decisions 1–8 were presented with defaults and accepted in general terms ("Great. So let's actually start building this out"), but were not answered one by one. They ship at their defaults and stay listed as **UNCONFIRMED** here and in the PR.
+Status: **building** (owner, 2026-10-14: "good, build the full thing out using agent code conventions"). Full build to an open PR (#1494, draft until done), then one review round; no merge without the owner's word. Decisions 1–8 ship at their defaults and stay **UNCONFIRMED** here and in the PR.
 
 ## Outcome
 

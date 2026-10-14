@@ -27,6 +27,9 @@
 // admission-ordered save queue that already reasons about read/write ordering)
 // as the single commit point.
 
+import { isSidekickId } from '@shared/sidekicks/types.js'
+import type { PersistedSidekicks, SidekickRecord } from '@shared/sidekicks/types.js'
+
 export type WindowBounds = {
   x: number
   y: number
@@ -52,6 +55,24 @@ export type PersistedWindow = {
 export type WorkspaceFile = {
   version: typeof WORKSPACE_FILE_VERSION
   windows: PersistedWindow[]
+  /**
+   * The Sidekick index (#1493): global agents owned by no window and no
+   * project. Written ONLY by SidekickService through
+   * WorkspaceFileStore.commitSidekicks; window saves carry it through
+   * untouched.
+   *
+   * WHY optional and no version bump: older v3 readers ignore an unknown
+   * top-level key, so a file with this section stays readable by them. The
+   * cost, accepted in the plan (§3 ruling), is that an older build's next save
+   * rebuilds `{version, windows}` and drops the section — the sidekick
+   * conversations themselves survive in the providers' native stores and in
+   * Conversations. Bumping to 4 would instead make every older build open the
+   * file read-only, a far bigger price for a downgrade.
+   *
+   * Absent (never an empty object) when there are no sidekicks, so a file
+   * without any is byte-for-byte what this build wrote before the feature.
+   */
+  sidekicks?: PersistedSidekicks
 }
 
 /**
@@ -148,6 +169,53 @@ function coerceWindow(value: unknown, mintWindowId: () => string): PersistedWind
   }
 }
 
+/**
+ * Read the `sidekicks` section defensively.
+ *
+ * WHY drop-not-throw, record by record: one hand-edited or truncated record
+ * must not cost the user every other sidekick (the Hermes connection store's
+ * rule, connectionStore.ts). A section that is not even an object is dropped
+ * whole and reported, never thrown — the window list next to it is far more
+ * valuable and must still load.
+ */
+export function coercePersistedSidekicks(raw: unknown): { sidekicks: PersistedSidekicks | undefined; problem: string | null } {
+  if (raw === undefined) return { sidekicks: undefined, problem: null }
+  if (!isRecord(raw) || !Array.isArray(raw.records)) {
+    return { sidekicks: undefined, problem: 'workspace.json sidekicks section is not a { records: [] } object; ignored' }
+  }
+  const records: SidekickRecord[] = []
+  const seenIds = new Set<string>()
+  const seenSessions = new Set<string>()
+  let dropped = 0
+  for (const entry of raw.records) {
+    if (!isRecord(entry) || !isSidekickId(entry.id) || typeof entry.sessionId !== 'string' || entry.sessionId.length === 0) {
+      dropped += 1
+      continue
+    }
+    // Duplicate ids or sessions would let one save land on two records, and
+    // two records would then both claim one process. Keep the first, as the
+    // window list does for duplicate window ids.
+    if (seenIds.has(entry.id) || seenSessions.has(entry.sessionId)) {
+      dropped += 1
+      continue
+    }
+    seenIds.add(entry.id)
+    seenSessions.add(entry.sessionId)
+    records.push({
+      id: entry.id,
+      sessionId: entry.sessionId,
+      createdAt: typeof entry.createdAt === 'number' && Number.isFinite(entry.createdAt) ? entry.createdAt : 0,
+      lastActiveAt: typeof entry.lastActiveAt === 'number' && Number.isFinite(entry.lastActiveAt) ? entry.lastActiveAt : 0,
+      meta: entry.meta ?? null,
+      ...(typeof entry.draft === 'string' && entry.draft.length > 0 ? { draft: entry.draft } : {}),
+    })
+  }
+  return {
+    sidekicks: records.length > 0 ? { version: 1, records } : undefined,
+    problem: dropped > 0 ? `workspace.json sidekicks: dropped ${dropped} malformed record(s)` : null,
+  }
+}
+
 export function emptyWorkspaceFile(): WorkspaceFile {
   return { version: WORKSPACE_FILE_VERSION, windows: [] }
 }
@@ -232,11 +300,16 @@ export function parseWorkspaceFile(
   }
 
   const invalidWindowsContainer = !Array.isArray(parsed.windows)
+  const { sidekicks, problem: sidekickProblem } = coercePersistedSidekicks(parsed.sidekicks)
+  if (sidekickProblem) {
+    // eslint-disable-next-line no-console
+    console.warn(`[workspace] ${sidekickProblem}`)
+  }
   return {
     kind: 'ok',
     migratedFromV1: false,
     sourceVersion: parsed.version as number,
-    file: { version: WORKSPACE_FILE_VERSION, windows },
+    file: { version: WORKSPACE_FILE_VERSION, windows, ...(sidekicks ? { sidekicks } : {}) },
     completeness: invalidWindowsContainer || discardedWindows > 0
       ? { kind: 'partial', invalidWindowsContainer, discardedWindows }
       : { kind: 'complete' },
@@ -283,13 +356,33 @@ export function withWindowSlice(
   const windows = existingIndex === -1
     ? [...file.windows, record]
     : file.windows.map((entry, index) => (index === existingIndex ? record : entry))
-  return { version: WORKSPACE_FILE_VERSION, windows }
+  return { version: WORKSPACE_FILE_VERSION, windows, ...carrySidekicks(file) }
 }
 
 export function withoutWindow(file: WorkspaceFile, windowId: string): WorkspaceFile {
   return {
     version: WORKSPACE_FILE_VERSION,
     windows: file.windows.filter(entry => entry.windowId !== windowId),
+    ...carrySidekicks(file),
+  }
+}
+
+/**
+ * WHY every window composer must call this: they rebuild the document from
+ * `{version, windows}`, and before #1493 that was the whole document. A
+ * composer that forgets the carry erases every sidekick on the next ordinary
+ * window save — silently, because nothing in a window slice refers to them.
+ */
+function carrySidekicks(file: WorkspaceFile): Pick<WorkspaceFile, 'sidekicks'> {
+  return file.sidekicks && file.sidekicks.records.length > 0 ? { sidekicks: file.sidekicks } : {}
+}
+
+/** Replace the sidekick section. Only SidekickService composes with this. */
+export function withSidekicks(file: WorkspaceFile, sidekicks: PersistedSidekicks): WorkspaceFile {
+  return {
+    version: WORKSPACE_FILE_VERSION,
+    windows: file.windows,
+    ...(sidekicks.records.length > 0 ? { sidekicks } : {}),
   }
 }
 
@@ -310,5 +403,11 @@ export function collectSessionIds(file: WorkspaceFile): Set<string> {
     if (!isRecord(sessions)) continue
     for (const id of Object.keys(sessions)) ids.add(id)
   }
+  // Sidekick sessions are durably owned too, by the index rather than a
+  // window (#1493). Leaving them out told SessionManager they were unclaimed:
+  // a sidekick's Codex same-rollout handoff would then never commit and its
+  // predecessor's window lease would never be released (ipc/workspace.ts
+  // commitDurableOwnership).
+  for (const record of file.sidekicks?.records ?? []) ids.add(record.sessionId)
   return ids
 }
