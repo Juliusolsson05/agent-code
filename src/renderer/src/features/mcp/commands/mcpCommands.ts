@@ -1,6 +1,6 @@
 import { commandTarget } from '@renderer/features/command-palette/commandTarget'
 import type { CommandDef } from '@renderer/features/command-palette/types'
-import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentProviderKind, isRemoteProviderKind } from '@shared/types/providerKind'
 
 /**
  * MCP server commands (#1143).
@@ -52,7 +52,12 @@ export const mcpCommands: CommandDef[] = [
     when: ({ workspace, target }) => {
       const id = commandTarget({ workspace, target })
       const meta = id ? workspace.state.sessions[id] : null
-      return Boolean(meta && isAgentProviderKind(meta.kind ?? DEFAULT_PROVIDER))
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      // Not for a remote agent (Hermes): its MCP config lives on its own
+      // server and no Agent Code server reaches it (mcp/shared/types.ts
+      // `hermes: []`), so the modal offered nothing it could change and Apply
+      // only reloaded the conversation (round-2 review x2 #2).
+      return Boolean(meta && isAgentProviderKind(kind) && !isRemoteProviderKind(kind))
     },
     run: ({ workspace, ui, target }) => {
       // Captured now, not when the user presses Apply: Dispatch focus can move

@@ -1920,11 +1920,11 @@ describe('history reset of a DIFFERENT conversation', () => {
     return semantic
   }
 
-  function mountWith(semantic: SessionRuntime['semantic']) {
+  function mountWith(semantic: SessionRuntime['semantic'], extra: Partial<SessionRuntime> = {}) {
     const fake = createFakeSessionFeed()
     const sessionId = 'hermes-pane' as SessionId
     let workspaceState = { sessions: { [sessionId]: { cwd: '/', kind: 'hermes' } } } as unknown as WorkspaceState
-    let runtimes: Record<SessionId, SessionRuntime> = { [sessionId]: { ...emptyRuntime(), semantic } }
+    let runtimes: Record<SessionId, SessionRuntime> = { [sessionId]: { ...emptyRuntime(), semantic, ...extra } }
     let refsForTest!: WorkspaceRefs
     function Harness(): React.JSX.Element {
       const refs = useRef<WorkspaceRefs | null>(null)
@@ -1953,8 +1953,10 @@ describe('history reset of a DIFFERENT conversation', () => {
     act(() => same.fake.emitHistoryBoundary({ sessionId: same.sessionId, type: 'reset', generation: 5, snapshotByteLength: 0, file: 'hermes://c/a' }))
     expect(same.runtime().semantic.history.length).toBe(semantic.history.length)
 
-    const other = mountWith(semantic)
+    const other = mountWith(semantic, { hasOlderHistory: true })
     act(() => other.fake.emitHistoryBoundary({ sessionId: other.sessionId, type: 'reset', generation: 5, snapshotByteLength: 0, conversationChanged: true, file: 'hermes://c/b' }))
     expect(other.runtime().semantic.history).toEqual([])
+    // Nothing older exists in a new conversation (round-2 review x1 #4).
+    expect(other.runtime().hasOlderHistory).toBe(false)
   })
 })

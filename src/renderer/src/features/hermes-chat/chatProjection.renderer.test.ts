@@ -125,6 +125,35 @@ describe('Hermes chat projection on the real pipeline (recorded S4)', () => {
     expect(items.filter((item) => item.kind === 'user').map((item) => (item as { text: string }).text)).toEqual(['[[hh:tools]] Run the tools.'])
   })
 
+  it('live turn PLUS its committed rows keeps each chip\'s live status and output (round-2 x1 #1)', () => {
+    // The resume projection carries no tool output (recorded S4), so after the
+    // turn's history commits, the live results must survive: the failed read
+    // stays failed and every chip keeps what the tool returned.
+    // Production order: ONE reconciler sees the live events, then the turn's
+    // history fetch (HermesHeadless.scheduleHistoryFetch → applyHistory).
+    const { created, events, resumed } = s4()
+    const semantic: SemanticEvent[] = []
+    const committed: CommittedRow[] = []
+    const reconciler = new ConversationReconciler({
+      semantic: (event) => semantic.push(event), committed: (row) => committed.push(row), historyReset: () => undefined,
+      historyCaughtUp: () => undefined, activity: () => undefined, session: () => undefined, requestOpened: () => undefined,
+      requestClosed: () => undefined, turnSettled: () => undefined, reclaimed: () => undefined, unknown: () => undefined,
+    })
+    reconciler.applySnapshot(created, 'snapshot')
+    for (const event of events) reconciler.applyEvent(event)
+    reconciler.applyHistory(resumed.messages)
+    const mapper = createHermesTranscriptEntryMapper()
+    const entries = committed.flatMap((row) => mapper.map({ hermes: 1, ...row } as unknown as Record<string, unknown>).entries)
+    const items = chat(entries, semantic)
+    const tools = items.filter((item) => item.kind === 'tool') as Array<{ toolUseId: string; status: string; result: string | null }>
+    expect(tools.map((tool) => [tool.toolUseId, tool.status])).toEqual([
+      ['call_tools_0_0', 'done'],
+      ['call_tools_0_1', 'error'],
+      ['call_tools_1_0', 'done'],
+    ])
+    expect(tools.every((tool) => tool.result !== null && tool.result.length > 0)).toBe(true)
+  })
+
   it('after a reload (committed rows only): the same conversation, tools shown as finished', () => {
     const { resumed } = s4()
     const items = chat(committedEntries(resumed.messages, String(resumed.stored_session_id ?? '')), [])

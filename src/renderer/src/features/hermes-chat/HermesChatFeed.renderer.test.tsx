@@ -84,5 +84,41 @@ describe('HermesChatFeed pane controls', () => {
     const command = sessionCommands.find((entry) => entry.id === 'view-prompts')!
     expect(command.when!({ target: 'p', workspace: { state: { sessions: { p: { kind: 'hermes', cwd: '/' } } } } } as never)).toBe(true)
   })
+
+  it('pages on an upward wheel at the very top, where no scroll event fires (round-2 x1 #3)', async () => {
+    const load = vi.fn(async () => undefined)
+    const view = render(<Mounted runtime={{ ...emptyRuntime(), entries: entries('S12'), hasOlderHistory: true }} controls={{ hasOlderHistory: true, onLoadOlderHistory: load }} />)
+    const node = scroller(view.container)
+    node.scrollTop = 0
+    await act(async () => { fireEvent.wheel(node, { deltaY: -40 }) })
+    expect(load).toHaveBeenCalledTimes(1)
+  })
+
+  it('never pulls a reader who scrolled up down to a new message, unless the pane tails', () => {
+    const rows = entries('S12')
+    const runtime = { ...emptyRuntime(), entries: rows.slice(0, -2) }
+    const view = render(<Mounted runtime={runtime} controls={{}} />)
+    const node = scroller(view.container)
+    node.scrollTop = 20
+    fireEvent.scroll(node)
+    view.rerender(<Mounted runtime={{ ...runtime, entries: rows }} controls={{}} />)
+    expect(node.scrollTop).toBe(20)
+    // Auto-follow on: every new message is followed.
+    view.rerender(<Mounted runtime={{ ...runtime, entries: rows.slice(0, -1) }} controls={{ tailMode: true }} />)
+    expect(node.scrollTop).toBe(2000)
+  })
+
+  it('Jump to Latest re-arms following, so the next message is followed too', () => {
+    const rows = entries('S12')
+    const runtime = { ...emptyRuntime(), entries: rows.slice(0, -2) }
+    const view = render(<Mounted runtime={runtime} controls={{}} />)
+    const node = scroller(view.container)
+    node.scrollTop = 20
+    fireEvent.scroll(node)
+    view.rerender(<Mounted runtime={runtime} controls={{ scrollToLatestRequest: 1 }} />)
+    node.scrollTop = 1500
+    view.rerender(<Mounted runtime={{ ...runtime, entries: rows }} controls={{ scrollToLatestRequest: 1 }} />)
+    expect(node.scrollTop).toBe(2000)
+  })
 })
 

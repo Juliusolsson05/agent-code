@@ -103,15 +103,21 @@ export function mapHermesRow(raw: Record<string, unknown>): MappedTranscriptEntr
     if (!callId) return { entries: [], historyMarker: key }
     const name = str(row.name) ?? 'tool'
     const input = asRecord(row.args) ?? {}
-    // The resume projection carries no tool output (recorded S4). A result
-    // row is still emitted, with whatever output exists (often none), so the
-    // tool reads as FINISHED after a reload rather than spinning forever: a
-    // persisted tool row is by definition a completed call.
-    const output = textOf(row.content ?? row.result ?? '')
+    // The resume projection carries no tool output (recorded S4).
+    // hermes-headless attaches the result it observed LIVE (`content`, and
+    // `tool_error` for a failure; ConversationReconciler.withLiveToolResult),
+    // so a just-committed turn keeps every chip's output and failure. With
+    // nothing kept (after a reload), no result row is made up: an empty
+    // "success" would claim a call succeeded that may have failed (round-2
+    // review x1 #1). The chat still shows such a chip as finished, because a
+    // persisted tool row is by definition a completed call (chatProjection).
+    const kept = row.content ?? row.result
+    const useEntry: Entry = { type: 'assistant', uuid, parentUuid: null, timestamp, message: { role: 'assistant', content: [{ type: 'tool_use', id: callId, name, input }] } }
+    if (kept === undefined || kept === null || kept === '') return { entries: [useEntry], historyMarker: key }
     return {
       entries: [
-        { type: 'assistant', uuid, parentUuid: null, timestamp, message: { role: 'assistant', content: [{ type: 'tool_use', id: callId, name, input }] } },
-        { type: 'user', uuid: `${uuid}:result`, parentUuid: null, timestamp, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: callId, content: output, is_error: false }] } },
+        useEntry,
+        { type: 'user', uuid: `${uuid}:result`, parentUuid: null, timestamp, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: callId, content: textOf(kept), is_error: row.tool_error === true }] } },
       ],
       historyMarker: key,
     }

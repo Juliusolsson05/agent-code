@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 import type { HermesConnectionInfo } from '@shared/hermes/types'
 
-import { ConnectionCard } from './HermesConnectionsRow'
+import { ConnectionCard, HermesConnectionsRow } from './HermesConnectionsRow'
 
 // Settings → Hermes connection card states (#1482). Round-1 review x1 found
 // every sentence and button of this card unpinned (the copy, Cancel sign-in,
@@ -60,7 +60,37 @@ describe('Hermes connection card', () => {
     expect(screen.getByRole('alert').textContent).toBe('"Office" already points at https://other.example.')
     expect(screen.getByLabelText('Hermes URL')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-    expect(screen.queryByRole('alert')).toBeNull()
+    // Gone everywhere, not just from the form (round-2 x1 M17).
+    expect(screen.queryByText('"Office" already points at https://other.example.')).toBeNull()
     expect(screen.getByText('https://hermes.example')).toBeTruthy()
   })
+
+  it('unreachable shows main\'s reason; Test shows what the server answered', async () => {
+    api({ hermesTest: vi.fn(async () => ({ ok: true, version: 'v0.21.7', authRequired: true, providers: ['Username & Password'] })) })
+    render(<ConnectionCard connection={connection({ state: 'unreachable', identity: { userId: 'me', provider: 'basic' }, lastError: 'Hermes did not answer in time. Check your network or VPN (Tailscale) path to the server.' })} />)
+    expect(screen.getByText('Hermes did not answer in time. Check your network or VPN (Tailscale) path to the server.')).toBeTruthy()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Test' })) })
+    expect(screen.getByText('Reached Hermes v0.21.7 · sign-in: Username & Password')).toBeTruthy()
+  })
+
+  it('says when the server\'s Hermes is too old, and when its contract only differs', () => {
+    const { rerender } = render(<ConnectionCard connection={connection({ state: 'ready', identity: { userId: 'me', provider: 'basic' }, backend: { version: 'v0.20.0', desktopContract: 5, compatibility: 'unsupported' } })} />)
+    expect(screen.getByText(/too old for Agent Code/)).toBeTruthy()
+    rerender(<ConnectionCard connection={connection({ state: 'ready', identity: { userId: 'me', provider: 'basic' }, backend: { version: 'v0.22.0', desktopContract: 9, compatibility: 'skew' } })} />)
+    expect(screen.getByText(/Hermes contract 9 \(Agent Code was tested with 8\)/)).toBeTruthy()
+  })
+
+  it('Add goes straight into sign-in for the new connection', async () => {
+    const bridge = api({
+      hermesList: vi.fn(async () => []),
+      onHermesConnectionsChanged: vi.fn(() => () => undefined),
+      hermesAdd: vi.fn(async () => connection({ id: 'new-id' })),
+    })
+    render(<HermesConnectionsRow />)
+    fireEvent.change(screen.getByLabelText('New connection name'), { target: { value: 'Homelab' } })
+    fireEvent.change(screen.getByLabelText('New Hermes URL'), { target: { value: 'https://hermes.example' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Add and sign in' })) })
+    expect(bridge.hermesSignIn).toHaveBeenCalledWith('new-id')
+  })
 })
+

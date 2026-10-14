@@ -268,7 +268,7 @@ describe('HermesSession (AgentSession contract on recorded frames)', () => {
   })
 
   it('starts a new conversation, with a notice, when the old one was deleted while away', async () => {
-    const { of, socket, created } = await startedSession('S3')
+    const { of, socket, created, captured } = await startedSession('S3')
     vi.spyOn(Math, 'random').mockReturnValue(0)
     const next = recorded('S4').created
     socket.close(1006, 'network')
@@ -280,6 +280,11 @@ describe('HermesSession (AgentSession contract on recorded frames)', () => {
     await second.answerCall('session.create', next)
     await second.answerCall('session.events.since', ring())
     for (let tick = 0; tick < 10; tick += 1) await flush()
+    // The notice must come AFTER the reset that starts the new conversation,
+    // or that reset wipes it before anyone sees it (round-2 review x1 #2).
+    const order = captured.filter((entry) => entry.name === 'jsonl-entry' || entry.name === 'history-boundary')
+      .map((entry) => entry.name === 'history-boundary' ? `boundary:${(entry.args[0] as { type: string }).type}` : 'row')
+    expect(order.slice(-3)).toEqual(['boundary:reset', 'boundary:caught-up', 'row'])
     expect(String((of('jsonl-entry') as HermesEntryPayload[]).at(-1)!.row.text)).toContain(String(created.stored_session_id))
     expect(of('provider-session-changed').at(-1)).toMatchObject({ providerSessionId: next.stored_session_id })
     expect(sockets).toHaveLength(2)
@@ -294,6 +299,27 @@ describe('HermesSession (AgentSession contract on recorded frames)', () => {
     await flush()
     expect((of('conditions').at(-1) as ProviderConditionSnapshot).conditions).toEqual({})
     expect(String((of('jsonl-entry') as HermesEntryPayload[]).at(-1)!.row.text)).toMatch(/connection was removed/)
+  })
+
+  // Round-2 review c2 #4: a restarted backend (new epoch, recorded S11 shape)
+  // needs a resume on the new socket before any prompt can name the right
+  // runtime. Input must stay closed until then, and a prompt sent meanwhile
+  // is refused as retry-safe `not-ready`, never sent to the dead runtime.
+  it('keeps input closed until a reconnect has re-attached the conversation', async () => {
+    const { session, socket, of, created } = await startedSession('S3')
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    socket.close(1006, 'network')
+    const second = await waitForSocket(1)
+    second.push(READY_FRAME('epoch-restarted'))
+    await second.answerCall('client.capabilities', CAPS)
+    const resume = await second.nextSent((frame) => frame.method === 'session.resume')
+    expect(of('input-readiness').at(-1)).toMatchObject({ ready: false })
+    await expect(session.deliverPromptText('hello after sleep')).rejects.toMatchObject({ kind: 'not-ready' })
+    expect(second.sent.some((frame) => frame.method === 'prompt.submit')).toBe(false)
+    second.push({ jsonrpc: '2.0', id: resume.id, result: created })
+    await second.answerCall('session.events.since', ring())
+    for (let tick = 0; tick < 10; tick += 1) await flush()
+    expect(of('input-readiness').at(-1)).toEqual({ ready: true, reason: 'ready' })
   })
 
   it('runs a slash command and shows its output as a local notice (recorded S13)', async () => {

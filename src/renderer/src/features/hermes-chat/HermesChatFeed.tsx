@@ -67,6 +67,7 @@ export function HermesChatFeed({
   const scroller = useRef<HTMLDivElement | null>(null)
   const following = useRef(true)
   const loadingOlder = useRef(false)
+  const touchStartY = useRef<number | null>(null)
 
   useEffect(() => {
     const node = scroller.current
@@ -125,6 +126,24 @@ export function HermesChatFeed({
         }
         following.current = node.scrollHeight - node.scrollTop - node.clientHeight < STICKY_SLACK_PX
         loadOlderNearTop(node)
+      }}
+      // At scrollTop 0 an upward wheel or a downward finger drag moves
+      // nothing, so no scroll event fires; after a failed page ("Scroll up
+      // again to retry") or a page that added no height, paging would be
+      // stuck. Same rule as Feed (#1413), round-2 review x1 #3.
+      onWheel={(event) => {
+        if (event.deltaY < 0 && event.currentTarget.scrollTop <= 0) loadOlderNearTop(event.currentTarget)
+      }}
+      onTouchStart={(event) => {
+        touchStartY.current = event.touches[0]?.clientY ?? null
+      }}
+      onTouchMove={(event) => {
+        const y = event.touches[0]?.clientY
+        if (touchStartY.current === null || y === undefined) return
+        if (y > touchStartY.current && event.currentTarget.scrollTop <= 0) {
+          touchStartY.current = null
+          loadOlderNearTop(event.currentTarget)
+        }
       }}
       onPointerDown={onUserEngagement}
       className="h-full min-h-0 overflow-y-auto px-3 py-3"
