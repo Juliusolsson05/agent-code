@@ -234,6 +234,68 @@ describe('HermesSession (AgentSession contract on recorded frames)', () => {
     expect(sid).toBeTruthy()
   })
 
+  // Round-1 review c1 #1. A server that keeps refusing the re-attach (here: an
+  // RPC error on every resume after a restart) must see ONE retry chain: a
+  // superseded socket closing mid-attempt used to schedule a second chain.
+  it('runs one reconnect chain at a time while re-attaching keeps failing', async () => {
+    const { socket } = await startedSession('S3')
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    let maxOpen = 0
+    const failing = async (next: FakeSocket) => {
+      next.push(READY_FRAME('epoch-restarted'))
+      await next.answerCall('client.capabilities', CAPS)
+      // Same epoch after the first failure, so an attempt may try
+      // session.activate first; refuse that, then the resume it falls to.
+      const first = await next.nextSent((frame) => frame.method === 'session.resume' || frame.method === 'session.activate')
+      next.push({ jsonrpc: '2.0', id: first.id, error: { code: 5000, message: 'internal error' } })
+      if (first.method === 'session.activate') {
+        const resume = await next.nextSent((frame) => frame.method === 'session.resume')
+        next.push({ jsonrpc: '2.0', id: resume.id, error: { code: 5000, message: 'internal error' } })
+      }
+    }
+    socket.close(1006, 'network')
+    for (let index = 1; index <= 8; index += 1) {
+      const next = await waitForSocket(index)
+      maxOpen = Math.max(maxOpen, sockets.filter((entry) => entry.readyState === 1).length)
+      await failing(next)
+      for (let tick = 0; tick < 5; tick += 1) await flush()
+    }
+    // Each attempt supersedes the last, so at most the newest is open.
+    expect(maxOpen).toBe(1)
+    // Only the eight sockets this test answered (a ninth may be dialling).
+    const resumes = sockets.slice(1, 9).map((entry) => entry.sent.filter((frame) => frame.method === 'session.resume').length)
+    expect(resumes.every((count) => count === 1)).toBe(true)
+  })
+
+  it('starts a new conversation, with a notice, when the old one was deleted while away', async () => {
+    const { of, socket, created } = await startedSession('S3')
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    const next = recorded('S4').created
+    socket.close(1006, 'network')
+    const second = await waitForSocket(1)
+    second.push(READY_FRAME('epoch-restarted'))
+    await second.answerCall('client.capabilities', CAPS)
+    const resume = await second.nextSent((frame) => frame.method === 'session.resume')
+    second.push({ jsonrpc: '2.0', id: resume.id, error: { code: 4007, message: 'session not found' } })
+    await second.answerCall('session.create', next)
+    await second.answerCall('session.events.since', ring())
+    for (let tick = 0; tick < 10; tick += 1) await flush()
+    expect(String((of('jsonl-entry') as HermesEntryPayload[]).at(-1)!.row.text)).toContain(String(created.stored_session_id))
+    expect(of('provider-session-changed').at(-1)).toMatchObject({ providerSessionId: next.stored_session_id })
+    expect(sockets).toHaveLength(2)
+  })
+
+  it('takes down open cards when signed out, and says the connection was removed when it was', async () => {
+    const { of, socket } = await startedSession('S3')
+    const approval = inboundFrames(latestRecording('S5')).find((frame) => frame.method === 'approval')!
+    socket.push(approval)
+    expect((of('conditions').at(-1) as ProviderConditionSnapshot).conditions['hermes.approval']).toBeDefined()
+    serviceEvents.emit('disconnect', 'conn-1', 'removed')
+    await flush()
+    expect((of('conditions').at(-1) as ProviderConditionSnapshot).conditions).toEqual({})
+    expect(String((of('jsonl-entry') as HermesEntryPayload[]).at(-1)!.row.text)).toMatch(/connection was removed/)
+  })
+
   it('runs a slash command and shows its output as a local notice (recorded S13)', async () => {
     const { of, socket, session } = await startedSession('S3')
     const s13 = inboundFrames(latestRecording('S13'))

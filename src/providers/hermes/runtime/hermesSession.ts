@@ -38,14 +38,14 @@ import {
 import { getHermesConnectionService } from '@main/hermes/registry.js'
 import { hermesTranscriptSource, registerHermesHistory } from '@providers/hermes/runtime/hermesHistory.js'
 import { HermesSignedOutError } from '@main/hermes/tokenBroker.js'
-import { describeError } from '@main/hermes/service.js'
+import { describeError, HermesConnectionMissingError, type HermesDisconnectReason } from '@main/hermes/service.js'
 import type { ConditionAction, ConditionCustomAction } from '@shared/conditions-core/contract.js'
 import type {
   HermesConditionKind,
   ProviderConditionRecord,
   ProviderConditionSnapshot,
 } from '@shared/types/providerConditions.js'
-import { HERMES_SIGNED_OUT_MESSAGE, HERMES_UNREACHABLE_MESSAGE, type AgentSession, type SessionOptions } from '@shared/types/session.js'
+import { HERMES_NOT_CONNECTED_MESSAGE, HERMES_SIGNED_OUT_MESSAGE, HERMES_UNREACHABLE_MESSAGE, type AgentSession, type SessionOptions } from '@shared/types/session.js'
 import {
   HERMES_ANSWER,
   HERMES_DECLINE,
@@ -112,19 +112,38 @@ export class HermesSession extends EventEmitter implements AgentSession {
   private committedRows: HermesEntryPayload[] = []
   private unregisterHistory: (() => void) | null = null
   private signedOut = false
-  private readonly onServiceDisconnect = (id: string): void => {
-    if (id !== this.connectionId || this.stopped || !this.headless) return
+  /** A reconnect attempt is running; see reconnect() for why only one may. */
+  private reconnecting = false
+  private readonly onServiceDisconnect = (id: string, reason: HermesDisconnectReason = 'signed-out'): void => {
+    if (id !== this.connectionId) return
+    this.detach(reason)
+  }
+
+  /**
+   * Let go of the server for good (until Reload Agent): signed out, or the
+   * connection was removed. Detach, never close: the conversation stays on
+   * the server and a later Reload Agent resumes it.
+   */
+  private detach(reason: HermesDisconnectReason): void {
+    if (this.stopped || this.signedOut || !this.headless) return
     // Stays detached: the socket closing below must not start the reconnect
     // loop, which would only redial a connection with no credentials.
     this.signedOut = true
-    // Detach, never close: the conversation stays on the server and Reload
-    // Agent resumes it once the user signs in again.
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
     this.reconnectTimer = null
     void this.headless.stop().catch(() => undefined)
+    // Open cards can no longer be answered (the socket is gone), and leaving
+    // them up kept the pane "blocked on you" with every click failing
+    // (round-1 review c1 #2). Hermes fails them closed on its own timeout.
+    if (this.openRequests.length > 0) {
+      this.openRequests.length = 0
+      this.emitConditions()
+    }
     this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
-    this.emit('process-state', { active: false, status: 'Signed out of Hermes' })
-    this.emitNotice(HERMES_SIGNED_OUT_MESSAGE)
+    this.emit('process-state', { active: false, status: reason === 'removed' ? 'Hermes connection removed' : 'Signed out of Hermes' })
+    this.emitNotice(reason === 'removed'
+      ? 'This Hermes connection was removed in Settings. The conversation is still on the server; add the connection again to reach it.'
+      : HERMES_SIGNED_OUT_MESSAGE)
   }
   /**
    * Offset for history generations. hermes-headless numbers generations from
@@ -190,6 +209,7 @@ export class HermesSession extends EventEmitter implements AgentSession {
       // user can fix are mapped onto them; anything else keeps its detail
       // for main's journal and reaches the user as the generic failure.
       if (error instanceof HermesSignedOutError) throw new Error(HERMES_SIGNED_OUT_MESSAGE)
+      if (error instanceof HermesConnectionMissingError) throw new Error(HERMES_NOT_CONNECTED_MESSAGE)
       if (error instanceof HermesAuthError && (error.kind === 'transport' || error.kind === 'unavailable')) {
         throw new Error(HERMES_UNREACHABLE_MESSAGE)
       }
@@ -358,22 +378,35 @@ export class HermesSession extends EventEmitter implements AgentSession {
     }, delay)
   }
 
+  /**
+   * One attempt at a time. A failed attach leaves its socket open, and the
+   * NEXT attempt's connect() closes it, which fires `disconnected` again; when
+   * that also scheduled a retry, two chains ran at once and kept cancelling
+   * each other's dials (round-1 review c1 #1: 266 dials, 2 open at once).
+   * So a retry that fires while an attempt runs is dropped (the early return
+   * below), and a failed attempt schedules exactly one retry after it ends.
+   */
   private async reconnect(): Promise<void> {
-    if (this.stopped || !this.headless) return
+    if (this.stopped || this.signedOut || !this.headless || this.reconnecting) return
     const service = getHermesConnectionService()
+    this.reconnecting = true
+    let retry = false
     try {
       await this.headless.reconnect()
       service.reportReachability(this.connectionId, true)
     } catch (error) {
-      if (error instanceof HermesSignedOutError) {
-        // Retrying a dead sign-in forever would spin; the pane says what to do.
-        this.emit('process-state', { active: false, status: 'Signed out of Hermes' })
-        this.emitNotice('Signed out of this Hermes connection. Sign in again in Settings → Hermes, then use Reload Agent.')
-        return
+      // Not transient: retrying a dead sign-in or a removed connection would
+      // spin forever. The pane says what to do instead.
+      if (error instanceof HermesSignedOutError) this.detach('signed-out')
+      else if (error instanceof HermesConnectionMissingError) this.detach('removed')
+      else {
+        service.reportReachability(this.connectionId, false, error)
+        retry = true
       }
-      service.reportReachability(this.connectionId, false, error)
-      this.scheduleReconnect()
+    } finally {
+      this.reconnecting = false
     }
+    if (retry) this.scheduleReconnect()
   }
 
   private onRequest(request: HermesRequest): void {

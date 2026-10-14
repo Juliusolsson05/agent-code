@@ -58,6 +58,17 @@ type RuntimeState = {
   lastError: string | null
 }
 
+/** The pane's connection was removed in Settings (not a transient failure). */
+export class HermesConnectionMissingError extends Error {
+  constructor(readonly connectionId: string) {
+    super('This Hermes connection no longer exists. Pick another one in Settings → Hermes.')
+    this.name = 'HermesConnectionMissingError'
+  }
+}
+
+/** Why live panes are told to let go of their sockets. */
+export type HermesDisconnectReason = 'signed-out' | 'removed'
+
 export class HermesConnectionService extends EventEmitter {
   private connections: StoredHermesConnection[] = []
   private readonly runtime = new Map<string, RuntimeState>()
@@ -122,7 +133,7 @@ export class HermesConnectionService extends EventEmitter {
       // in-flight refresh or sign-in for the old URL cannot land afterwards.
       this.revoke(id)
       this.signIns.get(id)?.abort()
-      this.disconnect(id)
+      this.disconnect(id, 'signed-out')
       await this.tokens.delete(id)
       this.setRuntime(id, { state: 'signed-out', identity: null, backend: null, lastError: null })
     }
@@ -134,7 +145,7 @@ export class HermesConnectionService extends EventEmitter {
     this.require(id)
     this.signIns.get(id)?.abort()
     this.revoke(id)
-    this.disconnect(id)
+    this.disconnect(id, 'removed')
     await this.persist(this.connections.filter((entry) => entry.id !== id))
     await this.tokens.delete(id)
     this.runtime.delete(id)
@@ -171,9 +182,18 @@ export class HermesConnectionService extends EventEmitter {
       if (controller.signal.aborted || this.signIns.get(id) !== controller || owner?.baseUrl !== connection.baseUrl) {
         throw new SignInCancelledError()
       }
-      await this.tokens.set(id, connection.baseUrl, tokens)
-      // A fresh pair: the old broker (and anything it was refreshing) is stale.
+      // A fresh pair: the old broker (and anything it was refreshing) is
+      // stale. Revoke BEFORE the write so its failing refresh cannot delete
+      // the new pair (round-1 review c1 suspicion).
       this.revoke(id)
+      await this.tokens.set(id, connection.baseUrl, tokens)
+      // Remove or a URL edit can run during that write; their delete may land
+      // first. Re-check and undo ours, so no blob outlives its connection.
+      const stillOwner = this.connections.find((entry) => entry.id === id)
+      if (controller.signal.aborted || this.signIns.get(id) !== controller || stillOwner?.baseUrl !== connection.baseUrl) {
+        await this.tokens.delete(id)
+        throw new SignInCancelledError()
+      }
       this.patchRuntime(id, { state: 'ready', identity: { userId: tokens.userId, provider: tokens.provider }, lastError: null })
     } catch (error) {
       const tokens = await this.tokens.get(id, connection.baseUrl).catch(() => null)
@@ -198,7 +218,7 @@ export class HermesConnectionService extends EventEmitter {
     // password provider's are stateless. Forgetting them locally is what
     // signing out can do.
     this.revoke(id)
-    this.disconnect(id)
+    this.disconnect(id, 'signed-out')
     await this.tokens.delete(id)
     this.setRuntime(id, { state: 'signed-out', identity: null, backend: this.runtime.get(id)?.backend ?? null, lastError: null })
   }
@@ -247,8 +267,8 @@ export class HermesConnectionService extends EventEmitter {
    * otherwise keep chatting with the server the user just signed out of
    * (review a suspicion). Not emitted on a fresh sign-in: that keeps panes up.
    */
-  private disconnect(id: string): void {
-    this.emit('disconnect', id)
+  private disconnect(id: string, reason: HermesDisconnectReason): void {
+    this.emit('disconnect', id, reason)
   }
 
   /** Invalidate everything the current broker has in flight, then drop it. */
@@ -295,7 +315,10 @@ export class HermesConnectionService extends EventEmitter {
 
   private require(id: string): StoredHermesConnection {
     const connection = this.connections.find((entry) => entry.id === id)
-    if (!connection) throw new Error('This Hermes connection no longer exists. Pick another one in Settings → Hermes.')
+    // Typed: a pane must tell "removed" (stop, say so) from a dial failure
+    // (retry with backoff). A plain Error here kept a removed connection's
+    // panes redialling forever.
+    if (!connection) throw new HermesConnectionMissingError(id)
     return connection
   }
 
