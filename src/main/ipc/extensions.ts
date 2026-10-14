@@ -43,8 +43,15 @@ import { withVisibleControls } from '@shared/text/visibleControls.js'
  */
 const CAPABILITY_DISCLOSURE: Record<ExtensionCapability, string> = {
   'workspace.observe': 'Which tabs are open, and how many sessions exist.',
+  // The status clause (#1479) was added when the snapshot gained `activity`
+  // and `notification`. Grants are approved against a bundle hash, not this
+  // text, so extensions already holding the permission get the two fields
+  // without a new prompt — a recorded owner call (plan 2026-10-13, Rulings).
+  // The words still have to be true for every NEW install. "Not seen yet"
+  // is there because the NEW badge clears when the user views the session,
+  // so a holder can also tell roughly when the user looked (#1479 review).
   'sessions.observe':
-    'Every open session: its title, its provider, and the full folder path it is running in.',
+    'Every open session: its title, its provider, the full folder path it is running in, and whether it is working, waiting for you, or has output you have not seen yet.',
   'panes.observe': 'How your panes are arranged, and which session is in each one.',
   'fs.read':
     'The contents of text files it names inside projects belonging to active sessions.',

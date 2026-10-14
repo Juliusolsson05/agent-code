@@ -3,6 +3,7 @@ import { Button } from '@renderer/components/ui/button'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import type { AgentCodeApiV1 } from '@renderer/apps/api/types'
+import { grantedObserveTopics, subscribeObserveNudges } from '@renderer/apps/host/observeNudges'
 import { createFrameHost } from '@renderer/apps/host/frameHost'
 import { ExtensionLoadingShell } from '@renderer/apps/host/extensionLoadingShell'
 import { clearFrameDispatch, discardPendingCommands, setFrameDispatch } from '@renderer/apps/host/frameRegistry'
@@ -143,7 +144,6 @@ function buildViewComponent(
       let ready = false
       let themeRequest = 0
       let startupTimer: ReturnType<typeof setTimeout> | null = null
-      let nudgeTimer: ReturnType<typeof setTimeout> | null = null
       let storeUnsub: (() => void) | null = null
       const stopInput = bindExtensionFrameInput(iframe, () => focusCallback.current?.())
       const closeFromHost = () => { void api.ui.close() }
@@ -156,7 +156,6 @@ function buildViewComponent(
         if (disposed) return
         disposed = true
         if (startupTimer !== null) clearTimeout(startupTimer)
-        if (nudgeTimer !== null) clearTimeout(nudgeTimer)
         storeUnsub?.()
         stopInput()
         iframe.removeEventListener('agent-code-extension-close', closeFromHost)
@@ -245,23 +244,11 @@ function buildViewComponent(
       // a burst of workspace changes does not flood the child message queue.
       void frameHost.granted.then(granted => {
         if (disposed) return
-        const topics = ([
-          ['workspace.observe', 'workspace'],
-          ['sessions.observe', 'sessions'],
-          ['panes.observe', 'panes'],
-        ] as const).filter(([cap]) => granted.includes(cap)).map(([, topic]) => topic)
-        if (topics.length === 0) return
-        storeUnsub = useAppStore.subscribe(
-          state => state.workspaceState,
-          () => {
-            if (nudgeTimer !== null) return
-            nudgeTimer = setTimeout(() => {
-              nudgeTimer = null
-              if (disposed) return
-              for (const topic of topics) frameHost.push({ kind: 'agent-code-ext:event', topic })
-            }, 120)
-          },
-        )
+        // Workspace changes and agent status changes (#1479); the coalescing
+        // and the reason status needs its own selector live in observeNudges.
+        storeUnsub = subscribeObserveNudges(grantedObserveTopics(granted), topic => {
+          if (!disposed) frameHost.push({ kind: 'agent-code-ext:event', topic })
+        })
       })
 
       const onError = () => fail('The extension frame could not be loaded.')
