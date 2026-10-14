@@ -20,7 +20,7 @@ function request(method: string, scenario: string): HermesRequest {
 
 function mount(view: { Component: React.ComponentType<{ state: unknown; actions: ConditionAction[]; dispatch: (action: ConditionAction) => Promise<void>; interactionActive: boolean }> }, req: HermesRequest) {
   const record = conditionRecord(req, 0)
-  const dispatch = vi.fn(async () => undefined)
+  const dispatch = vi.fn(async (_action: ConditionAction) => undefined)
   const View = view.Component
   render(<View state={record.state} actions={record.actions} dispatch={dispatch} interactionActive />)
   return dispatch
