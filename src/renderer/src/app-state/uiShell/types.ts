@@ -165,6 +165,13 @@ export type UiShellState = {
    */
   agentTitlePromptSessionId: SessionId | null
   /**
+   * The session the Send to Window picker (#1481) moves, captured when the
+   * command ran. Captured rather than re-read from focus because the picker
+   * is opened from the right-click menu too, where the target is the clicked
+   * row and not the focused lane.
+   */
+  sendToWindowSessionId: SessionId | null
+  /**
    * Session awaiting the Root Agent Code Management confirmation (#906), or
    * null. Stored like the title prompt: the grant must land on the
    * agent the command was invoked for, not whichever Dispatch lane is focused

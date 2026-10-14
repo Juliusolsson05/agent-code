@@ -12,9 +12,9 @@ import {
   collectMoveSubtree,
   parseSessionMovePacket,
   receiveMovedSessions,
-  removeMovedSessions,
   type ReceiveMovedSessionsResult,
 } from '@renderer/workspace/sessionMove'
+import { workspaceWithoutSessions } from '@renderer/workspace/pool'
 import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
 import { forgetSessionViewState } from '@renderer/workspace/hook/actions/pane'
 import { loadIncomingHistory, seedIncomingRuntimes } from '@renderer/workspace/hook/ipc/seedIncomingSessions'
@@ -38,7 +38,19 @@ import type { SessionId, TabId } from '@renderer/workspace/types'
 
 export type SendSessionToWindowResult =
   | { ok: true; movedSessionIds: SessionId[]; targetWindowNumber: number }
-  | { ok: false; message: string }
+  | {
+      ok: false
+      message: string
+      /** True when the hook already toasted this failure (it arrived as main's
+       *  `session-move-failed` event, which can also be an operator's move).
+       *  A UI caller toasts only the rest, so a failure is shown exactly once. */
+      reportedByEvent?: boolean
+      /** True when this renderer gave up WAITING rather than hearing a verdict
+       *  (its own settle timeout, or it unmounted). Main may still have
+       *  committed the move, so a caller must observe before retrying. Every
+       *  other failure is a refusal or a completed rollback: nothing moved. */
+      uncertain?: boolean
+    }
 
 /** How long the SENDING side waits for main's verdict before giving up on the
  *  promise. Main's own deadline (SESSION_MOVE_DEADLINE_MS, 20 s) always fires
@@ -91,7 +103,13 @@ export function useSessionMoves(params: {
   bootstrapCompleteRef.current = bootstrapComplete
 
   const dropRows = useCallback((sessionIds: readonly SessionId[], alsoIfEmpty: readonly TabId[] = []) => {
-    setState(prev => removeMovedSessions(prev, sessionIds, alsoIfEmpty))
+    // `workspaceWithoutSessions` is the one row-removal helper close and merge
+    // already use: it drops the rows, their pins, projects left empty (and
+    // `alsoIfEmpty` only if empty), clears every lane that showed one of them
+    // (cleared, not removed: owner ruling 4, the same as Clear Lane) and
+    // scrubs row metadata. It removes ROWS; killing is a caller's job, and
+    // this caller never kills.
+    setState(prev => workspaceWithoutSessions(prev, sessionIds, alsoIfEmpty))
     // Runtimes go too: the backend is alive but owned by the other window, so
     // nothing here may keep painting or feeding it. No kill: that is the whole
     // difference between this and closeSession.
@@ -230,7 +248,7 @@ export function useSessionMoves(params: {
       window.api.onSessionMoveCancelled?.(event => dispatch({ kind: 'cancelled', event })),
       // A failure changes no rows, so it never needs the bootstrap gate.
       window.api.onSessionMoveFailed?.((event: SessionMoveFailed) => {
-        settleOutgoing(event.moveId, { ok: false, message: event.message })
+        settleOutgoing(event.moveId, { ok: false, message: event.message, reportedByEvent: true })
         showToast(event.message)
       }),
     ]
@@ -259,7 +277,7 @@ export function useSessionMoves(params: {
     // control capability awaiting a renderer that no longer exists.
     for (const [, outgoing] of outgoingRef.current) {
       clearTimeout(outgoing.timer)
-      outgoing.resolve({ ok: false, message: 'The window reloaded before the move finished.' })
+      outgoing.resolve({ ok: false, message: 'The window reloaded before the move finished.', uncertain: true })
     }
     outgoingRef.current.clear()
   }, [])
@@ -297,7 +315,7 @@ export function useSessionMoves(params: {
       }
       const timer = setTimeout(() => {
         outgoingRef.current.delete(started.moveId)
-        resolve({ ok: false, message: `No answer from Window ${started.targetWindowNumber}.` })
+        resolve({ ok: false, message: `No answer from Window ${started.targetWindowNumber}.`, uncertain: true })
       }, SEND_SETTLE_TIMEOUT_MS)
       outgoingRef.current.set(started.moveId, { sessionIds: built.sessionIds, resolve, timer })
     })

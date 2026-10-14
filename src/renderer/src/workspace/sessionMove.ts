@@ -1,7 +1,5 @@
 import { withNormalizedBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
-import { workspaceWithoutSessions } from '@renderer/workspace/pool'
 import { findTabsHoldingDirectory, resolveTabSessions } from '@renderer/workspace/queries'
-import { clearTiledLaneSessions } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import type {
   SessionId,
   SessionMeta,
@@ -250,36 +248,4 @@ export function receiveMovedSessions(
     movedSessionIds: incomingIds,
     addedTabIds,
   }
-}
-
-/**
- * Drop moved rows from a window WITHOUT killing anything.
- *
- * Used by the source once the target has committed, and by the target when a
- * move it merged is cancelled. In both cases the process is alive and owned by
- * the other window, so this is a pure row removal: `workspaceWithoutSessions`
- * (pins, emptied projects, row bindings) plus clearing every lane that showed
- * one of them. Clearing (not removing) the lane is owner ruling 4, the same
- * as Clear Lane: the space stays where the user put it.
- */
-export function removeMovedSessions(
-  state: WorkspaceState,
-  sessionIds: readonly SessionId[],
-  alsoIfEmpty: readonly TabId[] = [],
-): WorkspaceState {
-  const removed = new Set(sessionIds.filter(id => state.sessions[id] !== undefined))
-  if (removed.size === 0 && alsoIfEmpty.length === 0) return state
-  const without = workspaceWithoutSessions(state, removed, alsoIfEmpty)
-  const stage = clearTiledLaneSessions(without.stage, removed)
-  // Expanded-parent lists name sessions too. A stale id there is harmless
-  // (it matches no row) but would persist forever, so it is scrubbed with
-  // the rest of the row's footprint.
-  let rowsChanged = false
-  const rows = stage.rows?.map(row => {
-    if (!row.expandedParents?.some(id => removed.has(id))) return row
-    rowsChanged = true
-    return { ...row, expandedParents: row.expandedParents.filter(id => !removed.has(id)) }
-  })
-  const nextStage = rowsChanged ? { ...stage, rows } : stage
-  return nextStage === without.stage ? without : { ...without, stage: nextStage }
 }

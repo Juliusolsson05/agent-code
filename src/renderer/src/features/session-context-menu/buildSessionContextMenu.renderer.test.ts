@@ -89,7 +89,7 @@ describe('buildSessionContextMenu', () => {
       'Set Title…', 'Color Flag ▸', 'Pin Session',
       '—',
       'Reload Agent', 'Switch Provider…', 'Agent MCP Servers…', 'Duplicate Agent',
-      'Rewind to Prompt…', 'View Prompts…', 'TLDR History…', 'Goal History…',
+      'Rewind to Prompt…', 'View Prompts…', 'Send to Window…', 'TLDR History…', 'Goal History…',
       '—',
       'Copy Resume Command', 'Copy Last Response',
       '—',
@@ -101,13 +101,17 @@ describe('buildSessionContextMenu', () => {
     expect(labels(menu(CODEX))).toEqual(labels(menu(CLAUDE)))
   })
 
-  it('gives a terminal only the open, identity and Close groups', () => {
+  it('gives a terminal the open and identity groups, Send to Window, and Close', () => {
     // Every agent action's `when` refuses a terminal, and both copy commands
-    // need a transcript. Nothing here special-cases terminals.
+    // need a transcript. Send to Window is the one agent-group item a shell
+    // keeps: its process routes between windows exactly like an agent's
+    // (#1481). Nothing here special-cases terminals.
     expect(labels(menu(TERMINAL))).toEqual([
       'Show in Lane 2', 'Show in Spotlight',
       '—',
       'Set Title…', 'Color Flag ▸', 'Pin Session',
+      '—',
+      'Send to Window…',
       '—',
       'Close Agent',
     ])

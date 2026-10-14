@@ -31,6 +31,7 @@ export const createUiShellSlice: StateCreator<
   skillUpdateCheckRequest: 0,
   agentMcpServersSessionId: null,
   agentTitlePromptSessionId: null,
+  sendToWindowSessionId: null,
   rootManagementPromptSessionId: null,
   rootManagementPromptOverrides: null,
   rootManagementPromptStopGoalLoop: false,
@@ -188,6 +189,10 @@ export const createUiShellSlice: StateCreator<
     set({ agentTitlePromptSessionId: sessionId }, false, 'uiShell/openAgentTitlePrompt'),
   closeAgentTitlePrompt: () =>
     set({ agentTitlePromptSessionId: null }, false, 'uiShell/closeAgentTitlePrompt'),
+  openSendToWindow: sessionId =>
+    set({ sendToWindowSessionId: sessionId }, false, 'uiShell/openSendToWindow'),
+  closeSendToWindow: () =>
+    set({ sendToWindowSessionId: null }, false, 'uiShell/closeSendToWindow'),
 
   openRootManagementPrompt: (sessionId, stagedOverrides, stopGoalLoop) =>
     set({

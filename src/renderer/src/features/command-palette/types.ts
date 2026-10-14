@@ -243,6 +243,9 @@ export type CommandContext = {
      *  command-target agent (#906). The dialog, not the command, performs the
      *  reload, so a declined warning leaves the session untouched. */
     openRootManagementPrompt: (sessionId: string) => void
+    /** Open the Send to Window picker for the captured command target (#1481).
+     *  The picker performs the move. */
+    openSendToWindow: (sessionId: string) => void
     openUsageModal: () => void
     /** Open the Agent Analytics modal (#964); the modal fetches its own summary. */
     openAgentAnalytics: () => void

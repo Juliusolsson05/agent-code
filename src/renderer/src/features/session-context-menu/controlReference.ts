@@ -28,6 +28,7 @@ export const controlReference = [
       "duplicate-agent",
       "rewind-to-prompt",
       "view-prompts",
+      "send-to-window",
       "view-tldr-history",
       "view-goal-history",
       "goal-loop-stop",
