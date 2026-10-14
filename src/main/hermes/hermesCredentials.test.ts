@@ -142,9 +142,13 @@ describe('credential races (review a)', () => {
     const connection = await hermes.add({ name: 'VPS', baseUrl: URL_A })
     const store = new HermesTokenStore(join(dir, 'hermes', 'tokens'), codec)
     await store.set(connection.id, URL_A, tokens({ expiresAt: 0 }))
+    const disconnected: string[] = []
+    hermes.on('disconnect', (id: string) => disconnected.push(id))
     const dial = hermes.dialFor(connection.id)()
     await started
     await hermes.signOut(connection.id)
+    // Live panes on the connection are told to drop their sockets too.
+    expect(disconnected).toEqual([connection.id])
     release()
     await expect(dial).rejects.toBeInstanceOf(HermesSignedOutError)
     expect(await store.get(connection.id, URL_A)).toBeNull()

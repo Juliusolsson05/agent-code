@@ -111,6 +111,21 @@ export class HermesSession extends EventEmitter implements AgentSession {
    */
   private committedRows: HermesEntryPayload[] = []
   private unregisterHistory: (() => void) | null = null
+  private signedOut = false
+  private readonly onServiceDisconnect = (id: string): void => {
+    if (id !== this.connectionId || this.stopped || !this.headless) return
+    // Stays detached: the socket closing below must not start the reconnect
+    // loop, which would only redial a connection with no credentials.
+    this.signedOut = true
+    // Detach, never close: the conversation stays on the server and Reload
+    // Agent resumes it once the user signs in again.
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = null
+    void this.headless.stop().catch(() => undefined)
+    this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
+    this.emit('process-state', { active: false, status: 'Signed out of Hermes' })
+    this.emitNotice(HERMES_SIGNED_OUT_MESSAGE)
+  }
   /**
    * Offset for history generations. hermes-headless numbers generations from
    * 1 per instance, but a pane OUTLIVES its session: Reload Agent and recovery
@@ -161,10 +176,12 @@ export class HermesSession extends EventEmitter implements AgentSession {
     headless.on('request', (request: HermesRequest) => this.onRequest(request))
     headless.on('request-closed', ({ id }: { id: string }) => this.onRequestClosed(id))
     headless.on('connection', (state: HermesConnectionState) => this.onConnection(state))
+    service.on('disconnect', this.onServiceDisconnect)
 
     try {
       await headless.start()
     } catch (error) {
+      service.off('disconnect', this.onServiceDisconnect)
       service.reportReachability(this.connectionId, false, error)
       this.exited = true
       // A failed start is a failed spawn: SessionManager rejects session:spawn
@@ -189,6 +206,7 @@ export class HermesSession extends EventEmitter implements AgentSession {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
     this.unregisterHistory?.()
     this.unregisterHistory = null
+    getHermesConnectionService().off('disconnect', this.onServiceDisconnect)
     // Detach only: the conversation stays on the server and resumes on the
     // next spawn of this pane (hermes-headless stop() never session.close's).
     await this.headless?.stop().catch(() => undefined)
@@ -313,7 +331,7 @@ export class HermesSession extends EventEmitter implements AgentSession {
   }
 
   private onConnection(state: HermesConnectionState): void {
-    if (this.stopped) return
+    if (this.stopped || this.signedOut) return
     if (state.kind === 'ready') {
       this.connectedAt = Date.now()
       this.emit('input-readiness', { ready: true, reason: 'ready' })

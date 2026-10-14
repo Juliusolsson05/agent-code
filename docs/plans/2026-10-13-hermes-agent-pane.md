@@ -553,12 +553,12 @@ Each item goes to a follow-up issue filed at PR time:
   - Open the package PR. Do not merge until the app PR is ready, mirroring
     Pi #1140.
   - Hands on: the package sha for the gitlink.
-- [ ] **8. Stage 6: app runtime.**
+- [x] **8. Stage 6: app runtime.** (`cc6afbff`; tests `5ec6c381` + the /new and signed-out pins)
   - Kind and sets; registries; setup union; the remote spawn path;
     `src/main/hermes/*`; `HermesSession`; prompt delivery; conditions types;
     IPC/preload.
   - Verified by: the main/system tests; `tsc -b`.
-- [ ] **9. Stage 7: chat surface + Settings.**
+- [x] **9. Stage 7: chat surface + Settings.** (`fb0819e8`; card fix `f5f000ee`)
   - Display-mode pin; the TileTree branch; `hermes-chat/*`;
     `providers/hermes/renderer/*`; the Settings panel.
   - Verified by: the renderer tests, including the dropped-claim mutation.
@@ -606,6 +606,27 @@ Reviewer b: OpenCode failed at once (provider: "Insufficient balance"); replaced
 | Review B suspicions: truncated ring, heartbeat, backendCompatibility, PKCE, untyped frames | valid as gaps | tests added (truncated: mechanical mutation of S8); `backendCompatibility(null)` was a real bug (contract 0), fixed |
 | 15 surviving mutations | valid as test gaps | facade + reconciler + auth tests added; every new guard and the redirect/verifier/provider mutations now fail tests (50 core/system tests); remaining survivor: the history fence above |
 
+## Review (2026-10-13, app, one round)
+
+Reviewer a: Codex (correctness/security), report `temp/hermes-loop/review-app/report-a.md`, verdict FIX-BEFORE-MERGE, every finding with a probe.
+Reviewer b: Pi (tests/rendering), report `temp/hermes-loop/review-app/report-b.md`.
+
+| Finding (review a) | Verdict | Disposition |
+|---|---|---|
+| 1. blocker: a URL edit could send the old backend's refresh token to the new host | valid (probe) | fixed `0816216f`: broker bound to one URL for life, revoked on edit/sign-out/remove/sign-in; test "never sends a token read for the old URL to an edited one" |
+| 2. renderer reload shows an empty Hermes pane (no history source) | valid (probe) | fixed `8b4db279`: `hermesHistory.ts` serves the live session's emitted rows (`loadHistoryChunk` + locator pair, so phone backfill too); test through the real history loader incl. paging |
+| 3. Reload Agent can move a pane to another server | valid (probe) | fixed `8b4db279`: replaceSession carries `remoteConnectionId` for a same-kind continuation; test on the real reload hook |
+| 4. a refresh finishing after Sign out restores credentials | valid (probe) | fixed `0816216f`: revoke + post-write recheck; test |
+| 5. recovery requires the local worktree to exist | valid (probe) | fixed `8b4db279`: folder check skipped for remote kinds (main + dispatch create); test with the real directory check |
+| 6. auth-rejected ticket mint retries forever | valid (probe) | fixed `0816216f`: refused mint = signed out; test. The WebSocket-upgrade 401/403 path still retries (ticket is freshly minted each time, so a persistent upgrade refusal points at a proxy, not credentials); recorded as residual |
+| 7. Cancel ignored after the callback arrived | valid (probe) | fixed `0816216f`: abort rechecked around the exchange, listener closed on the consumed callback, service commits only its own attempt; test |
+| 8. the Settings → Hermes sentence is flattened to the generic failure | valid | fixed `8b4db279`: shared curated `HERMES_*_MESSAGE` constants recognised by both launderers; test |
+| 9. pickers mark a signed-in Hermes "Not installed" | valid | fixed `8b4db279`: hint limited to local kinds; test |
+| Suspicion: stateless `?error=` callback ends a sign-in | valid (Hermes only redirects with code+state) | fixed; test |
+| Suspicion: live sockets survive sign-out/URL edit | plausible, not exercised | residual: the socket keeps working until it drops; the next dial is refused. Follow-up candidate |
+| Survivor: skill-reconcile guard | valid | test with a pre-start hook; mutation now fails |
+| Survivor: sudo/secret value validation | valid | test on recorded S6 sudo/secret; mutation now fails |
+
 ## Execution notes
 
 - **2026-10-13, plan-only:**
@@ -630,3 +651,33 @@ Reviewer b: OpenCode failed at once (provider: "Insufficient balance"); replaced
     - The H6 oracle excludes mid-turn snapshots (S10), and S5/S6, which have no oracle.
     - New auth error kind `access-expired`, from the recorded S1/S14 semantics.
   - **Review.** Package reviewers started: Codex (a: correctness) and OpenCode (b: tests/mutation), run `review-hh-package`.
+- **2026-10-13, tasks 8–10:**
+  - **App runtime + surface** landed in `cc6afbff` / `fb0819e8`; tests in `5ec6c381` and later commits; docs in `866f1d3f`.
+  - **Real bug found by a recorded fixture:** Hermes decorates its first clarify choice with " (Recommended)" and strips it only from a whole answer, so a multi-select built from decorated labels reached the model as one unrecognised choice. Cards now answer bare labels, as Hermes' own client did in S6 (`f5f000ee`). The clarify question became a `<fieldset>` (a `<label>` renamed its first button).
+  - **Confirm-red observed (app):** dropping the Recommended strip fails the clarify card test; re-scheduling after a signed-out dial fails the reconnect test; prefixing the mapper's tool ids (breaking the ledger's id claim) fails both committed-row chat tests.
+  - **Ruling (2026-10-13):** the Hermes pin goes under `remoteBackends` in `support/upstream-versions.json`, not `providers`, because `scripts/check-upstream.mjs` queries npm for every `providers` entry and Hermes is not on npm. Cost if wrong: no automated drift alert for Hermes releases (the runtime contract check still warns per connection).
+  - **Ruling (2026-10-13):** no connection-picker command in v1. A pane uses its persisted connection, else the first signed-in one, else the first (`workspace/remoteConnection.ts`). Cost if wrong: a user with two VPSes cannot choose per pane until the follow-up.
+  - **App review** (one round): Codex (a: correctness/security) and Pi (b: tests/rendering), run `review-hermes-app`, briefs in `temp/hermes-loop/review-app/`.
+
+## Plan vs built
+
+| Plan section | State | Note |
+|---|---|---|
+| Decisions 1–2 | MATCH | answered by the owner |
+| Decisions 3–10 | MATCH (UNCONFIRMED) | built as the defaults; listed in the PR |
+| Design: package | MATCH | hermes-headless#1 |
+| Design: app runtime | MATCH | plus `LOCAL_PROVIDER_KINDS` (setup keyed on local kinds) and `CHAT_SURFACE_PROVIDER_KINDS`, which the plan folded into "the two sets" |
+| Design: renderer | DRIFT | the chat renders inside `TileLeaf.tsx`, not a `TileTree.tsx` branch: TileLeaf already owns the composer and condition outlet the chat reuses |
+| Files: setup | DRIFT | `binaryResolver`/`toolchain`/`SetupGate.tsx` untouched: keying `SetupToolId`, `CHECK_ORDER` and readiness on `LocalProviderKind` removes Hermes from every binary row at the type level |
+| Files: `src/main/hermes/ipc.ts` | DRIFT | lives at `src/main/ipc/hermes.ts` beside the other IPC modules; plus `service.ts` and `registry.ts` |
+| Files: command palette | MATCH | generated `hermes-vertical`/`hermes-horizontal`; no hand-kept keyword list needed one |
+| Files: `installSource.ts` | MATCH | comment only (skills unsupported) |
+| Tests: package | MATCH | file names differ (`auth/auth.test.ts`, `transport/RpcConnection.system.test.ts`, `reconcile/reconcile.system.test.ts`, facade system tests); every listed assertion exists |
+| Tests: tokenBroker/tokenStore/nativeSignIn | DRIFT (names) | one file, `src/main/hermes/hermesCredentials.test.ts`, covers all three contracts |
+| Tests: mapper.test.ts | DRIFT | covered through the chat projection test on recorded S4 resume rows (mapper → ledger), where its id claim is mutation-proven |
+| Tests: HermesChatLeaf.renderer.test.tsx | DRIFT (name) | `providers/hermes/renderer/conditions/views.renderer.test.tsx` on S5/S6 |
+| Tests: S8 reconnect in the chat projection | MISSING → package | exactly-once across a drop is proven in hermes-headless (`RpcConnection` cut-point tests on S8); the app projection test uses S4 only |
+| Verification | MATCH | package check + live 7/7; app `tsc -b` + `npm run check` (results in the PR) |
+| ARCHITECTURE.md | MATCH | §5.2 row, §5.3 column, §5.3.7; no diagram (the table carries it) |
+| Out of scope | follow-up issues filed at PR time |
+

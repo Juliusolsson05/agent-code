@@ -122,6 +122,7 @@ export class HermesConnectionService extends EventEmitter {
       // in-flight refresh or sign-in for the old URL cannot land afterwards.
       this.revoke(id)
       this.signIns.get(id)?.abort()
+      this.disconnect(id)
       await this.tokens.delete(id)
       this.setRuntime(id, { state: 'signed-out', identity: null, backend: null, lastError: null })
     }
@@ -133,6 +134,7 @@ export class HermesConnectionService extends EventEmitter {
     this.require(id)
     this.signIns.get(id)?.abort()
     this.revoke(id)
+    this.disconnect(id)
     await this.persist(this.connections.filter((entry) => entry.id !== id))
     await this.tokens.delete(id)
     this.runtime.delete(id)
@@ -196,6 +198,7 @@ export class HermesConnectionService extends EventEmitter {
     // password provider's are stateless. Forgetting them locally is what
     // signing out can do.
     this.revoke(id)
+    this.disconnect(id)
     await this.tokens.delete(id)
     this.setRuntime(id, { state: 'signed-out', identity: null, backend: this.runtime.get(id)?.backend ?? null, lastError: null })
   }
@@ -237,6 +240,16 @@ export class HermesConnectionService extends EventEmitter {
   }
 
   // ── internals ──────────────────────────────────────────────────────────────
+
+  /**
+   * Tell live panes on this connection to let go of their sockets. Revoking
+   * the broker only stops NEW dials; a socket opened before Sign out would
+   * otherwise keep chatting with the server the user just signed out of
+   * (review a suspicion). Not emitted on a fresh sign-in: that keeps panes up.
+   */
+  private disconnect(id: string): void {
+    this.emit('disconnect', id)
+  }
 
   /** Invalidate everything the current broker has in flight, then drop it. */
   private revoke(id: string): void {

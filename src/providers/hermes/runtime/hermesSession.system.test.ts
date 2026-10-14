@@ -3,6 +3,7 @@
 // that replays what a real `hermes serve` v0.21.7 sent (hermes-headless
 // research/corpus S3/S4/S5/S13).
 
+import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { setHermesConnectionService } from '@main/hermes/registry.js'
@@ -35,13 +36,18 @@ let sockets: FakeSocket[] = []
 // A dial that throws instead of opening a socket (set per test).
 let dialFailure: Error | null = null
 const reports = { backend: [] as unknown[], reachability: [] as boolean[] }
+// The service's event side (HermesConnectionService emits 'disconnect').
+let serviceEvents = new EventEmitter()
 
 beforeEach(() => {
   sockets = []
   dialFailure = null
   reports.backend = []
   reports.reachability = []
+  serviceEvents = new EventEmitter()
   setHermesConnectionService({
+    on: serviceEvents.on.bind(serviceEvents),
+    off: serviceEvents.off.bind(serviceEvents),
     dialFor: () => async () => {
       if (dialFailure) throw dialFailure
       const socket = new FakeSocket()
@@ -180,6 +186,19 @@ describe('HermesSession (AgentSession contract on recorded frames)', () => {
     await session.stop()
     expect((await loadInitialHistoryChunk({ kind: 'hermes', cwd: '/', providerSessionId: stored, limit: 120 })).entries).toEqual([])
   }, 30_000)
+
+  it('lets go of a live socket when its connection is signed out, without closing the conversation', async () => {
+    const { of, socket, sid } = await startedSession('S3')
+    serviceEvents.emit('disconnect', 'conn-1')
+    await flush()
+    expect(socket.readyState).toBe(3)
+    expect(socket.sent.some((frame) => frame.method === 'session.close')).toBe(false)
+    expect(String((of('jsonl-entry') as HermesEntryPayload[]).at(-1)!.row.text)).toMatch(/Signed out of this Hermes connection/)
+    // No redial of a connection with no credentials.
+    for (let tick = 0; tick < 20; tick += 1) await flush()
+    expect(sockets).toHaveLength(1)
+    expect(sid).toBeTruthy()
+  })
 
   it('runs a slash command and shows its output as a local notice (recorded S13)', async () => {
     const { of, socket, session } = await startedSession('S3')
