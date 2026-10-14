@@ -562,7 +562,7 @@ Each item goes to a follow-up issue filed at PR time:
   - Display-mode pin; the TileTree branch; `hermes-chat/*`;
     `providers/hermes/renderer/*`; the Settings panel.
   - Verified by: the renderer tests, including the dropped-claim mutation.
-- [ ] **10. Stage 8: integration.**
+- [x] **10. Stage 8: integration.** (app PR #1491 + hermes-headless#1 open, CI green on both; reviews dispositioned; follow-ups #1485–#1490, #1492)
   - Commands, phone identity, hand-written provider lists, `ARCHITECTURE.md`,
     `upstream-versions.json`.
   - Full `npm run check` + CI.
@@ -697,3 +697,4 @@ Reviewer b: Pi (tests/rendering), report `temp/hermes-loop/review-app/report-b.m
   - Merged origin/main (`7cda9612`); `tsc -b` clean and 1249 provider/command/control/Hermes tests pass after the merge.
   - Full-check drift fixed on the way: an unconditional connection await delayed every local spawn (`0867f925`); the Skills, targets, usage and MCP-domain drift tests now name Hermes; the control reference gained a Hermes page.
   - Review b (Pi) dispositions recorded above; fixes `a927613e`, tests `65276d77`; #1492 filed.
+  - CI green on #1491 at `ac036b37` (quality-gate, minimum-node-fixture-gate) and on hermes-headless#1; both CLEAN. Loop done: nothing merged, awaiting the owner.
