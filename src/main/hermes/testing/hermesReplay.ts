@@ -97,23 +97,35 @@ export const CONNECTION: HermesConnectionInfo = {
   lastError: null,
 }
 
-export function bridgeOn(scenario: string, stateDir: string, connectionIndex = 0) {
+export function bridgeOn(scenario: string, stateDir: string, connectionIndex = 0, options: { everyDialReplays?: 'same' } = {}) {
   const entries = latestRecording(scenario, { release: 'v0.22.0' })
   const recorded = connections(entries)
   const history = storedHistory(entries)
+  const knownIds = new Set(recorded.flat().map((step) => (step.frame.result as { stored_session_id?: unknown } | undefined)?.stored_session_id).filter((id): id is string => typeof id === 'string'))
   const dials: FakeSocket[] = []
   const fake: HermesBridgeConnections = {
     list: () => [CONNECTION],
     dialFor: () => async () => {
       const socket = new FakeSocket()
       dials.push(socket)
-      void replay(socket, recorded[Math.min(connectionIndex + dials.length - 1, recorded.length - 1)]!, history)
+      // Default: the Nth dial replays the recording's Nth connection. `same`:
+      // every dial replays the same one (independent callers, e.g. two agents
+      // whose first sends race).
+      void replay(socket, recorded[options.everyDialReplays === 'same' ? connectionIndex : Math.min(connectionIndex + dials.length - 1, recorded.length - 1)]!, history)
       return socket
     },
-    restFor: () => { throw new Error('REST is not used by these calls') },
-    defaultLaneKey: async () => null,
+    // REST as the recorded server would answer it: the recording's own
+    // stored conversations exist, anything else is Hermes' 404 (`_NOT_FOUND`,
+    // web_routers/sessions.py latest-descendant).
+    restFor: () => ({
+      latestDescendant: async (id: string) => {
+        if (!knownIds.has(id)) throw Object.assign(new Error('Not found'), { status: 404 })
+        return { requested_session_id: id, session_id: id, path: [id], changed: false }
+      },
+    }) as unknown as ReturnType<HermesBridgeConnections['restFor']>,
+    lookupLaneKey: async () => null,
   }
   const bridge = new HermesAgentBridge({ connections: fake, stateDir, headlessOptions: { heartbeatIntervalMs: 600_000 } })
-  return { bridge, dials }
+  return { bridge, dials, knownIds }
 }
 

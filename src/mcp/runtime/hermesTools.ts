@@ -37,7 +37,7 @@ export type HermesAgentBridgePort = {
 export const HERMES_INSTRUCTIONS = [
   'Hermes (hermes_conversations, hermes_read, hermes_send): the user\'s personal Hermes agent on their own server, which can act with their accounts and a terminal there.',
   'By default your messages go to a Hermes conversation of your own, not the user\'s Telegram thread; pass conversation "telegram" only when the user asked you to write there, or an id from hermes_conversations to continue a specific conversation.',
-  'Send Hermes only what the user\'s request calls for. hermes_send waits for the reply by default and returns it; "still_running" means read it later with hermes_read, "awaiting_approval" means Hermes is asking the user to approve something (tell the user; you cannot answer it), "held" means the user\'s phone conversation is busy and nothing was sent.',
+  'Send Hermes only what the user\'s request calls for; each message is marked as sent by you. hermes_send waits up to about half a minute and returns the reply; "still_running" means Hermes is still working, so read the answer later with hermes_read instead of sending again. "ended" means the turn stopped without an answer (interrupted or an error). "awaiting_approval" means Hermes is asking the user to approve something (tell the user; you cannot answer it). "held" means the Telegram thread is busy or could not be checked, and nothing was sent.',
   'If a send reports it may or may not have reached Hermes, read the conversation before sending again, or Hermes may do the work twice.',
 ].join(' ')
 
@@ -63,6 +63,10 @@ const conversation = z.string().min(1).max(200).optional().describe('"own" (defa
 
 export function registerHermesTools(server: McpServer, scope: McpSessionScope, dependencies: HermesToolDependencies): void {
   const bridge = dependencies.hermesAgentBridge
+  // The identity an agent keeps across reload and provider switch (review A
+  // F2: the session id changes on reload, so an agent got a second "own"
+  // conversation). From the authenticated scope, never from input.
+  const callerId = scope.tldrIdentity ?? scope.sessionId
   const unavailable = () => fail('Hermes is unavailable in this build.')
 
   server.registerTool('hermes_conversations', {
@@ -73,7 +77,7 @@ export function registerHermesTools(server: McpServer, scope: McpSessionScope, d
   }, async (input) => {
     if (!bridge) return unavailable()
     try {
-      return ok(await bridge.conversations(scope.sessionId, { connection: input.connection }))
+      return ok(await bridge.conversations(callerId, { connection: input.connection }))
     } catch (error) {
       return failure(error)
     }
@@ -91,7 +95,7 @@ export function registerHermesTools(server: McpServer, scope: McpSessionScope, d
   }, async (input) => {
     if (!bridge) return unavailable()
     try {
-      return ok(await bridge.read(scope.sessionId, { connection: input.connection, conversation: input.conversation, limit: input.limit }))
+      return ok(await bridge.read(callerId, { connection: input.connection, conversation: input.conversation, limit: input.limit }))
     } catch (error) {
       return failure(error)
     }
@@ -99,13 +103,13 @@ export function registerHermesTools(server: McpServer, scope: McpSessionScope, d
 
   server.registerTool('hermes_send', {
     title: 'Message Hermes',
-    description: 'Send the user\'s Hermes agent a message and, by default, wait for its reply. Never interrupts a turn Hermes is running (the message queues behind it). Returns status replied (with reply and the tools Hermes ran), accepted (wait false), still_running, awaiting_approval, or held.',
+    description: 'Send the user\'s Hermes agent a message and, by default, wait for its reply. Never interrupts a turn Hermes is running (the message queues behind it). Returns status replied (with reply and the tools Hermes ran), ended (no answer: interrupted or an error), accepted (wait false), still_running, awaiting_approval, or held.',
     inputSchema: {
       text: z.string().min(1).max(20_000).describe('The message to Hermes.'),
       connection,
       conversation,
       wait: z.boolean().optional().describe('Wait for the reply (default true).'),
-      timeoutSeconds: z.number().int().min(1).max(900).optional().describe('How long to wait for the reply (default 300, max 900).'),
+      timeoutSeconds: z.number().int().min(1).max(50).optional().describe('How long to wait for the reply (default 25, max 50: longer waits outlive some MCP clients\' own timeouts). A longer turn returns still_running; read the answer with hermes_read.'),
     },
     // Not read-only and open-world: Hermes acts on the user's server and accounts.
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
@@ -114,7 +118,7 @@ export function registerHermesTools(server: McpServer, scope: McpSessionScope, d
     const named = await dependencies.sessionTitle?.(scope).catch(() => null)
     const title = named?.trim() || `agent ${scope.sessionId.slice(0, 8)}`
     try {
-      return ok(await bridge.send(scope.sessionId, title, {
+      return ok(await bridge.send(callerId, title, {
         text: input.text,
         connection: input.connection,
         conversation: input.conversation,

@@ -97,3 +97,37 @@ The app is not launched (standing rule). The real VPS is not called. The live He
 - Hermes calling Agent Code's tools (#1490).
 - Answering approvals from MCP.
 - Streaming partial replies to the agent.
+
+## Review round (one round, two reviewers)
+
+### Fixed
+- **Concurrent first sends (A1, reproduced).** Map writes go through one queue, each with a unique temp file. The map loads once (A6). Its shape is validated, and a corrupt file is kept as `.corrupt-<ts>` (A5).
+- **Identity across reloads (A2).** The map is keyed by the scope's `tldrIdentity`, which survives reload and provider switch, not the session id.
+- **Secrets in summaries (A3).** Tool lines and approval text pass through `redactSecrets`: bearer tokens, key/token/secret/password assignments, `sk-`, `ghp_`/`github_pat_`, `xox*` and `AKIA` keys.
+- **Attribution (A4, UNCONFIRMED).** Every message is prefixed `[Sent by an Agent Code agent: <title>]`.
+- **No junk conversations (A7 / B4).** Before resuming, `latest-descendant` is checked over REST. An unknown id is refused before any socket opens, so no conversation is created. A deleted "own" conversation is forgotten and replaced. The lookup also follows compression to the tip.
+- **Telegram lookup side effect (A8).** `service.lookupLaneKey` is a lookup without side effects.
+- **Reply binding (B1).** `rowsForOurMessage` finds our user row by id, or by text after the mark when the submit was queued (S20). The answer is bounded at the next user row. Our turn is the first stop after an accepted submit, or the second after a queued one.
+- **Timeouts (B2).** The default wait is 25 s, capped at 50 s, because MCP clients time out at 60 s. A second send waits at most 10 s for the first, then reports `busy`.
+- **Turns that end without an answer (B3).** They return `ended` with the reason (interrupted or error) instead of waiting out the timeout.
+- **Smaller send fixes (B5).**
+  - A replayed open request also reports `awaiting_approval`.
+  - A dropped socket reports `uncertain`: delivered, read later.
+  - The `held` wording now covers "busy or could not be checked".
+  - A held message is taken back (`cancelHeld`) before returning.
+- **Tests (B6).**
+  - S20-derived reply binding;
+  - concurrent first sends;
+  - a corrupt map;
+  - a deleted own conversation;
+  - an unknown id with no dial;
+  - redaction;
+  - attribution.
+
+  Every guard was mutation-checked: 6/6 caught.
+
+### Not covered by a replay test
+- **Lane hold (T4).** It needs the REST lane fake.
+- **`ended` on a recorded interrupt (S7).** S7's interrupt comes from the client.
+
+Both paths are covered by code reading and by the pure binding tests.
