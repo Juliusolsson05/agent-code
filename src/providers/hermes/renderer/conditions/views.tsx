@@ -106,6 +106,14 @@ export const hermesApprovalView = defineView<'hermes.approval', HermesApprovalCo
   },
 })
 
+// Mirrors Hermes' strip_recommended (vendor tools/clarify_tool.py): the
+// suffix is presentation, case-insensitive, trailing only.
+const RECOMMENDED_LABEL = '(recommended)'
+function stripRecommended(choice: string): string {
+  const trimmed = choice.trim()
+  return trimmed.toLowerCase().endsWith(RECOMMENDED_LABEL) ? trimmed.slice(0, -RECOMMENDED_LABEL.length).trim() : trimmed
+}
+
 function ClarifyQuestionField({
   question,
   value,
@@ -123,7 +131,14 @@ function ClarifyQuestionField({
   const selected = new Set(value ? value.split(', ') : [])
   return (
     <div className="flex flex-wrap gap-1.5">
-      {question.choices.map((choice) => {
+      {question.choices.map((label) => {
+        // The ANSWER is the bare choice. Hermes decorates its first choice
+        // with " (Recommended)" for display (recorded S6: "a (Recommended)")
+        // and its own client answered "a, c". Hermes strips the suffix only
+        // from a whole answer (tools/clarify_tool.py strip_recommended /
+        // _clean_answer), so "a (Recommended), c" would reach the model as
+        // one unrecognised choice. The button keeps the decorated label.
+        const choice = stripRecommended(label)
         const active = selected.has(choice)
         return (
           <Button
@@ -137,10 +152,10 @@ function ClarifyQuestionField({
               const next = new Set(selected)
               if (active) next.delete(choice)
               else next.add(choice)
-              onChange(question.choices.filter((entry) => next.has(entry)).join(', '))
+              onChange(question.choices.map(stripRecommended).filter((entry) => next.has(entry)).join(', '))
             }}
           >
-            {withVisibleControls(choice)}
+            {withVisibleControls(label)}
           </Button>
         )
       })}
@@ -168,15 +183,18 @@ function ClarifyCard({ state, actions, dispatch }: { state: HermesClarifyConditi
           }}
         >
           <div className="flex flex-col gap-2.5">
+            {/* A fieldset, not a <label>: a label names its FIRST labelable
+                descendant, so wrapping a row of choice buttons in one renamed
+                the first button to the whole question for screen readers. */}
             {state.questions.map((question) => (
-              <label key={question.qid} className="flex flex-col gap-1">
-                <span>{withVisibleControls(question.question)}</span>
+              <fieldset key={question.qid} className="flex flex-col gap-1">
+                <legend className="mb-1">{withVisibleControls(question.question)}</legend>
                 <ClarifyQuestionField
                   question={question}
                   value={answers[question.qid] ?? ''}
                   onChange={(value) => setAnswers((current) => ({ ...current, [question.qid]: value }))}
                 />
-              </label>
+              </fieldset>
             ))}
           </div>
           <div className="mt-2 flex flex-wrap gap-1.5">
