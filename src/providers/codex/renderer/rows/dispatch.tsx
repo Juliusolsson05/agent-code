@@ -63,6 +63,8 @@ import {
   fromCodexEmbeddedOperation,
   fromCodexWaitOperation,
 } from '@providers/codex/renderer/adapters/embeddedOperation'
+import { fromCodexScriptSteps } from '@providers/codex/renderer/adapters/scriptSteps'
+import { CodexScriptStepsRow } from '@providers/codex/renderer/components/script-steps'
 import {
   CodexEmbeddedOperationRow,
   CodexNamedOperationResultRow,
@@ -234,6 +236,32 @@ export function renderCodexOperation(
               receipt: { rendererId: 'codex.rows.dispatch', protocolId: 'command.continuation' },
             }
         : null,
+    }
+  }
+
+  // The floor under the exact adapters above (#1510): a FINISHED exec script
+  // none of them could attribute byte-for-byte becomes one card of the steps
+  // it ran, each with what it printed. Before, these fell to the generic
+  // rows: the command headline said RUNNING after the script finished and
+  // the output sat in closed "JSON record" boxes (22% of the owner's scripts
+  // were the single-command `text(await tools.exec_command(…))` shape alone).
+  // Placed AFTER every exact adapter and the wait/embedded ones so a proven
+  // attribution always wins; the card keeps the exact transport text one
+  // click away, so absorbing the result row hides no bytes.
+  const scriptSteps = fromCodexScriptSteps(input.toolUse, input.result)
+  if (scriptSteps) {
+    return {
+      toolUse: {
+        action: 'render',
+        node: <CodexScriptStepsRow model={scriptSteps} />,
+        receipt: { rendererId: 'codex.rows.dispatch', protocolId: 'codex.script-steps' },
+      },
+      toolResult: {
+        action: 'absorb',
+        ownerRenderId: 'codex.rows.dispatch',
+        protocolId: 'codex.script-steps',
+        reason: 'the script-steps card shows every result part and keeps the exact output one click away',
+      },
     }
   }
 
