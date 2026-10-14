@@ -1153,7 +1153,7 @@ export function useWorkspace(
     setPinnedSessionIds: dispatchActions.setPinnedSessionIds,
     selectTiledLaneSession: dispatchActions.selectTiledLaneSession,
     clearTiledLane: dispatchActions.clearTiledLane,
-    insertTiledLaneRight: dispatchActions.insertTiledLaneRight,
+    insertTiledLane: dispatchActions.insertTiledLane,
     removeTiledLane: dispatchActions.removeTiledLane,
     setTiledFocusedLane: dispatchActions.setTiledFocusedLane,
     insertDispatchRowBelow: dispatchActions.insertDispatchRowBelow,

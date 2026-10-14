@@ -1,4 +1,4 @@
-import type { CommandDef } from '@renderer/features/command-palette/types'
+import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 import { status, toggle, value } from '@renderer/features/command-palette/commandState'
 import {
   MAX_DISPATCH_LANES,
@@ -8,6 +8,7 @@ import {
   normalizeGridShape,
   rowIndexForLane,
   rowStartIndex,
+  type LaneInsertSide,
 } from '@renderer/workspace/dispatch/gridShape'
 import { resolveStrictDispatchCommandTarget } from '@renderer/workspace/dispatch/dispatchTarget'
 import { sessionDisplayTitle } from '@renderer/workspace/sessionDisplayTitle'
@@ -120,7 +121,7 @@ export const layoutCommands: CommandDef[] = [
     // ⌘D bindings and visibility overrides are not orphaned (#992 §5.4).
     surface: 'app',
     title: 'Stage Shape…',
-    description: '**What it does:** Opens the stage shape editor — rows of lanes, one stepper per row.\n\n**Use when:** You want to reshape many lanes at once, or see the ragged-by-design shape before committing it.\n\n**Notes:** Rows are independent, so 4 lanes on top and 2 below is a normal shape. Day-to-day, **New Lane** / **New Row** / **Remove Lane** / **Remove Row** edit the shape in place.',
+    description: '**What it does:** Opens the stage shape editor — rows of lanes, one stepper per row.\n\n**Use when:** You want to reshape many lanes at once, or see the ragged-by-design shape before committing it.\n\n**Notes:** Rows are independent, so 4 lanes on top and 2 below is a normal shape. Day-to-day, **New Lane** / **New Lane Before** / **New Row** / **Remove Lane** / **Remove Row** edit the shape in place.',
     keywords: ['stage shape', 'grid dispatch', 'tiled dispatch', 'lanes', 'rows', 'reshape', 'multi agent', 'parallel agents'],
     run: ({ ui }) => ui.openTiledDispatchPrompt(),
   },
@@ -135,38 +136,32 @@ export const layoutCommands: CommandDef[] = [
     // grid at [2] — lane 0 seeded with the focused agent (#977), lane 1 the
     // new empty lane. The stage is a required field now (#992), so there is
     // always a focused lane and the command is one thing: insert to its right.
+    // Inserting to the LEFT is New Lane Before, below.
     surface: 'app',
     title: 'New Lane',
     description: '**What it does:** Inserts a new lane immediately to the **right of the focused lane**, lengthening only that row.\n\n**Use when:** You want another live agent view without reshaping the stage or disturbing the lanes around it.\n\n**Notes:** Rows are independent — this never widens any other row. The current lane stays focused and the new lane arrives empty, because adding a lane asks for space, not for a particular agent. Focus it and run Select Next Agent to put the first agent in it, or pick one from its strip.',
     keywords: ['new lane', 'add lane', 'insert lane', 'tiled dispatch', 'expand', 'right', 'grid dispatch', 'stage'],
     when: ({ workspace }) => canInsertLaneInFocusedRow(workspace.state),
-    run: async ({ workspace }) => {
-      // Re-checked here, not only in `when`, so a programmatic invocation that
-      // never went through the palette stays inert instead of relying on the
-      // reducer's refusal to be silent.
-      if (!canInsertLaneInFocusedRow(workspace.state)) return
-      const tiled = workspace.state.stage
-      const laneIndex = tiled.focusedLane
-      const sourceLane = tiled.lanes[laneIndex]
-      if (!sourceLane) return
-      // The raw lane id can still name a globally live but OUT-OF-SCOPE
-      // session, which renders empty rather than as that agent. Use the same
-      // strict visual resolver as lifecycle commands so pane feedback can only
-      // target the agent the user can actually see in this focused lane.
-      const sourceTarget = resolveStrictDispatchCommandTarget(workspace.state)
-
-      const inserted = workspace.insertTiledLaneRight(laneIndex)
-      if (!inserted) return
-
-      // Pane toasts are SESSION-scoped, not lane-scoped. Reporting through the
-      // still-focused source session keeps feedback at the command's point of
-      // origin and avoids pretending an empty inserted lane has a runtime that
-      // can own feedback. Mirrored copies may all show it by design because
-      // they share that same runtime.
-      if (sourceTarget?.source === 'tiled-lane' && sourceTarget.laneIndex === laneIndex) {
-        workspace.showPaneToast(sourceTarget.row.sessionId, 'New lane created')
-      }
-    },
+    run: ({ workspace }) => runInsertLane(workspace, 'after'),
+  },
+  {
+    id: 'new-tiled-lane-before',
+    category: 'layout-dispatch',
+    // The mirror of New Lane. It exists because New Lane can only grow a row
+    // to the RIGHT: to open space left of an agent you had to focus the lane
+    // to its left first, and for the first lane of a row there is no such
+    // lane at all — the only way in was Stage Shape… plus re-selecting every
+    // agent. `app` surface for the same reason as New Lane (#978).
+    //
+    // Named "Before" rather than "Left" because that is the word the owner
+    // asked for and it pairs with New Lane reading as "after"; `left` is a
+    // keyword so a palette search for it still lands here.
+    surface: 'app',
+    title: 'New Lane Before',
+    description: '**What it does:** Inserts a new lane immediately to the **left of the focused lane**, lengthening only that row.\n\n**Use when:** You want space before the agent you are looking at — including in the first lane of a row, where New Lane cannot reach.\n\n**Notes:** Rows are independent — this never widens any other row. The agent you were in moves one lane right and stays focused; the new lane arrives empty. Pick an agent from its strip, or focus it and run Select Next Agent.',
+    keywords: ['new lane before', 'add lane before', 'insert lane left', 'add lane left', 'left', 'before', 'prepend', 'tiled dispatch', 'grid dispatch', 'stage'],
+    when: ({ workspace }) => canInsertLaneInFocusedRow(workspace.state),
+    run: ({ workspace }) => runInsertLane(workspace, 'before'),
   },
   {
     // WHY these two exist at all: Tiled Dispatch's size is a single count, and
@@ -464,6 +459,47 @@ function focusAdjacentRow(
   workspace.setTiledFocusedLane(
     rowStartIndex(grid.rows, targetRow) + Math.min(column, target.length - 1),
   )
+}
+
+/**
+ * Shared body of New Lane and New Lane Before.
+ *
+ * WHY one body: the two commands differ only in which side of the focused
+ * lane the slot opens. The stale-invocation re-check, the strict visual
+ * target and the toast routing are the subtle parts, and a second copy of
+ * them would drift the first time one of them is fixed.
+ */
+function runInsertLane(workspace: CommandContext['workspace'], side: LaneInsertSide): void {
+  // Re-checked here, not only in `when`, so a programmatic invocation that
+  // never went through the palette stays inert instead of relying on the
+  // reducer's refusal to be silent.
+  if (!canInsertLaneInFocusedRow(workspace.state)) return
+  const tiled = workspace.state.stage
+  const laneIndex = tiled.focusedLane
+  const sourceLane = tiled.lanes[laneIndex]
+  if (!sourceLane) return
+  // The raw lane id can still name a globally live but OUT-OF-SCOPE
+  // session, which renders empty rather than as that agent. Use the same
+  // strict visual resolver as lifecycle commands so pane feedback can only
+  // target the agent the user can actually see in this focused lane.
+  //
+  // Resolved BEFORE the insert: for `before` the source agent moves one lane
+  // right, so resolving afterwards would look at the empty newcomer.
+  const sourceTarget = resolveStrictDispatchCommandTarget(workspace.state)
+
+  const inserted = workspace.insertTiledLane(laneIndex, side)
+  if (!inserted) return
+
+  // Pane toasts are SESSION-scoped, not lane-scoped. Reporting through the
+  // still-focused source session keeps feedback at the command's point of
+  // origin and avoids pretending an empty inserted lane has a runtime that
+  // can own feedback. The pre-insert lane index is the right comparison even
+  // for `before`, where the session has since shifted right — the toast
+  // follows the session id, not the coordinate. Mirrored copies may all show
+  // it by design because they share that same runtime.
+  if (sourceTarget?.source === 'tiled-lane' && sourceTarget.laneIndex === laneIndex) {
+    workspace.showPaneToast(sourceTarget.row.sessionId, 'New lane created')
+  }
 }
 
 /**
