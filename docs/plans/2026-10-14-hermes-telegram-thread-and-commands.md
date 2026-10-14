@@ -740,8 +740,8 @@ This would get its own issue + plan.
 | L14 | Read-only VPS probe (U1/U4); record the verdicts | todo | Two GETs, bearer from the app's token store, never printed. |
 | L16 | Bug: the Hermes composer is very slow to type in (owner, 2026-10-14), #1499 | done | Cause: HermesChatFeed was not memoized and every bubble ran react-markdown inline, so each keystroke re-parsed every assistant message. Fail-first: 300 parses for 5 keystrokes on S12, now 0. Fix: memo + TextProse + memoized tool input. |
 | L17 | Bundle bug: a reload during a turn silences the running turn. Rewrite detection fires on a resume-vs-history window mismatch, then the renderer reset gate drops every event until the next `turn_started`. | todo | Fix: detect a rewrite only inside the overlapping id range; after a reset with an open turn, re-send its turn_started and blocks. Evidence: bundle 2026-10-14T16-26-49 feed-debug #117 + proxy-semantic currentTurn null. |
-| L18 | Bundle bug: every Hermes send froze the window 2–5.7 s (perf monitor 1s.jsonl, 16:15–16:26) | todo | DOM 3,917 elements: tool inputs (181 KB) and reasoning (213 KB) stay mounted in closed <details>. Render bodies only when open; window long chats; L16 memo already landed. Also slowness in spotlight (agent investigating). |
-| L19 | Bundle bug: Hermes' progress commentary lands in collapsed "Reasoning" (rows 402/410/423); reasoning shows raw `**` | todo | Show the latest commentary line in the typing row / as visible text; render reasoning as markdown. |
+| L18 | Bundle bug: every Hermes send froze the window 2–5.7 s (perf monitor 1s.jsonl, 16:15–16:26) | done | de879dcb4 lazy bodies; e999fd25b hidden Spotlight copy inert + row reuse. Windowing (LazyEntry) is not done; revisit only if still slow. | DOM 3,917 elements: tool inputs (181 KB) and reasoning (213 KB) stay mounted in closed <details>. Render bodies only when open; window long chats; L16 memo already landed. Also slowness in spotlight (agent investigating). |
+| L19 | Bundle bug: Hermes' progress commentary lands in collapsed "Reasoning" (rows 402/410/423); reasoning shows raw `**` | done | e999fd25b: prose after the summary headings is shown; reasoning renders as markdown. | Show the latest commentary line in the typing row / as visible text; render reasoning as markdown. |
 | L20 | Bundle bug: a dropped connection left pane d9567053 dead 10m42s until a manual reload | todo | Re-attach detached panes after a new sign-in; timeout on the ticket fetch; journal Hermes connect / reconnect / detach transitions. |
 | L21 | Bundle bug: tool outputs vanish after a reload (187/206 chips "kept on server") | todo | Keep the live tool results observed per conversation in main across pane reloads (not on disk); format the JSON output. |
 | L22 | Bundle bug: a prompt sent during a turn shows no queued state (`queued` status dropped in deliverPromptText) | todo | Show "Queued: Hermes answers after the current task". |
@@ -749,6 +749,7 @@ This would get its own issue + plan.
 
 ### Progress log
 
+- 2026-10-14: performance in Spotlight and when sending fixed (de879dcb4, e999fd25b); L18/L19 done.
 - 2026-10-14: the owner's debug bundle analysed: 7 real defects → L17–L22. Tailscale phase 1 landed (24c362f43).
 - 2026-10-14: L7 mostly done (6473dabd4). Investigations running: the owner's debug bundle ("Hermes has a lot of issues") and slowness in spotlight.
 - 2026-10-14: L16 fixed (#1499). Package b6c610e pushed: lane mode, slash routes, typed errors, events (tests pending Stage 0).
