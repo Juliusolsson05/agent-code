@@ -13,17 +13,13 @@
 // ownership between live and committed rows is decided once, upstream
 // (chatProjection.ts header).
 
-import { useEffect, useMemo, useRef } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { memo, useEffect, useMemo, useRef } from 'react'
 
 import type { FeedRenderItem } from '@renderer/features/feed/model/renderModel'
-import { MARKDOWN_COMPONENTS } from '@renderer/features/feed/ui/markdown/MarkdownComponents'
+import { TextProse } from '@renderer/features/feed/ui/markdown'
 import { withVisibleControls } from '@shared/text/visibleControls'
 
 import { projectChat, type ChatItem } from './chatProjection'
-
-const REMARK_PLUGINS = [remarkGfm]
 
 // "Near the bottom" for follow-the-conversation: the reader has not scrolled
 // up to read older messages. Matches the feed's sticky-bottom slack.
@@ -47,7 +43,15 @@ export type HermesChatControls = {
   onUserEngagement?: () => void
 }
 
-export function HermesChatFeed({
+// WHY memo (the owner, 2026-10-14: "the Hermes composer is painstakingly
+// slow"): the composer's draft lives in the session runtime, so EVERY
+// keystroke re-renders TileLeaf, and TileLeaf re-rendered this whole chat
+// with it. Every prop here is stable across a keystroke (items is memoized
+// by the ledger, the callbacks are useCallback in TileLeaf, the rest are
+// primitives), so memo turns a keystroke into zero work for the
+// conversation. HermesChatFeed.typing.renderer.test.tsx counts it: before
+// this, 5 keystrokes on a 60-turn chat cost 300 markdown parses.
+export const HermesChatFeed = memo(function HermesChatFeed({
   sessionId,
   items,
   connectionName,
@@ -158,9 +162,12 @@ export function HermesChatFeed({
       </div>
     </div>
   )
-}
+})
 
-function ChatRow({ item, connectionName, selected }: { item: ChatItem; connectionName: string | null; selected: boolean }) {
+// Memoized as well: while a reply streams, `items` changes on every token
+// and projectChat rebuilds the list, but a row whose content did not change
+// renders the same; TextProse below memoizes the expensive part on the text.
+const ChatRow = memo(function ChatRow({ item, connectionName, selected }: { item: ChatItem; connectionName: string | null; selected: boolean }) {
   switch (item.kind) {
     case 'user':
       return (
@@ -176,12 +183,18 @@ function ChatRow({ item, connectionName, selected }: { item: ChatItem; connectio
       return (
         <div className="flex justify-start" data-chat-role="assistant" data-entry-uuid={item.uuid}>
           <div
-            className={`prose-theme max-w-[88%] break-words rounded-slab bg-surface px-3 py-2 text-[13px] leading-[1.6] text-ink ${selected ? 'ring-1 ring-accent' : ''}`}
+            className={`max-w-[88%] break-words rounded-slab bg-surface px-3 py-2 text-[13px] leading-[1.6] text-ink ${selected ? 'ring-1 ring-accent' : ''}`}
             aria-current={selected ? 'true' : undefined}
           >
-            <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>
-              {item.text}
-            </ReactMarkdown>
+            {/* The feed's own prose renderer: memoized on the text string (a
+                bubble that did not change is never re-parsed, even while
+                another one streams) and bounded (an oversized reply becomes
+                paged plain text instead of an unbounded synchronous parse,
+                the fat-freeze lesson in Prose.tsx). The committed plugin set
+                for both live and final text: Hermes streams real markdown,
+                not a screen buffer, so StreamingProse's remark-breaks would
+                change how a finished reply renders mid-stream. */}
+            <TextProse text={item.text} />
             {item.streaming && <span aria-hidden className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-ink-dim align-middle" />}
           </div>
         </div>
@@ -220,9 +233,11 @@ function ChatRow({ item, connectionName, selected }: { item: ChatItem; connectio
         </div>
       )
   }
-}
+})
 
 function ToolChip({ item }: { item: Extract<ChatItem, { kind: 'tool' }> }) {
+  // Formatted once per input object, not on every render of the row.
+  const input = useMemo(() => JSON.stringify(item.input, null, 2), [item.input])
   const tone = item.status === 'error' ? 'border-danger/60 text-danger' : item.status === 'running' ? 'border-accent/60' : 'border-border'
   return (
     <details className={`max-w-[88%] rounded-chip border ${tone} bg-canvas px-2 py-1 text-[12px]`} data-chat-role="tool" data-tool-status={item.status}>
@@ -233,7 +248,7 @@ function ToolChip({ item }: { item: Extract<ChatItem, { kind: 'tool' }> }) {
       </summary>
       <div className="mt-1 flex flex-col gap-1">
         <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-control bg-surface px-2 py-1 font-code text-[11px] text-ink-dim">
-          {JSON.stringify(item.input, null, 2)}
+          {input}
         </pre>
         {item.result !== null && (
           <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-control bg-surface px-2 py-1 font-code text-[11px] text-ink">

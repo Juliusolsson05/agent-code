@@ -738,10 +738,12 @@ This would get its own issue + plan.
 | L12 | App tests (startup matrix, first pane, lane, picker, copy); `npx tsc -b`; full vitest once | todo | |
 | L13 | Live matrix workflow in the package; `support/upstream-versions.json` tested releases | todo | |
 | L14 | Read-only VPS probe (U1/U4); record the verdicts | todo | Two GETs, bearer from the app's token store, never printed. |
+| L16 | Bug: the Hermes composer is very slow to type in (owner, 2026-10-14), #1499 | done | Cause: HermesChatFeed was not memoized and every bubble ran react-markdown inline, so each keystroke re-parsed every assistant message. Fail-first: 300 parses for 5 keystrokes on S12, now 0. Fix: memo + TextProse + memoized tool input. |
 | L15 | Plan vs built walk-through; package PR, then the app PR (submodule bump + lockfile resync); one review round (2 Claude + 2 Codex reviewers); fix the findings; CI green | todo | Never merge without the owner. |
 
 ### Progress log
 
+- 2026-10-14: L16 fixed (#1499). Package b6c610e pushed: lane mode, slash routes, typed errors, events (tests pending Stage 0).
 - 2026-10-14: plan + Tailscale plan committed; issues #1495–#1498 opened; Stage 0 agent started; L1/L2/L3 package code written, plus `HermesRest`, `lanes.ts` and `laneBusy.ts`.
 
 ### Rulings
