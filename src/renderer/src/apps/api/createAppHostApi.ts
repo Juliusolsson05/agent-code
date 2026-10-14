@@ -2,6 +2,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 // This API needs the tree traversal, not the workspace hook's compatibility
 // barrel. That barrel imports the complete provider/editor UI and makes a
 // standalone extension host initialize unrelated application modules.
+import { isSidekickSession } from '@renderer/workspace/sessionOwnership'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 
 import type { AgentCodeApiV1, JsonValue } from '@renderer/apps/api/types'
@@ -128,7 +129,9 @@ export function createAppHostApi(deps: AppHostApiDeps): AgentCodeApiV1 {
         return {
           activeTabId: ws.activeTabId ?? null,
           tabIds: ws.tabs.map(tab => tab.id),
-          sessionCount: Object.keys(ws.sessions).length,
+          // Sidekicks (#1493) are not part of the extension contract in v1; see
+          // sessions.observe below.
+          sessionCount: Object.values(ws.sessions).filter(meta => !isSidekickSession(meta)).length,
         }
       },
       // Real subscription for a same-realm caller. In the FRAME model the extension
@@ -141,7 +144,11 @@ export function createAppHostApi(deps: AppHostApiDeps): AgentCodeApiV1 {
     sessions: {
       observe: async () => {
         const state = useAppStore.getState()
-        return Object.entries(state.workspaceState.sessions).map(([id, meta]) => ({
+        // Sidekicks are excluded in v1 (#1493 plan §5 ruling): an extension's
+        // session list has meant "the workspace's agents" since #577, and a
+        // sidekick lives outside the workspace. A follow-up can add them with
+        // an explicit kind so no extension mistakes one for a lane agent.
+        return Object.entries(state.workspaceState.sessions).filter(([, meta]) => !isSidekickSession(meta)).map(([id, meta]) => ({
           id,
           kind: meta.kind ?? null,
           cwd: meta.cwd,

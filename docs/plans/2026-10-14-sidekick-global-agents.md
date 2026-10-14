@@ -535,3 +535,21 @@ Each task names what it hands to the next. Every commit gets thick WHY comments;
   - **Ruling: observers get sidekicks as a second argument** (`(windows, sidekicks)`), not as a snapshot object. The four projections opt in, and every other listener compiles unchanged.
   - The shared fake store in `remote/workspaceProjection.testSupport.ts` gained `sidekicks()`, so it matches the real store interface.
   - New kill callers: `sidekick.remove` and `sidekick.register-failed`.
+- **2026-10-14, Task 2 done** (`d7e98acf`): the service, IPC, preload and window-close carve-out, plus four projections fed with sidekicks. Tests use the real store. The ledger and projection mutants are killed.
+- **2026-10-14, Task 3.**
+  - **Ruling: sidekick row writes live in `workspace/hook/actions/sidekick.ts`, not `pane.ts`.** Those writes are `fileSpawnAsSidekick`, `adoptSidekickRow`, `releaseSidekickRow` and `setSidekickPanel`, and the module is the only writer of `sidekickId`, following pool.ts's "one place per membership fact" rule. `pane.ts`'s close path stays untouched and still refuses sidekick rows.
+  - **Undo Close needs no change.** A sidekick never goes through `closeSession`, so no Undo entry can be captured for one.
+  - **`WorkspaceState.sidekickPanel` is optional**, so every existing state literal and test keeps compiling; absent means closed.
+  - **The rehydrate merge also carries the held runtime** (the draft typed during boot).
+  - **Mutants:**
+
+    | Mutant | Result |
+    |---|---|
+    | ownership clause | killed |
+    | rehydrate merge | killed |
+    | replacement carry | killed |
+    | lane guard | killed |
+    | pin guards | killed, after the test was split so a later write no longer masks the first guard |
+    | persistable filter | killed |
+
+  - **Workspace and app-API renderer suites:** 1557/1557.

@@ -27,6 +27,7 @@ import {
 import { remapSessionMetaRelationships } from '@renderer/workspace/idRemap'
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import { migrateWorkspaceToStage } from '@renderer/workspace/workspaceShape'
+import { coerceSidekickPanel } from '@renderer/workspace/sidekickPanel'
 import {
   collectLiveProcessIds,
   collectOwnedSessionIds,
@@ -456,6 +457,18 @@ export async function rehydrateWorkspace(
     if (!initialWorkspacePublished) {
       initialWorkspacePublished = true
       const initialSessions = buildRemappedSessions()
+      // Sidekick rows this window already holds (#1493). The first publish
+      // REPLACES `sessions` and the runtimes with what the file restored, and
+      // a sidekick row is never in the file (plan I1) — so a sidekick the
+      // panel attached before restore finished was wiped, leaving main's
+      // lease pointing at a window that no longer had the row. Carry them
+      // across the replacement. (The panel also waits for bootstrap before
+      // attaching; this is the merge that makes that wait non-load-bearing.)
+      const heldSidekickIds = new Set(
+        Object.entries(refs.stateRef.current.sessions)
+          .filter(([, meta]) => meta.sidekickId !== undefined)
+          .map(([id]) => id),
+      )
       for (const [sessionId, meta] of Object.entries(initialSessions)) {
         publishedSessionBaselines.set(sessionId, meta)
       }
@@ -505,18 +518,28 @@ export async function rehydrateWorkspace(
           // lingering as a selected-but-unresolvable lane.
           new Set(Object.keys(initialSessions)),
         ))
+        const heldSidekickRows: Record<SessionId, SessionMeta> = {}
+        for (const [id, meta] of Object.entries(prev.sessions)) {
+          if (meta.sidekickId !== undefined) heldSidekickRows[id] = meta
+        }
         return {
           tabs: newTabs,
           activeTabId,
           stage,
-          sessions: initialSessions,
+          sessions: { ...initialSessions, ...heldSidekickRows },
           pinnedSessionIds: buildRemappedPinnedSessionIds(),
+          // This window's panel pointer. A pointer set during boot wins over
+          // the file's, for the same reason the held rows do.
+          sidekickPanel: prev.sidekickPanel ?? coerceSidekickPanel(persistedInput.sidekickPanel),
         }
       })
       setRuntimes(prev => {
         const out: Record<SessionId, SessionRuntime> = {}
         for (const sessionId of Object.keys(freshSessions)) {
           out[sessionId] = buildRecoveredRuntime(sessionId, prev[sessionId])
+        }
+        for (const sessionId of heldSidekickIds) {
+          if (prev[sessionId] && !out[sessionId]) out[sessionId] = prev[sessionId]
         }
         return out
       })

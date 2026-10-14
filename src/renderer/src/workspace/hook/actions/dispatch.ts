@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 
+import { isSidekickSession } from '@renderer/workspace/sessionOwnership'
 import type {
   DispatchGridRow,
   SessionId,
@@ -169,6 +170,10 @@ export function useDispatchActions(
    */
   const selectTiledLaneSession = useCallback(
     async (laneIndex: number, sessionId: SessionId) => {
+      // A lane never shows a sidekick (#1493, plan I5): the Sidekick panel is
+      // its only surface. Refused here — the one funnel every lane write
+      // (index click, strip, keyboard, Control lane-select) goes through.
+      if (isSidekickSession(refs.stateRef.current.sessions[sessionId])) return
       // Already has a backend: stays synchronous, so no coordinate can shift
       // underneath it.
       //
@@ -489,7 +494,10 @@ export function useDispatchActions(
       setState(prev => {
         if (prev.pinnedSessionIds.includes(sessionId)) return prev
         const meta = prev.sessions[sessionId]
-        if (!meta || !isProcessSessionKind(meta.kind)) return prev
+        // A sidekick is never pinned (#1493, plan I5): pins render in the
+        // Dispatch index, which a sidekick never appears in, so the pin would
+        // be an invisible entry the user could not remove.
+        if (!meta || !isProcessSessionKind(meta.kind) || isSidekickSession(meta)) return prev
         return {
           ...prev,
           pinnedSessionIds: [...prev.pinnedSessionIds, sessionId],
@@ -522,7 +530,7 @@ export function useDispatchActions(
         // at render time.
         const filtered = ids.filter(id => {
           const meta = prev.sessions[id]
-          return meta !== undefined && isProcessSessionKind(meta.kind)
+          return meta !== undefined && isProcessSessionKind(meta.kind) && !isSidekickSession(meta)
         })
         // Deduplicate while preserving caller order (first occurrence wins).
         // The modal already enforces this client-side, but a programmatic

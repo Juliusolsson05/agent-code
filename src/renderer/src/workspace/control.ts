@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { isSidekickSession } from '@renderer/workspace/sessionOwnership'
 import { defineCapability, placementSchema, workspaceObservationSchema } from '@control-sdk'
 import { useAppStore } from '@renderer/app-state/store'
 import { resolveTabSessions } from '@renderer/workspace/queries'
@@ -84,7 +85,12 @@ export function observeWorkspace(getWorkspace: () => Pick<Workspace, 'restoreSta
     // belongs to the SDK schema change in stage 7, not to a renderer commit.
     mode: 'tiled-dispatch' as const,
     tabs: state.tabs.map(tab => ({ id: tab.id, title: tab.title, sessionIds: resolveTabSessions(state, tab.id) })),
-    sessions: Object.entries(sessions).map(([sessionId, meta]) => ({
+    // Sidekicks are left out of the Control observation in v1 (#1493 plan
+    // §5 ruling): its schema has no placement kind for "the Sidekick panel",
+    // and listing one with `placements: []` told an operator agent it was a
+    // parked lane agent it could select into a lane — which every lane write
+    // now refuses. Exposing sidekicks here is a follow-up with a schema change.
+    sessions: Object.entries(sessions).filter(([, meta]) => !isSidekickSession(meta)).map(([sessionId, meta]) => ({
       sessionId, ...identity(sessionId, meta), title: meta.title ?? '', cwd: meta.cwd, provider: meta.kind ?? DEFAULT_PROVIDER,
       providerRuntime: meta.providerRuntime ?? null, providerSessionId: meta.providerSessionId ?? null,
       pinned: state.pinnedSessionIds?.includes(sessionId) ?? false, placements: placements.get(sessionId) ?? [],

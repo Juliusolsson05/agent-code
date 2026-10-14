@@ -1,4 +1,5 @@
 import type { AppStore } from '@renderer/app-state/types'
+import { isSidekickSession } from '@renderer/workspace/sessionOwnership'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import { dispatchUnreadBadge } from '@renderer/session-runtime/unreadBadge'
 import { sessionIsWorking } from '@renderer/session-runtime/working'
@@ -62,7 +63,9 @@ export function sessionStatusSignature(
   state: Pick<AppStore, 'workspaceState' | 'workspaceRuntimes'>,
 ): string {
   let signature = ''
-  for (const id of Object.keys(state.workspaceState.sessions)) {
+  for (const [id, meta] of Object.entries(state.workspaceState.sessions)) {
+    // Mirrors sessions.observe: sidekicks are not in the extension contract (#1493).
+    if (isSidekickSession(meta)) continue
     const { activity, notification } = projectSessionStatus(state.workspaceRuntimes[id])
     signature += `${id}:${activity === 'working' ? 'w' : 'i'}:${notification ? `${notification.kind}/${notification.label}` : '-'}\n`
   }

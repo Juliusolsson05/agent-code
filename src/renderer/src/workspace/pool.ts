@@ -50,6 +50,26 @@ export function fileSessionInProject(
 }
 
 /**
+ * File `sessionId` as the sidekick `sidekickId` (#1493) — the sidekick
+ * counterpart of fileSessionInProject.
+ *
+ * Call it in the same `setState` that makes the row visible, exactly like
+ * fileSessionInProject: until it runs, spawn's row is unfiled and autosave
+ * would treat it as an abandoned spawn. Clears any `projectId`/`joinedAt` so
+ * the row can never be both (types.ts invariant).
+ */
+export function fileSessionAsSidekick(
+  sessions: Record<SessionId, SessionMeta>,
+  sessionId: SessionId,
+  sidekickId: string,
+): Record<SessionId, SessionMeta> {
+  const meta = sessions[sessionId]
+  if (!meta) return sessions
+  const { projectId: _projectId, joinedAt: _joinedAt, ...rest } = meta
+  return { ...sessions, [sessionId]: { ...rest, sidekickId } }
+}
+
+/**
  * The membership a successor should inherit from the session it replaces.
  * Spread it into the successor's row. Empty when the predecessor is unknown,
  * so the caller's own filing (or the ownership prune) decides instead of a
@@ -57,7 +77,12 @@ export function fileSessionInProject(
  */
 export function inheritedMembership(
   predecessor: SessionMeta | undefined,
-): Pick<SessionMeta, 'projectId' | 'joinedAt'> {
+): Pick<SessionMeta, 'projectId' | 'joinedAt' | 'sidekickId'> {
+  // A sidekick's successor stays a sidekick (#1493). Without this carry a
+  // Reload Agent or provider switch on a sidekick produced an UNFILED row —
+  // owned by nothing — which the next autosave pruned, and the sidekick's
+  // index record would point at a session no window held.
+  if (predecessor?.sidekickId) return { sidekickId: predecessor.sidekickId }
   if (!predecessor?.projectId) return {}
   return {
     projectId: predecessor.projectId,

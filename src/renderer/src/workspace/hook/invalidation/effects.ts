@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 
+import { isSidekickSession } from '@renderer/workspace/sessionOwnership'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type {
   ReaderModeState,
@@ -172,8 +173,9 @@ export function usePinnedSessionIdsSanity(
     if (pinnedSessionIds.length === 0) return
     const valid = pinnedSessionIds.filter(id => {
       const meta = sessions[id]
-      // Pins can own shells and agents, but never a processless extension view.
-      return meta !== undefined && isProcessSessionKind(meta.kind)
+      // Pins can own shells and agents, but never a processless extension view,
+      // and never a sidekick (#1493: it has no Dispatch row to pin to).
+      return meta !== undefined && isProcessSessionKind(meta.kind) && !isSidekickSession(meta)
     })
     if (valid.length === pinnedSessionIds.length) return
     setState(prev => {
@@ -183,7 +185,7 @@ export function usePinnedSessionIdsSanity(
       // in this file.
       const next = prev.pinnedSessionIds.filter(id => {
         const meta = prev.sessions[id]
-        return meta !== undefined && isProcessSessionKind(meta.kind)
+        return meta !== undefined && isProcessSessionKind(meta.kind) && !isSidekickSession(meta)
       })
       if (next.length === prev.pinnedSessionIds.length) return prev
       return { ...prev, pinnedSessionIds: next }

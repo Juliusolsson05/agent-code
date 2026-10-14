@@ -23,6 +23,7 @@ import { useBulkProviderSwitchActions } from '@renderer/workspace/hook/actions/b
 import { useHistoryActions } from '@renderer/workspace/hook/actions/history'
 import { useUndoCloseAction } from '@renderer/workspace/hook/actions/undoClose'
 import { useDispatchActions } from '@renderer/workspace/hook/actions/dispatch'
+import { useSidekickRowActions } from '@renderer/workspace/hook/actions/sidekick'
 import { useAgentIndexNavigationActions } from '@renderer/workspace/hook/actions/agentIndexNavigation'
 import { useAgentNameReconciler } from '@renderer/workspace/agentNames/useAgentNameReconciler'
 import { createDraftChanges, WorkspaceRuntimeServices } from './persistence/WorkspaceRuntimeServices'
@@ -963,6 +964,9 @@ export function useWorkspace(
     sessionActions.ensureSessionLive,
     showToast,
   )
+  // Sidekick rows and the panel pointer (#1493). The only writers of
+  // `sidekickId`; see actions/sidekick.ts.
+  const sidekickRowActions = useSidekickRowActions(setState, setRuntimes)
 
   // Close Completed Agents… (#1182). Wired here like the two bulk closes above
   // for the global toast and the live refs, plus the lane removal the flow does
@@ -1152,6 +1156,10 @@ export function useWorkspace(
     unpinSession: dispatchActions.unpinSession,
     setPinnedSessionIds: dispatchActions.setPinnedSessionIds,
     selectTiledLaneSession: dispatchActions.selectTiledLaneSession,
+    fileSpawnAsSidekick: sidekickRowActions.fileSpawnAsSidekick,
+    adoptSidekickRow: sidekickRowActions.adoptSidekickRow,
+    releaseSidekickRow: sidekickRowActions.releaseSidekickRow,
+    setSidekickPanel: sidekickRowActions.setSidekickPanel,
     clearTiledLane: dispatchActions.clearTiledLane,
     insertTiledLaneRight: dispatchActions.insertTiledLaneRight,
     removeTiledLane: dispatchActions.removeTiledLane,

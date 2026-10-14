@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { isSidekickSession } from '@renderer/workspace/sessionOwnership'
 import { ControlError, defineCapability, paginate } from '@control-sdk'
 import { useAppStore } from '@renderer/app-state/store'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
@@ -101,6 +102,8 @@ export function layoutControlCapabilities(getWorkspace: () => Workspace) {
             break
           case 'lane-select':
             if (!state.sessions[change.sessionId]) throw new ControlError('unavailable', 'Agent is absent')
+            // Sidekicks live only in the Sidekick panel (#1493, plan I5).
+            if (isSidekickSession(state.sessions[change.sessionId])) throw new ControlError('invalid_input', 'A sidekick cannot be placed in a lane')
             await workspace.selectTiledLaneSession(change.laneIndex, change.sessionId)
             if (useAppStore.getState().workspaceState.stage.lanes[change.laneIndex]?.selectedSessionId !== change.sessionId) throw new ControlError('failed', 'Requested lane selection was not observed; read the layout', 'unknown')
             break

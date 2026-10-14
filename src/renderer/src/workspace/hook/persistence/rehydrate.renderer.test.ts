@@ -967,3 +967,29 @@ describe('rehydrateWorkspace backend reconciliation', () => {
     ])
   })
 })
+
+// #1493: the first publish REPLACES sessions and runtimes with what the file
+// restored, and a sidekick row is never in the file. A sidekick this window
+// attached before restore finished was wiped by that replacement, leaving
+// main's lease pointing at a window with no row for it.
+describe('rehydrate keeps held sidekick rows', () => {
+  it('carries a sidekick row and its runtime across the first publish, and restores the panel pointer', async () => {
+    const persisted = makePersisted() as PersistedWorkspace & { sidekickPanel?: unknown }
+    persisted.sidekickPanel = { open: true, width: 512, sidekickId: '00000000-0000-4000-8000-000000000002' }
+    const harness = makeHarness()
+    harness.setState(prev => ({ ...prev, sessions: { held: { kind: 'hermes', cwd: '/home/recorded', sidekickId: '00000000-0000-4000-8000-000000000002' } } }))
+    harness.setRuntimes({ held: { ...emptyRuntime(), draftInput: 'typed during boot' } })
+    Object.defineProperty(window, 'api', { configurable: true, value: {
+      defaultCwd: vi.fn(),
+      recoverSession: vi.fn(async () => ({ ok: true, disposition: 'adopted', snapshot: {
+        sessionId: 'stable-session', kind: 'claude', cwd: '/tmp/project', lifecycle: 'live', input: { ready: true, revision: 1 },
+      } })),
+    } })
+    await rehydrateWorkspace(persisted, harness.refs, harness.setState, harness.setRuntimes, vi.fn())
+    expect(harness.state().sessions.held).toMatchObject({ sidekickId: '00000000-0000-4000-8000-000000000002' })
+    expect(harness.state().sessions['stable-session']).toBeDefined()
+    expect(harness.runtimes().held?.draftInput).toBe('typed during boot')
+    expect(harness.state().sidekickPanel).toEqual({ open: true, width: 512, sidekickId: '00000000-0000-4000-8000-000000000002' })
+  })
+})
+
