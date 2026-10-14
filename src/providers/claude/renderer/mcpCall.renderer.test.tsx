@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
@@ -47,10 +47,13 @@ describe('an MCP call is one line', () => {
     expect(screen.queryByText(/ok: true/)).toBeNull()
   })
 
-  it('every recorded acknowledgement is absorbed', () => {
-    for (const tool of ['goal_set', 'tldr_update', 'browser_open']) {
+  it('only a payload-free acknowledgement is absorbed (review A1, B1)', () => {
+    for (const tool of ['goal_set', 'tldr_update']) {
       expect(decide('ack', tool).toolResult, tool).toMatchObject({ action: 'absorb' })
     }
+    // browser_open answers {ok, state, url}: the final URL is a payload, so
+    // the line gets its ✓ and the result row stays.
+    expect(decide('ack', 'browser_open').toolResult).toMatchObject({ action: 'fallback' })
   })
 
   it('an error says so, with its own sentence', () => {
@@ -67,7 +70,7 @@ describe('an MCP call is one line', () => {
 
   it('a refusal ({"ok":false}) shows its message, not the JSON', () => {
     decide('refusal', 'browser_status')
-    expect(screen.getByText('✕ refused')).toBeTruthy()
+    expect(screen.getByText(/✕ refused disabled/)).toBeTruthy()
     expect(screen.getByText(/Browser Pocket is turned off/)).toBeTruthy()
     expect(screen.queryByText(/"code"/)).toBeNull()
   })
@@ -83,5 +86,78 @@ describe('an MCP call is one line', () => {
     const content = { ...result, content: [{ type: 'text', text: 'Opened http://localhost:5199 in the pocket.' }] } as ToolResultBlock
     const decision = renderClaudeOperation({ toolUse, result: content, live: false, streaming: false })
     expect(decision.toolResult).toMatchObject({ action: 'fallback' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Review round on #1520. Mechanical mutations of the recorded samples,
+// each named for the finding it pins.
+// ---------------------------------------------------------------------------
+function mutated(kind: string, tool: string, change: { name?: string; content?: unknown; is_error?: boolean; input?: Record<string, unknown> }) {
+  const { toolUse, result } = pair(kind, tool)
+  const use = { ...toolUse, ...(change.name ? { name: change.name } : {}), ...(change.input ? { input: change.input } : {}) } as ToolUseBlock
+  const res = { ...result, ...(change.content !== undefined ? { content: change.content } : {}), ...(change.is_error !== undefined ? { is_error: change.is_error } : {}) } as ToolResultBlock
+  return { use, res }
+}
+
+describe('nothing a user needs is hidden behind a ✓ (review round)', () => {
+  it('an Agent Code read\'s payload keeps its row (A1: browser_console\'s entries)', () => {
+    const { use, res } = mutated('ack', 'goal_set', { name: 'mcp__agent_code__browser_console', input: {}, content: [{ type: 'text', text: '{"ok":true,"entries":[{"level":"error","text":"TypeError: x is undefined"}]}' }] })
+    expect(renderClaudeOperation({ toolUse: use, result: res, live: false, streaming: false }).toolResult).toMatchObject({ action: 'fallback' })
+  })
+
+  it('a third-party server\'s ok:true reply keeps its row (A3)', () => {
+    const { use, res } = mutated('ack', 'goal_set', { name: 'mcp__github__set_goal' })
+    expect(renderClaudeOperation({ toolUse: use, result: res, live: false, streaming: false }).toolResult).toMatchObject({ action: 'fallback' })
+  })
+
+  it('an acknowledgement with an image part keeps its row (A4)', () => {
+    const { result } = pair('ack', 'goal_set')
+    const { use, res } = mutated('ack', 'goal_set', { content: [...(result.content as unknown[]), { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } }] })
+    expect(renderClaudeOperation({ toolUse: use, result: res, live: false, streaming: false }).toolResult).toMatchObject({ action: 'fallback' })
+  })
+
+  it('an error\'s full text is one click away on the line (A5)', () => {
+    decide('error', 'goal_set')
+    fireEvent.click(screen.getByRole('button'))
+    expect(screen.getByText(/expected string, received undefined at text/, { selector: 'pre' })).toBeTruthy()
+  })
+
+  it('the arguments are one click away (B9)', () => {
+    decide('ack', 'goal_set')
+    fireEvent.click(screen.getByRole('button'))
+    expect(screen.getByText(/"text": "Build an accurate picture/, { selector: 'pre' })).toBeTruthy()
+  })
+})
+
+describe('states (review round)', () => {
+  it('a committed call with no result does not claim to be running (B2)', () => {
+    const { toolUse } = pair('ack', 'goal_set')
+    const decision = renderClaudeOperation({ toolUse, result: null, live: false, streaming: false })
+    if (decision.toolUse.action === 'render') render(<>{decision.toolUse.node}</>)
+    expect(screen.queryByText('◌')).toBeNull()
+  })
+
+  it('a user\'s decline reads as declined, not as a red error (B4)', () => {
+    const { use, res } = mutated('error', 'goal_set', { content: "The user doesn't want to proceed with this tool use. The tool use was rejected." })
+    const decision = renderClaudeOperation({ toolUse: use, result: res, live: false, streaming: false })
+    if (decision.toolUse.action === 'render') render(<>{decision.toolUse.node}</>)
+    expect(screen.getByText('declined')).toBeTruthy()
+    expect(screen.queryByText('✕ error')).toBeNull()
+  })
+
+  it('a drifted Agent Code orchestration call keeps the visible generic fallback (A2)', () => {
+    const { use, res } = mutated('ack', 'goal_set', { name: 'mcp__agent_code__orchestration_read_agent', input: {} })
+    const decision = renderClaudeOperation({ toolUse: use, result: res, live: false, streaming: false })
+    if (decision.toolUse.action === 'render') {
+      const { container } = render(<>{decision.toolUse.node}</>)
+      expect(container.querySelector('[data-mcp-call]')).toBeNull()
+    }
+    expect(decision.toolResult).not.toMatchObject({ action: 'absorb' })
+  })
+
+  it('a verdict has words for a screen reader (B6)', () => {
+    decide('ack', 'goal_set')
+    expect(screen.getByText('succeeded')).toBeTruthy()
   })
 })

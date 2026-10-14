@@ -287,11 +287,17 @@ function renderClaudeToolUse(
       // Any other MCP tool (#1519): one line instead of name + chip +
       // "1 param" + "ok: true". After the switch so a provider-specific MCP
       // card (orchestration, workspace, workflow, tasks above) always wins.
-      const mcp = fromMcpCall(block, context.result ?? null)
+      // An Agent Code tool whose OWN card declined (drifted input) keeps the
+      // visible generic fallback those adapters promise (review A2).
+      if (OWNED_AGENT_CODE_TOOL.test(block.name)) return undefined
+      const mcp = fromMcpCall(block, context.result ?? null, { live: context.live })
       return mcp ? <McpCallRow model={mcp} block={block} /> : undefined
     }
   }
 }
+
+/** Agent Code MCP tools that have their own cards; the MCP line never claims them. */
+const OWNED_AGENT_CODE_TOOL = /^mcp__agent_code__(orchestration_|ai_workspace_|workflow_)/
 
 function firstResultLine(result: ToolResultBlock | null | undefined): string | undefined {
   if (!result) return undefined
@@ -414,12 +420,13 @@ function renderClaudeToolResult(
     const model = fromClaudeWebSearchResult(block, source)
     return model ? <ClaudeWebSearchResultRow model={model} /> : undefined
   }
-  if (source) {
-    // The MCP line shows an acknowledgement as its ✓ and a refusal/error as
-    // its own sentence, so both result rows are absorbed. Real content keeps
-    // the shared result row (undefined → the generic fallback).
+  if (source && !OWNED_AGENT_CODE_TOOL.test(source.name)) {
+    // Absorbed only when the MCP line fully carries the result: an
+    // acknowledgement, or an error/refusal whose full text the line's
+    // disclosure holds (model.ts absorbsResult). A read's payload, a
+    // third-party reply or an image keeps the shared result row.
     const mcp = fromMcpCall(source, block)
-    if (mcp && mcp.outcome !== 'content' && mcp.outcome !== 'pending') return null
+    if (mcp?.absorbsResult) return null
   }
   return undefined
 }
