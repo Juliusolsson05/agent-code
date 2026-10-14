@@ -38,6 +38,7 @@ export const createUiShellSlice: StateCreator<
   recordingNotePrompt: null,
   viewPromptsSessionId: null,
   reportHistory: null,
+  laneHistoryLane: null,
   newAgentPlacementOpen: false,
   newAgentProjectIntent: null,
   newAgentInOpen: false,
@@ -230,6 +231,11 @@ export const createUiShellSlice: StateCreator<
     set({ reportHistory: { sessionId, kind } }, false, 'uiShell/openReportHistory'),
   closeReportHistory: () =>
     set({ reportHistory: null }, false, 'uiShell/closeReportHistory'),
+
+  openLaneHistory: laneIndex =>
+    set({ laneHistoryLane: laneIndex }, false, 'uiShell/openLaneHistory'),
+  closeLaneHistory: () =>
+    set({ laneHistoryLane: null }, false, 'uiShell/closeLaneHistory'),
 
   openNewAgentPlacement: () =>
     set({ newAgentPlacementOpen: true }, false, 'uiShell/openNewAgentPlacement'),

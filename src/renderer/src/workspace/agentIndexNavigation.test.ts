@@ -101,7 +101,9 @@ describe('agent index navigation', () => {
       focusedLane: 0,
       ratios: [0.2, 0.4, 0.4],
       lanes: [
-        { selectedSessionId: 'a2' },
+        // The replaced agent lands in the lane's Lane History: label
+        // navigation is one of the selection paths that feeds it.
+        { selectedSessionId: 'a2', history: [{ sessionId: 'a1', at: expect.any(Number) }] },
         { selectedSessionId: 'a2' },
         { selectedSessionId: 'b1' },
       ],
@@ -125,7 +127,7 @@ describe('agent index navigation', () => {
     expect(result?.kind).toBe('replace-focused-tiled-dispatch-lane')
     expect(result?.state.stage.lanes).toEqual([
       { selectedSessionId: 'a1' },
-      { selectedSessionId: 'a3' },
+      { selectedSessionId: 'a3', history: [{ sessionId: 'b1', at: expect.any(Number) }] },
     ])
     expect(result?.state.stage.focusedLane).toBe(1)
   })
@@ -173,7 +175,7 @@ describe('agent index navigation', () => {
     expect(result?.state.activeTabId).toBe('tab-b')
     expect(result?.state.stage.lanes).toEqual([
       { selectedSessionId: 'a1' },
-      { selectedSessionId: 'b1' },
+      { selectedSessionId: 'b1', history: [{ sessionId: 'a2', at: expect.any(Number) }] },
     ])
     expect(buildVisibleDispatchRows(result!.state).map(row => row.sessionId)).toContain('a1')
   })
@@ -198,7 +200,7 @@ describe('agent index navigation', () => {
 
     expect(result?.state.activeTabId).toBe('tab-b')
     expect(result?.state.stage.lanes).toEqual([
-      { selectedSessionId: 'b1' },
+      { selectedSessionId: 'b1', history: [{ sessionId: 'a1', at: expect.any(Number) }] },
       { selectedSessionId: 'b1' },
     ])
   })
@@ -223,7 +225,7 @@ describe('agent index navigation', () => {
     expect(result?.kind).toBe('replace-focused-tiled-dispatch-lane')
     expect(result?.state.stage.lanes).toEqual([
       { selectedSessionId: 'a1' },
-      { selectedSessionId: 'a4' },
+      { selectedSessionId: 'a4', history: [{ sessionId: 'b1', at: expect.any(Number) }] },
     ])
     expect(result?.state.stage.focusedLane).toBe(1)
   })

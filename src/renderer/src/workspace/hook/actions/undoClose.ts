@@ -305,13 +305,22 @@ export function useUndoCloseAction(
             // in the index rather than jumping to the bottom.
             [newSessionId]: carryDurableMeta(prev.sessions[newSessionId], meta),
           },
-          // The stage is deliberately NOT written. The close emptied the lane
-          // that showed this session, so the visible result of an undo is the
-          // row reappearing at its old position in the index — back in the
-          // pool, one keystroke from any lane — not a lane takeover.
-          // Restoring the lane would need the lane index captured at close
-          // time; deliberately not done, because a lane the user has since
-          // re-aimed should not be yanked back by an undo (U2).
+          // No lane SELECTION is written. The close emptied the lane that
+          // showed this session, so the visible result of an undo is the row
+          // reappearing at its old position in the index — back in the pool,
+          // one keystroke from any lane — not a lane takeover. Restoring the
+          // lane would need the lane index captured at close time;
+          // deliberately not done, because a lane the user has since re-aimed
+          // should not be yanked back by an undo (U2).
+          //
+          // The remap below cannot break that: the close already cleared every
+          // lane selecting the old id, so the only pointers it can rewrite are
+          // Lane History entries — the restored agent keeps its rows under its
+          // new id, as Undo Close Project already does (#1504 review). An
+          // autosave that ran between close and undo has pruned the old id
+          // already; that entry is lost, which is the price of not keeping
+          // dead ids on disk.
+          stage: remapTiledLanes(prev.stage, new Map([[entry.sessionId, newSessionId]])),
         }
       })
 

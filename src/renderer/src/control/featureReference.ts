@@ -119,6 +119,10 @@ export const referenceOwnership = {
   "usage-limit": "usage",
   "rendered-content": "rendered-content",
   "dispatch-pin": "pins",
+  // Lane History's dialog has no page of its own: it is a lane feature, and
+  // the dispatch page (features/workspace/controlReference.ts) lists its
+  // command beside New Lane.
+  "lane-history": "dispatch",
   "command-palette": "command-palette",
   "feed": "conversation",
   "worktrees": "worktrees",
