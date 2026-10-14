@@ -1161,7 +1161,7 @@ export function useWorkspace(
     releaseSidekickRow: sidekickRowActions.releaseSidekickRow,
     setSidekickPanel: sidekickRowActions.setSidekickPanel,
     clearTiledLane: dispatchActions.clearTiledLane,
-    insertTiledLaneRight: dispatchActions.insertTiledLaneRight,
+    insertTiledLane: dispatchActions.insertTiledLane,
     removeTiledLane: dispatchActions.removeTiledLane,
     setTiledFocusedLane: dispatchActions.setTiledFocusedLane,
     insertDispatchRowBelow: dispatchActions.insertDispatchRowBelow,

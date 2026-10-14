@@ -9,10 +9,10 @@ import type {
   WorkspaceState,
 } from '@renderer/workspace/types'
 import { withLaneSession } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
-import type { GridShapeRow } from '@renderer/workspace/dispatch/gridShape'
+import type { GridShapeRow, LaneInsertSide } from '@renderer/workspace/dispatch/gridShape'
 import {
   clampIndexFraction,
-  insertLaneRightIntoGrid,
+  insertLaneIntoGrid,
   insertRowBelowInGrid,
   normalizeGridShape,
   removeLaneFromGrid,
@@ -80,7 +80,7 @@ export function useDispatchActions(
   // ---- Lanes (issue #248) ----
   selectTiledLaneSession: (laneIndex: number, sessionId: SessionId) => Promise<void>
   clearTiledLane: (laneIndex: number) => void
-  insertTiledLaneRight: (laneIndex: number) => boolean
+  insertTiledLane: (laneIndex: number, side: LaneInsertSide) => boolean
   removeTiledLane: (laneIndex: number) => void
   setTiledFocusedLane: (laneIndex: number) => void
   // ---- Grid Dispatch rows (issue #681) ----
@@ -208,7 +208,7 @@ export function useDispatchActions(
       // falls off the end) and silently writes into the WRONG row from three
       // rows up — removing row 0 of [1,2,2] would have written the agent into
       // what used to be row 2. Every grid mutation preserves untouched row
-      // objects (`insertLaneRightIntoGrid`/`removeLaneFromGrid` map, the row ops
+      // objects (`insertLaneIntoGrid`/`removeLaneFromGrid` map, the row ops
       // slice/filter), so identity follows exactly the grow/shrink cases and
       // drops every membership change.
       //
@@ -282,19 +282,20 @@ export function useDispatchActions(
   )
 
   /**
-   * Insert ONE lane beside an existing lane without changing command focus.
+   * Insert ONE lane beside an existing lane (either side) without changing
+   * which agent has command focus.
    *
    * WHY this has an explicit lane index rather than reading focusedLane inside
    * the helper: command invocation captures one coherent UI snapshot. Passing
    * that coordinate makes a stale invocation harmless instead of letting a
    * later focus movement insert beside a different agent than the user saw.
    */
-  const insertTiledLaneRight = useCallback(
-    (laneIndex: number) => {
+  const insertTiledLane = useCallback(
+    (laneIndex: number, side: LaneInsertSide) => {
       let inserted = false
       setState(prev => {
         const tiled = prev.stage
-        const next = insertLaneRightIntoGrid(tiled, laneIndex)
+        const next = insertLaneIntoGrid(tiled, laneIndex, side)
         if (!next) return prev
         inserted = true
         return { ...prev, stage: next }
@@ -365,7 +366,7 @@ export function useDispatchActions(
       // Reports the reducer's ACTUAL admission rather than the palette's earlier
       // render snapshot, so a stale invocation cannot announce a row that was
       // refused at the row or lane ceiling. Same contract as
-      // insertTiledLaneRight.
+      // insertTiledLane.
       return inserted
     },
     [setState],
@@ -564,7 +565,7 @@ export function useDispatchActions(
     setPinnedSessionIds,
     selectTiledLaneSession,
     clearTiledLane,
-    insertTiledLaneRight,
+    insertTiledLane,
     removeTiledLane,
     setTiledFocusedLane,
     insertDispatchRowBelow,

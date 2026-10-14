@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  insertLaneRightIntoGrid,
+  insertLaneIntoGrid,
   insertRowBelowInGrid,
   MAX_DISPATCH_LANES,
   MAX_DISPATCH_ROWS,
@@ -36,13 +36,13 @@ const idsOf = (state: TiledDispatchState | null): Array<string | undefined> =>
 const lengths = (state: TiledDispatchState | null): number[] =>
   (state?.rows ?? []).map((row: DispatchGridRow) => row.length)
 
-describe('insertLaneRightIntoGrid', () => {
+describe('insertLaneIntoGrid after', () => {
   it('lengthens only the row that owns the lane', () => {
     // The ragged-shape contract. Row lengths are independent: asking for space
     // beside one agent must not widen a row the user was not editing. A shared
     // column count would make this add a lane to BOTH rows, which is the most
     // surprising possible outcome — a slot appears where you were not looking.
-    const next = insertLaneRightIntoGrid(grid(['a', 'b', 'c', 'd'], [2, 2], 0), 0)
+    const next = insertLaneIntoGrid(grid(['a', 'b', 'c', 'd'], [2, 2], 0), 0, 'after')
 
     expect(lengths(next)).toEqual([3, 2])
     expect(idsOf(next)).toEqual(['a', undefined, 'b', 'c', 'd'])
@@ -52,13 +52,13 @@ describe('insertLaneRightIntoGrid', () => {
     // A new slot is a request for SPACE, not for a particular agent (#673).
     // Auto-filling claims the first unclaimed visible row, which in the common
     // case duplicates the top of the index into the slot beside you.
-    const next = insertLaneRightIntoGrid(grid(['a', 'b'], [2], 1), 1)
+    const next = insertLaneIntoGrid(grid(['a', 'b'], [2], 1), 1, 'after')
 
     expect(idsOf(next)).toEqual(['a', 'b', undefined])
   })
 
   it('keeps the focused lane on its own agent when inserting after it', () => {
-    const next = insertLaneRightIntoGrid(grid(['a', 'b', 'c'], [3], 1), 1)
+    const next = insertLaneIntoGrid(grid(['a', 'b', 'c'], [3], 1), 1, 'after')
 
     expect(next?.focusedLane).toBe(1)
     expect(next?.lanes[next.focusedLane]?.selectedSessionId).toBe('b')
@@ -67,7 +67,7 @@ describe('insertLaneRightIntoGrid', () => {
   it('follows the focused session when a caller inserts before it', () => {
     // This helper is public and accepts any coordinate. Preserving only the
     // numeric index would silently retarget every keyboard command from c to b.
-    const next = insertLaneRightIntoGrid(grid(['a', 'b', 'c'], [3], 2), 0)
+    const next = insertLaneIntoGrid(grid(['a', 'b', 'c'], [3], 2), 0, 'after')
 
     expect(next?.focusedLane).toBe(3)
     expect(next?.lanes[next.focusedLane]?.selectedSessionId).toBe('c')
@@ -76,7 +76,7 @@ describe('insertLaneRightIntoGrid', () => {
   it('follows the focused session when inserting into an earlier row', () => {
     // The two-dimensional version of the case above: an insertion in row 0
     // shifts every lane in row 1 one place right in the flat array.
-    const next = insertLaneRightIntoGrid(grid(['a', 'b', 'c', 'd'], [2, 2], 3), 0)
+    const next = insertLaneIntoGrid(grid(['a', 'b', 'c', 'd'], [2, 2], 3), 0, 'after')
 
     expect(next?.focusedLane).toBe(4)
     expect(next?.lanes[next.focusedLane]?.selectedSessionId).toBe('d')
@@ -87,16 +87,17 @@ describe('insertLaneRightIntoGrid', () => {
     // the enlarged row while every existing lane keeps its proportion. The
     // average must come from the TARGET row: borrowing a wide neighbouring
     // row's average would size the new lane against a row it is not in.
-    const next = insertLaneRightIntoGrid(
+    const next = insertLaneIntoGrid(
       grid(['a', 'b', 'c', 'd'], [2, 2], 0, { laneWeights: [1, 3, 10, 10] }),
       0,
+      'after',
     )
 
     expect(next?.laneWeights).toEqual([1, 2, 3, 10, 10])
   })
 
   it('leaves implicit even sizing implicit', () => {
-    const next = insertLaneRightIntoGrid(grid(['a', 'b'], [2], 0), 0)
+    const next = insertLaneIntoGrid(grid(['a', 'b'], [2], 0), 0, 'after')
 
     expect(next?.laneWeights).toBeUndefined()
   })
@@ -105,9 +106,9 @@ describe('insertLaneRightIntoGrid', () => {
     const full = Array.from({ length: MAX_DISPATCH_TILES }, (_, i) => `a${i}`)
     const state = grid([...full, 'b'], [MAX_DISPATCH_TILES, 1], 0)
 
-    expect(insertLaneRightIntoGrid(state, 0)).toBeNull()
+    expect(insertLaneIntoGrid(state, 0, 'after')).toBeNull()
     // The second row is nowhere near the cap, so it must still accept a lane.
-    expect(lengths(insertLaneRightIntoGrid(state, MAX_DISPATCH_TILES)))
+    expect(lengths(insertLaneIntoGrid(state, MAX_DISPATCH_TILES, 'after')))
       .toEqual([MAX_DISPATCH_TILES, 2])
   })
 
@@ -117,21 +118,81 @@ describe('insertLaneRightIntoGrid', () => {
     const ids = Array.from({ length: MAX_DISPATCH_LANES }, (_, i) => `a${i}`)
     const state = grid(ids, [4, 4, 4, 4], 0)
 
-    expect(insertLaneRightIntoGrid(state, 0)).toBeNull()
+    expect(insertLaneIntoGrid(state, 0, 'after')).toBeNull()
   })
 
   it('refuses an index no row owns', () => {
-    expect(insertLaneRightIntoGrid(grid(['a', 'b'], [2], 0), 2)).toBeNull()
-    expect(insertLaneRightIntoGrid(grid(['a', 'b'], [2], 0), -1)).toBeNull()
-    expect(insertLaneRightIntoGrid(grid(['a', 'b'], [2], 0), 0.5)).toBeNull()
+    expect(insertLaneIntoGrid(grid(['a', 'b'], [2], 0), 2, 'after')).toBeNull()
+    expect(insertLaneIntoGrid(grid(['a', 'b'], [2], 0), -1, 'after')).toBeNull()
+    expect(insertLaneIntoGrid(grid(['a', 'b'], [2], 0), 0.5, 'after')).toBeNull()
   })
 
   it('does not mutate the state it is given', () => {
     const current = grid(['a', 'b'], [2], 0)
-    insertLaneRightIntoGrid(current, 0)
+    insertLaneIntoGrid(current, 0, 'after')
 
     expect(idsOf(current)).toEqual(['a', 'b'])
     expect(lengths(current)).toEqual([2])
+  })
+})
+
+describe('insertLaneIntoGrid before', () => {
+  it('opens space left of the first lane, which after-insertion cannot reach', () => {
+    // The reason New Lane Before exists: lane 0 has no left neighbour to
+    // insert "after", so without this side there was no way to put space
+    // before the first agent of a row.
+    const next = insertLaneIntoGrid(grid(['a', 'b'], [2], 0), 0, 'before')
+
+    expect(idsOf(next)).toEqual([undefined, 'a', 'b'])
+    expect(lengths(next)).toEqual([3])
+  })
+
+  it('moves focus with the agent rather than onto the empty newcomer', () => {
+    // Insertion lands AT the focused coordinate. Keeping the ordinal would
+    // put focus on the new empty lane and retarget every keyboard command.
+    const next = insertLaneIntoGrid(grid(['a', 'b', 'c'], [3], 1), 1, 'before')
+
+    expect(next?.focusedLane).toBe(2)
+    expect(next?.lanes[next.focusedLane]?.selectedSessionId).toBe('b')
+  })
+
+  it('lengthens the anchor row, not the row that ends just before it', () => {
+    // laneIndex 2 is the START of row 1, so insertAt === 2 is also "one past
+    // the end of row 0" in the flat array. The owning row must come from the
+    // anchor lane, or row 0 would grow instead.
+    const next = insertLaneIntoGrid(grid(['a', 'b', 'c', 'd'], [2, 2], 2), 2, 'before')
+
+    expect(lengths(next)).toEqual([2, 3])
+    expect(idsOf(next)).toEqual(['a', 'b', undefined, 'c', 'd'])
+    expect(next?.lanes[next.focusedLane]?.selectedSessionId).toBe('c')
+  })
+
+  it('leaves focus alone when the insertion is right of it', () => {
+    const next = insertLaneIntoGrid(grid(['a', 'b', 'c'], [3], 0), 2, 'before')
+
+    expect(next?.focusedLane).toBe(0)
+    expect(idsOf(next)).toEqual(['a', 'b', undefined, 'c'])
+  })
+
+  it('splices the target row average weight at the anchor coordinate', () => {
+    const next = insertLaneIntoGrid(
+      grid(['a', 'b', 'c', 'd'], [2, 2], 2, { laneWeights: [10, 10, 1, 3] }),
+      2,
+      'before',
+    )
+
+    expect(next?.laneWeights).toEqual([10, 10, 2, 1, 3])
+  })
+
+  it('applies the same caps and coordinate refusals as after', () => {
+    const full = Array.from({ length: MAX_DISPATCH_TILES }, (_, i) => `a${i}`)
+    expect(insertLaneIntoGrid(grid(full, [MAX_DISPATCH_TILES], 0), 0, 'before')).toBeNull()
+
+    const ids = Array.from({ length: MAX_DISPATCH_LANES }, (_, i) => `a${i}`)
+    expect(insertLaneIntoGrid(grid(ids, [4, 4, 4, 4], 0), 0, 'before')).toBeNull()
+
+    expect(insertLaneIntoGrid(grid(['a', 'b'], [2], 0), 2, 'before')).toBeNull()
+    expect(insertLaneIntoGrid(grid(['a', 'b'], [2], 0), -1, 'before')).toBeNull()
   })
 })
 
