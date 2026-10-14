@@ -241,6 +241,8 @@ export type SessionSpawnOptions = {
    * stale renderer snapshot can never attach a deleted or disabled server.
    */
   userMcpOverrides?: Record<string, boolean>
+  /** Remote providers (Hermes): the Settings connection this pane uses. */
+  remoteConnectionId?: string
 }
 
 export type SessionSpawnResult = {

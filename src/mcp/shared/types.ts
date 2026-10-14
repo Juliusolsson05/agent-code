@@ -249,6 +249,12 @@ const BUILT_IN_MCP_DOMAINS_BY_PROVIDER = {
   // registers every tool as `mcp__<server>__<tool>`, so the full set is
   // offered as for the other terminal providers.
   pi: [...BUILT_IN_MCP_DOMAINS],
+  // NONE for Hermes (#1482). Agent Code's built-in MCP servers listen on THIS
+  // Mac's loopback; a Hermes agent runs on the user's VPS and cannot reach
+  // them, and its MCP configuration lives in that host's config.yaml, which
+  // Agent Code does not own. Offering a domain would mint a bearer and a URL
+  // nothing could ever call. The Goal/TLDR peeks still render the pane.
+  hermes: [],
 } as const satisfies Record<AgentProviderKind, readonly BuiltInMcpDomain[]>
 
 const BUILT_IN_MCP_DOMAIN_SET = new Set<string>(BUILT_IN_MCP_DOMAINS)

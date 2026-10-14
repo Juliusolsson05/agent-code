@@ -32,7 +32,7 @@
  * will fail to compile until every kind has a config. That compile
  * error is the intended checklist.
  */
-export const AGENT_PROVIDER_KINDS = ['claude', 'codex', 'opencode', 'grok', 'pi'] as const
+export const AGENT_PROVIDER_KINDS = ['claude', 'codex', 'opencode', 'grok', 'pi', 'hermes'] as const
 
 /** A provider that runs an actual agent (has transcripts, conditions, …). */
 export type AgentProviderKind = (typeof AGENT_PROVIDER_KINDS)[number]
@@ -115,6 +115,61 @@ export function effectiveProviderRuntime(
 ): AgentProviderRuntime | undefined {
   if (isTerminalOnlyProviderKind(kind)) return 'terminal'
   return runtime ?? undefined
+}
+
+/**
+ * Providers that run on ANOTHER machine: there is no local CLI to resolve and
+ * the pane's `cwd` is local metadata only, never sent to the agent.
+ *
+ * Hermes (#1482) is reached over the network: the user's own `hermes serve`
+ * on a VPS, configured as a connection in Settings. Every Agent Code spawn
+ * path assumed a local binary (SessionManager.spawnWithId's getToolPath →
+ * ProviderCliNotFoundError) and a local project folder (the detached-spawn
+ * cwd gate). WHY a provider property resolved at read time, like
+ * TERMINAL_ONLY_PROVIDER_KINDS above, and not a per-pane flag: every spawn
+ * path (split chords, MCP create_agent, rehydrate, the control API) passes
+ * only a kind; a property of the kind cannot be missed by any of them.
+ */
+export const REMOTE_PROVIDER_KINDS = ['hermes'] as const satisfies readonly AgentProviderKind[]
+
+export type RemoteProviderKind = (typeof REMOTE_PROVIDER_KINDS)[number]
+
+export function isRemoteProviderKind(value: unknown): value is RemoteProviderKind {
+  return typeof value === 'string' && (REMOTE_PROVIDER_KINDS as readonly string[]).includes(value)
+}
+
+/**
+ * Every provider that runs a CLI on THIS machine. The setup gate, binary
+ * resolution and the toolchain are about local executables; typing them by
+ * this subset makes "look for a `hermes` binary" a compile error instead of a
+ * setup row that can never turn green.
+ */
+export type LocalProviderKind = Exclude<AgentProviderKind, RemoteProviderKind>
+
+export const LOCAL_PROVIDER_KINDS: readonly LocalProviderKind[] = AGENT_PROVIDER_KINDS.filter(
+  (kind): kind is LocalProviderKind => !isRemoteProviderKind(kind),
+)
+
+export function isLocalProviderKind(value: unknown): value is LocalProviderKind {
+  return isAgentProviderKind(value) && !isRemoteProviderKind(value)
+}
+
+/**
+ * Providers whose pane is a CHAT, not the coding feed and never a terminal.
+ *
+ * Hermes is a personal assistant the user otherwise talks to from Telegram;
+ * the pane replaces that chat (decomposition docs/decomposition/
+ * hermes-remote-chat.md, owner 2026-10-13). WHY separate from REMOTE: one
+ * governs where the agent runs (spawn, setup), the other how its pane looks;
+ * a future remote CODING agent would be remote but want the feed.
+ *
+ * A chat-surface provider has no PTY, so it is pinned to the rendered surface
+ * exactly as structured OpenCode is (agentDisplayMode.ts).
+ */
+export const CHAT_SURFACE_PROVIDER_KINDS = ['hermes'] as const satisfies readonly AgentProviderKind[]
+
+export function isChatSurfaceProviderKind(value: unknown): boolean {
+  return typeof value === 'string' && (CHAT_SURFACE_PROVIDER_KINDS as readonly string[]).includes(value)
 }
 
 /**

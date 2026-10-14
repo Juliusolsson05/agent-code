@@ -41,6 +41,7 @@ import { controlReference as browserPocketReference } from '@renderer/features/b
 import { controlReference as mcpReference } from '@renderer/features/mcp/controlReference'
 import { controlReference as skillsReference } from '@renderer/features/skills/controlReference'
 import { controlReference as sessionContextMenuReference } from '@renderer/features/session-context-menu/controlReference'
+import { controlReference as hermesReference } from '@renderer/features/hermes-chat/controlReference'
 
 export const featureReferences = [
   ...reference0,
@@ -84,6 +85,7 @@ export const featureReferences = [
   ...mcpReference,
   ...skillsReference,
   ...sessionContextMenuReference,
+  ...hermesReference,
 ]
 
 // These directories implement shared infrastructure rather than separate UI
@@ -141,5 +143,8 @@ export const referenceOwnership = {
   "sessionFeed": "conversation",
   // What a rendered feed row may do in the app that mounts it (#1177): no UI
   // of its own; its behavior is the conversation page's.
-  "rendererHost": "conversation"
+  "rendererHost": "conversation",
+  // Both halves of the Hermes pane (#1482) share one page: hermes-chat's.
+  "hermes-chat": "hermes",
+  "hermes-settings": "hermes"
 } as const

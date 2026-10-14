@@ -22,6 +22,10 @@ import { useStreamingActions } from '@renderer/workspace/hook/actions/streaming'
 import { isOptimisticCodexUserEntry } from '@providers/codex/renderer/transcript/entries'
 import { entryTextContent } from '@renderer/session-runtime/entries'
 
+import { ConversationReconciler, type SemanticEvent } from 'hermes-headless'
+import { inboundFrames, latestRecording } from 'hermes-headless/testing/corpus'
+import { foldSemanticEvent } from '@renderer/session-runtime/semantic/foldEvent'
+
 import { useIpcSubscriptions } from './useIpcSubscriptions'
 import { makeWorkspaceRefsForTest as makeRefs } from './testing/workspaceRefsForTest'
 
@@ -1885,5 +1889,74 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
       act(() => { vi.advanceTimersByTime(15_000) })
       expect(pane.runtime().transcriptStatus).toBe('ready')
     })
+  })
+})
+
+// Round-1 review x1 #1 (#1482): after Hermes `/new`, the old conversation's
+// archived live turns must go with its committed rows. An ordinary reset
+// keeps them (the same conversation's rows re-claim them); a different
+// conversation never re-claims them, so they stayed as orphaned bubbles.
+describe('history reset of a DIFFERENT conversation', () => {
+  function liveHistoryFromRecordedS3() {
+    // Recorded hermes-headless S3: two real turns, folded the way the live
+    // path folds them.
+    const frames = inboundFrames(latestRecording('S3'))
+    const created = frames.map((frame) => frame.result as Record<string, unknown> | undefined)
+      .find((result) => result && typeof result.stored_session_id === 'string' && result.message_count === 0)!
+    const sid = String(created.session_id)
+    const out: SemanticEvent[] = []
+    const reconciler = new ConversationReconciler({
+      semantic: (event) => out.push(event), committed: () => undefined, historyReset: () => undefined, historyCaughtUp: () => undefined,
+      activity: () => undefined, session: () => undefined, requestOpened: () => undefined, requestClosed: () => undefined,
+      turnSettled: () => undefined, reclaimed: () => undefined, unknown: () => undefined,
+    })
+    reconciler.applySnapshot(created as never, 'snapshot')
+    for (const frame of frames) {
+      const params = frame.params as { session_id?: string } | undefined
+      if (frame.method === 'event' && params?.session_id === sid) reconciler.applyEvent(params as never)
+    }
+    let semantic = emptyRuntime().semantic
+    for (const event of out) semantic = foldSemanticEvent(semantic, event, 'hermes')
+    return semantic
+  }
+
+  function mountWith(semantic: SessionRuntime['semantic'], extra: Partial<SessionRuntime> = {}) {
+    const fake = createFakeSessionFeed()
+    const sessionId = 'hermes-pane' as SessionId
+    let workspaceState = { sessions: { [sessionId]: { cwd: '/', kind: 'hermes' } } } as unknown as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = { [sessionId]: { ...emptyRuntime(), semantic, ...extra } }
+    let refsForTest!: WorkspaceRefs
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) {
+        refs.current = makeRefs(workspaceState)
+        refs.current.latestRuntimesRef.current = runtimes
+        refsForTest = refs.current
+      }
+      useIpcSubscriptions(fake, refs.current, updater => {
+        workspaceState = typeof updater === 'function' ? updater(workspaceState) : updater
+      }, updater => {
+        runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+        refsForTest.latestRuntimesRef.current = runtimes
+      }, () => {}, () => {})
+      return <div />
+    }
+    render(<Harness />)
+    return { fake, sessionId, runtime: () => runtimes[sessionId]! }
+  }
+
+  it('drops the archived turns when the reset says the conversation changed, and keeps them otherwise', () => {
+    const semantic = liveHistoryFromRecordedS3()
+    expect(semantic.history.length).toBeGreaterThan(0)
+
+    const same = mountWith(semantic)
+    act(() => same.fake.emitHistoryBoundary({ sessionId: same.sessionId, type: 'reset', generation: 5, snapshotByteLength: 0, file: 'hermes://c/a' }))
+    expect(same.runtime().semantic.history.length).toBe(semantic.history.length)
+
+    const other = mountWith(semantic, { hasOlderHistory: true })
+    act(() => other.fake.emitHistoryBoundary({ sessionId: other.sessionId, type: 'reset', generation: 5, snapshotByteLength: 0, conversationChanged: true, file: 'hermes://c/b' }))
+    expect(other.runtime().semantic.history).toEqual([])
+    // Nothing older exists in a new conversation (round-2 review x1 #4).
+    expect(other.runtime().hasOlderHistory).toBe(false)
   })
 })

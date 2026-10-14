@@ -110,6 +110,8 @@ export type SessionHistoryBoundaryEvent = {
   snapshotByteLength: number
   byteOffset?: number
   complete?: boolean
+  /** See ProviderHistoryBoundaryEvent.conversationChanged. */
+  conversationChanged?: boolean
   file: string
 }
 

@@ -31,3 +31,10 @@
 [submodule "packages/pi-terminal-headless"]
 	path = packages/pi-terminal-headless
 	url = https://github.com/Juliusolsson05/pi-terminal-headless.git
+[submodule "hermes-agent-src"]
+	path = vendor/hermes-agent-src
+	url = https://github.com/NousResearch/hermes-agent.git
+	shallow = true
+[submodule "packages/hermes-headless"]
+	path = packages/hermes-headless
+	url = https://github.com/Juliusolsson05/hermes-headless.git

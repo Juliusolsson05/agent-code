@@ -15,6 +15,7 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { AgentViewModeOverride, SessionId } from '@renderer/workspace/types'
 import { DEFAULT_PROVIDER, effectiveProviderRuntime, isAgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+import { providerHasNoNativeTerminal } from '@renderer/workspace/agentDisplayMode'
 
 type PickerValue = AgentViewModeOverride | 'default'
 
@@ -49,7 +50,7 @@ export function AgentViewModePickerModal({
   // Effective runtime: a terminal-only provider (Pi) is locked to its TUI
   // even when its metadata carries no runtime.
   const terminalRuntime = effectiveProviderRuntime(kind, meta?.providerRuntime) === 'terminal'
-  const nativeUnavailable = kind === 'opencode' && !terminalRuntime
+  const nativeUnavailable = providerHasNoNativeTerminal(kind, meta?.providerRuntime)
   const currentValue: PickerValue = terminalRuntime
     ? 'terminal'
     : meta?.agentViewModeOverride ?? 'default'

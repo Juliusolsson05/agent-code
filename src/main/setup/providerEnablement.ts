@@ -11,6 +11,7 @@ import {
   type ProviderEnablementSnapshot,
 } from '@shared/types/providerEnablement.js'
 import { checkPrerequisites } from '@main/setup/prerequisites.js'
+import { peekHermesConnectionService } from '@main/hermes/registry.js'
 import { invalidateUsageSnapshotCache } from '@main/usage/usageService.js'
 import {
   loadDurableSetupState,
@@ -76,7 +77,7 @@ async function resolveAndCache(
   // it. Every refresh here runs after its own write landed, so the durable
   // state already includes everything it needs to show.
   const state = await loadDurableSetupState()
-  const detected = await detection()
+  const detected = withRemoteProviders(await detection())
   const next: ProviderEnablementSnapshot = {
     entries: resolveProviderEnablement(state.providerEnablementOverrides, detected),
     opencodeUsageSource: state.opencodeUsageSource,
@@ -86,6 +87,26 @@ async function resolveAndCache(
   appliedRefresh = refresh
   cachedSnapshot = next
   return next
+}
+
+/**
+ * Local detection (a CLI on PATH) plus REMOTE detection: Hermes (#1482) counts
+ * as "detected" while at least one of its connections is signed in.
+ *
+ * WHY computed on every resolve instead of cached with the CLI probe: it is an
+ * in-memory read, and it changes on events the CLI probe never sees (signing
+ * in or out in Settings → Hermes); `refreshRemoteProviderDetection` re-emits
+ * when that happens.
+ */
+function withRemoteProviders(local: ReadonlySet<AgentProviderKind>): ReadonlySet<AgentProviderKind> {
+  const hermes = peekHermesConnectionService()
+  if (!hermes?.hasSignedInConnection()) return local
+  return new Set<AgentProviderKind>([...local, 'hermes'])
+}
+
+/** Re-resolve and broadcast after a remote connection was signed in or out. */
+export async function refreshRemoteProviderDetection(): Promise<void> {
+  emit(await resolveAndCache())
 }
 
 /** Fail-open before the first resolve: hiding a user's providers because a

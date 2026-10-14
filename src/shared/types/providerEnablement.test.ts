@@ -39,6 +39,7 @@ describe('resolveProviderEnablement', () => {
       { kind: 'opencode', enabled: false, because: 'not-detected', installed: false },
       { kind: 'grok', enabled: false, because: 'not-detected', installed: false },
       { kind: 'pi', enabled: false, because: 'not-detected', installed: false },
+      { kind: 'hermes', enabled: false, because: 'not-detected', installed: false },
     ])
   })
 

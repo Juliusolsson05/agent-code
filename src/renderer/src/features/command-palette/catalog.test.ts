@@ -77,6 +77,8 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'grok-horizontal',
   'pi-vertical',
   'pi-horizontal',
+  'hermes-vertical',
+  'hermes-horizontal',
   'undo-close',
   'toggle-tail',
   'toggle-tail-all',
@@ -266,12 +268,12 @@ const NAVIGATION_COMMAND_GROUP: readonly string[] = [
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 134 governed commands in registration order', () => {
+  it('contains exactly the 137 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 134 commands', () => {
+  it('has exactly 137 commands', () => {
     // Stated separately from the order assertion because this number is the
     // thing that moves, and a bare count failure is a clearer signal than a
     // 99-line array diff.
@@ -302,11 +304,13 @@ describe('built-in command catalog — baseline characterization', () => {
     // → 131 with Skills, Add Skill… and Check Skill Updates (#1161) → 132
     // with Close Completed Agents… (#1182) → 133 with Pin Session (#1180),
     // the single-agent counterpart of Pin Sessions… that the Sessions
-    // right-click menu offers → 134 with View Goal History (#1190).
+    // right-click menu offers → 134 with View Goal History (#1190) → 137 with
+    // the two generated Hermes splits `hermes-vertical` / `hermes-horizontal`
+    // (#1482; main was already at 135).
     // Each step of that arithmetic was a deliberate edit to this line, which is the entire point of pinning it. (The two test
     // titles above had drifted to "115" while this line said 116; they now
     // track it again.)
-    expect(builtInCommandCatalog).toHaveLength(135)
+    expect(builtInCommandCatalog).toHaveLength(137)
   })
 
   it('reports no structural defects', () => {
@@ -506,8 +510,10 @@ describe('governance targets', () => {
     // `add-skill` and `check-skill-updates` (#1161). Then
     // `close-completed-agents` (#1182). Then `pin-agent` (#1180). Then
     // `view-goal-history` (#1190). Then `reply-to-reader-message` (#1221, K2-4).
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 62).toBe(103)
-    expect(builtInCommandCatalog).toHaveLength(135)
+    // Then `hermes-vertical` and `hermes-horizontal` (#1482, generated from
+    // AGENT_PROVIDER_KINDS like Grok's and Pi's).
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 64).toBe(103)
+    expect(builtInCommandCatalog).toHaveLength(137)
   })
 })
 

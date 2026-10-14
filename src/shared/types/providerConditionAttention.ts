@@ -48,3 +48,13 @@ export const PI_ATTENTION_CONDITION_KINDS = new Set<string>([
   'pi.dialog',
   'pi.trust',
 ])
+
+// Hermes (#1482): every server→client request blocks the remote agent until
+// answered (or until Hermes' own timeout fails it closed), so all four are
+// attention kinds.
+export const HERMES_ATTENTION_CONDITION_KINDS = new Set<string>([
+  'hermes.approval',
+  'hermes.clarify',
+  'hermes.sudo',
+  'hermes.secret',
+])

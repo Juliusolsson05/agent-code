@@ -77,6 +77,9 @@ const AGENT_ALIASES: Record<string, AgentProviderKind> = {
   opencode: 'opencode',
   pi: 'pi',
   grok: 'grok',
+  // No `hermes`: Hermes manages its own skills on its server
+  // (personalAgentSkills unsupported, registry.main.ts); a skill installed
+  // here would never reach it, so `--agent hermes` stays a notice.
 }
 
 /** Flags that change nothing for Agent Code but are valid `npx skills add`. */

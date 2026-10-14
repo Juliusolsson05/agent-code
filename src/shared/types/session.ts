@@ -110,6 +110,9 @@ export type SessionRecoverOptions = {
    *  Used only if recovery has to START a backend; an adopted one keeps the
    *  servers it was launched with. */
   userMcpOverrides?: Record<string, boolean>
+  /** Remote providers (Hermes): the connection, needed only if recovery has
+   *  to START a backend (an adopted live one already holds it). */
+  remoteConnectionId?: string
   /**
    * Opaque renderer-generated generation for this recovery admission.
    *
@@ -188,6 +191,22 @@ export const WORKSPACE_READ_ONLY_PREFIX = 'Workspace file is read-only this sess
  *  recognise this curated, secret-free sentence through the IPC wrapper and
  *  show it, because it names the fix (File › Setup…) (#1286 review C2). */
 export const PROVIDER_CLI_NOT_FOUND_SUFFIX = ' CLI not found. Open Setup (File › Setup…) to install it or enter its path.'
+
+/** A remote provider's (Hermes, #1482) start failures that name their fix.
+ *  For a remote agent the connection is what the CLI is for a local one, so
+ *  these are curated exactly like PROVIDER_CLI_NOT_FOUND_SUFFIX: whole fixed
+ *  sentences, recognised by inclusion and ALWAYS re-emitted from these
+ *  constants, never from the error text (which can carry a server's own
+ *  error detail). Shared because main and the renderer each launder the
+ *  failure on their side of IPC. */
+export const HERMES_NOT_CONNECTED_MESSAGE = 'Hermes needs a connection. Add and sign in to one in Settings → Hermes.'
+export const HERMES_SIGNED_OUT_MESSAGE = 'Signed out of this Hermes connection. Sign in again in Settings → Hermes, then reload the agent.'
+export const HERMES_UNREACHABLE_MESSAGE = 'Could not reach this Hermes server. Check that `hermes serve` is running and reachable from this Mac, then reload the agent.'
+const HERMES_CURATED_MESSAGES = [HERMES_NOT_CONNECTED_MESSAGE, HERMES_SIGNED_OUT_MESSAGE, HERMES_UNREACHABLE_MESSAGE]
+
+export function curatedRemoteProviderMessage(raw: string): string | null {
+  return HERMES_CURATED_MESSAGES.find((message) => raw.includes(message)) ?? null
+}
 
 /** The actionable message for a Claude proxy (mitmproxy) that would not
  *  start, and how to recognise one. Shared since #1267: main now launders
@@ -450,6 +469,15 @@ export type ProviderHistoryBoundaryEvent = {
   snapshotByteLength: number
   byteOffset?: number
   complete?: boolean
+  /**
+   * On a reset: the snapshot that follows is a DIFFERENT conversation (Hermes
+   * `/new`, or a conversation deleted on the server). The renderer then also
+   * drops the archived live turns, which an ordinary reset keeps because the
+   * same conversation's committed rows re-claim them; nothing re-claims turns
+   * of a conversation that is gone, so they stayed on screen as orphaned
+   * assistant bubbles (round-1 review x1 #1).
+   */
+  conversationChanged?: boolean
 }
 
 export type AgentSessionEvents = {
@@ -790,6 +818,13 @@ export type SessionOptions = {
    * ownership boundary ignore it.
    */
   beforeResumeOwnershipAcquire?: () => Promise<void>
+  /**
+   * Remote providers only (REMOTE_PROVIDER_KINDS, Hermes #1482): which
+   * configured connection (Settings → Hermes) this pane talks to. Provider
+   * neutral on purpose: it names a main-owned connection record, never a URL
+   * or a credential, so it is safe to persist and to carry over IPC.
+   */
+  remoteConnectionId?: string
 }
 
 export type SessionHistoryChunk = {

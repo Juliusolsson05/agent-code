@@ -60,7 +60,7 @@ The most technical part of the application is not visible in this map. Agent Cod
 
 Blue identifies Agent Code components and state. Gray, dashed boxes identify external tools, clients or their data. Amber marks checks and cautions. Every view includes a key; the labels carry the meaning even without color.
 
-This reference describes the implementation at source revision `6a19e4ee`, inspected on 2026-09-11. Sections 5.2, 5.3, 8.2.1 and 8.3 were revised against source revision `115e26fc` and the package revisions listed in 5.2, inspected on 2026-09-12. Section 5.3.5 (Pi) and Pi's column in the 5.3 table were added on 2026-09-22 against the pi-terminal-headless revision listed in 5.2.
+This reference describes the implementation at source revision `6a19e4ee`, inspected on 2026-09-11. Sections 5.2, 5.3, 8.2.1 and 8.3 were revised against source revision `115e26fc` and the package revisions listed in 5.2, inspected on 2026-09-12. Section 5.3.5 (Pi) and Pi's column in the 5.3 table were added on 2026-09-22 against the pi-terminal-headless revision listed in 5.2. Section 5.3.7 (Hermes) and Hermes' column were added on 2026-10-13 against the hermes-headless revision listed in 5.2 and Hermes v0.21.7.
 
 ## Contents
 
@@ -252,6 +252,7 @@ The application submodules this document covers are:
 | [opencode-headless](https://github.com/Juliusolsson05/opencode-headless/tree/4f2ef5de7c80ad7a6199dc09869ea3b728752f0e) | `4f2ef5de` | Structured OpenCode: server spawn or attach, HTTP client, SSE dispatcher, committed message assembly ([5.3.4](#534-opencode-headless-and-opencode-terminal-headless)) |
 | [opencode-terminal-headless](https://github.com/Juliusolsson05/opencode-terminal-headless/tree/e85b3f53be39912fb295c45907b1fb6abd6e4a26) | `e85b3f53` | OpenCode TUI companion: read-only database reader, TUI server events, turn sequencing, conditions ([5.3.4](#534-opencode-headless-and-opencode-terminal-headless)) |
 | [pi-terminal-headless](https://github.com/Juliusolsson05/pi-terminal-headless/tree/2100dfc3da05742f9052b34ed802273fcdc40a73) | `2100dfc3` | Pi TUI companion: session-tree reader, bridge extension (live events, prompts, MCP tool proxy), turn sequencing, conditions ([5.3.5](#535-pi-terminal-headless)) |
+| [hermes-headless](https://github.com/Juliusolsson05/hermes-headless/tree/4003fbfecd4fc44b6514c0e145426d59daf5f0d0) | `4003fbfe` | Remote Hermes client: native sign-in helpers, `hermes serve` JSON-RPC connection with gap-free replay, conversation reconciler, server-request handling ([5.3.7](#537-hermes-headless)) |
 | [agent-transcript-parser](https://github.com/Juliusolsson05/agent-transcript-parser/tree/9c99db00f9cf0097c87271d04fd3e3ebf9f1e894) | `9c99db00` | Neutral conversation model for provider switch, duplicate and rewind; provisional ghost records ([5.3.6](#536-agent-transcript-parser)) |
 | [agent-voice-dictation](https://github.com/Juliusolsson05/agent-voice-dictation/tree/3c6f962843532da2a7ddf2cc80f38cacd3196bb1) | `3c6f9628` | Speech transport and composer integration primitives |
 | [workflow-mcp](https://github.com/Juliusolsson05/workflow-mcp/tree/b4b98f8d13f59bae0c999c927533f451b491496a) | `b4b98f8d` | Durable workflow service, store, scheduler, worker protocol and providers |
@@ -264,16 +265,16 @@ Build aliases resolve most local packages directly from source. Workflow integra
 
 Provider selection is exhaustive at several boundaries: main factories and native operations, renderer mapping/rendering capabilities, and setup requirements. Adding a string to a UI picker is insufficient. The source owners are [main registry](src/providers/registry.main.ts), [setup registry](src/providers/registry.setup.ts), [renderer capability registry](src/providers/registry.renderer.capabilities.ts), and [feature capabilities](src/providers/shared/featureCapabilities.ts).
 
-| Property | Claude | Codex | OpenCode structured | OpenCode terminal | Pi (terminal-only) |
-| --- | --- | --- | --- | --- | --- |
-| Native execution | CLI in PTY | CLI in PTY | `opencode serve` spawned by the package | TUI in PTY with its embedded server | `pi` TUI in PTY with Agent Code's bridge extension loaded by `-e` |
-| Live observations | Terminal mirror, optional mitmproxy stream | Terminal mirror, rollout events, optional Responses proxy stream | Server SSE bus | TUI server SSE: turns, phases, requests; no streaming text | Bridge events over a private Unix socket: turns, phases, tools, dialogs, session switches; no streaming text |
-| Committed observations | Exact JSONL tail | Attributed rollout tail | Messages assembled from bus part snapshots, plus HTTP history | Read-only SQLite event log | Session JSONL tree, active branch only |
-| Native identity | UUID selected before launch/resume | Exact rollout/thread identity, proven before tailing | `ses_...` | Pre-created `ses_...` | UUID passed as `--session-id`; the pane follows `/new`, `/resume` and `/fork` inside the TUI |
-| Prompt path | Readiness, absorption and durable acceptance transaction | Attested PTY delivery profile | HTTP `prompt_async`, text only | Keyboard to PTY; programmatic prompts through the TUI server with the session's agent, model and variant | Keyboard to PTY; programmatic prompts through the bridge (`sendUserMessage` as follow-up), acknowledged only by Pi's own evidence |
-| App saved-session listing | Supported | Supported | Not implemented | Not a separate listing capability | Supported (conversation catalog) |
-| Accepted upstream version | 2.1.263 | 0.149.1 | Not pinned by the package | 1.18.30 | 0.87.1 |
-| Native terminal view | Available | Available | Not a PTY | Required; the pane always shows the TUI | Required; Pi has no other surface |
+| Property | Claude | Codex | OpenCode structured | OpenCode terminal | Pi (terminal-only) | Hermes (remote chat) |
+| --- | --- | --- | --- | --- | --- | --- |
+| Native execution | CLI in PTY | CLI in PTY | `opencode serve` spawned by the package | TUI in PTY with its embedded server | `pi` TUI in PTY with Agent Code's bridge extension loaded by `-e` | `hermes serve` on the user's own server; Agent Code launches nothing |
+| Live observations | Terminal mirror, optional mitmproxy stream | Terminal mirror, rollout events, optional Responses proxy stream | Server SSE bus | TUI server SSE: turns, phases, requests; no streaming text | Bridge events over a private Unix socket: turns, phases, tools, dialogs, session switches; no streaming text | WebSocket JSON-RPC events with a per-session sequence and a replay ring |
+| Committed observations | Exact JSONL tail | Attributed rollout tail | Messages assembled from bus part snapshots, plus HTTP history | Read-only SQLite event log | Session JSONL tree, active branch only | `session.history` rows, fetched after each settled turn |
+| Native identity | UUID selected before launch/resume | Exact rollout/thread identity, proven before tailing | `ses_...` | Pre-created `ses_...` | UUID passed as `--session-id`; the pane follows `/new`, `/resume` and `/fork` inside the TUI | Hermes' stored session id, created by the server; the pane follows `/new` |
+| Prompt path | Readiness, absorption and durable acceptance transaction | Attested PTY delivery profile | HTTP `prompt_async`, text only | Keyboard to PTY; programmatic prompts through the TUI server with the session's agent, model and variant | Keyboard to PTY; programmatic prompts through the bridge (`sendUserMessage` as follow-up), acknowledged only by Pi's own evidence | `prompt.submit` over the socket; slash commands through `slash.exec` |
+| App saved-session listing | Supported | Supported | Not implemented | Not a separate listing capability | Supported (conversation catalog) | Not implemented; a pane resumes its own conversation |
+| Accepted upstream version | 2.1.263 | 0.149.1 | Not pinned by the package | 1.18.30 | 0.87.1 | v0.21.7 (desktop contract 8, minimum 7) |
+| Native terminal view | Available | Available | Not a PTY | Required; the pane always shows the TUI | Required; Pi has no other surface | None; the pane is always a chat |
 
 #### 5.3.1 Observing a process Agent Code does not control
 
@@ -746,6 +747,28 @@ Unknown records stay opaque; they are never guessed into plausible assistant tex
 The parser's fixtures are 104 redacted observed-wire records and sequences from a local corpus census, each with a manifest stating what it proves (wire shape and classification, not native resume). At this revision the application reads only projected values; it ignores classification diagnostics and `ProjectionReport` contents. The Claude decoder does not filter sidechain turns or walk parent chains; those are analysis diagnostics only.
 
 Consumers: [transcript engine](src/main/providerSwitch/transcriptEngine.ts), [provider switch](src/main/providerSwitch/switchProvider.ts), [rewind](src/main/providerSwitch/rewindSession.ts), [renderer ghost reducer](src/renderer/src/session-runtime/ghosts.ts).
+
+#### 5.3.7 hermes-headless
+
+Hermes ([NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)) is not a coding CLI. It is a personal agent that its users run on their own server and usually talk to through Telegram. A Hermes pane replaces that chat app: it is a chat window onto the user's Hermes, beside their coding agents. Agent Code never starts Hermes, never sees its files and has no terminal for it. Hermes is the only *remote* provider kind (`REMOTE_PROVIDER_KINDS`): setup, binary resolution, user MCP injection and skill reconcile are keyed on local kinds only, and a spawn needs a `remoteConnectionId` instead of a CLI.
+
+[hermes-headless](https://github.com/Juliusolsson05/hermes-headless/tree/4003fbfecd4fc44b6514c0e145426d59daf5f0d0/src) speaks the same backend Hermes Desktop uses, `hermes serve` (`tui_gateway`): JSON-RPC 2.0 over a WebSocket at `/api/ws`. The package owns the protocol. The app owns credentials, the socket dialer and the reconnect loop.
+
+| Concern | Owner and rule |
+| --- | --- |
+| Connections | `src/main/hermes/`: saved connections (name + URL) in settings, tokens in `safeStorage`, bound to the URL they were issued for. Editing the URL signs the connection out, so a token is never sent to a host the user did not sign in to |
+| Sign-in | RFC 8252 native PKCE through the system browser and a loopback `127.0.0.1` redirect. Each socket open mints a 30 s single-use ticket (`/api/auth/ws-ticket`); the access token never travels in a WebSocket URL. A refused bearer means refresh (recorded), single-flight per connection; a refused refresh means signed out, and the reconnect loop stops instead of spinning |
+| Replay | Every session event carries a `seq`. `RpcConnection.acquire` parks events across attach + `session.events.since`, so a reconnect is gap-free and exactly-once. A changed replay epoch or a truncated ring falls back to a full `session.resume` |
+| Reconciliation | `ConversationReconciler` is the one place live events and committed rows meet. Live text and tools become fold events tagged `hermes-ws`; committed rows are keyed `row:<row_id>` or `tool:<tool_call_id>`, the same ids the live tool blocks carry, so the ledger's ordinary id ownership dedupes them |
+| Server requests | Approval, clarify, sudo and secret arrive as server-to-client requests. Each becomes a `hermes.*` condition card in the pane. `HermesSession.resolveCondition` answers only a request that is still open and only with a value its validator accepts, so a card cannot invent an answer Hermes did not offer. Unknown request methods get `-32601` at once instead of stalling the agent until Hermes' timeout |
+| Prompts | `prompt.submit`. While a turn runs, the prompt is queued (`queued: true`), never steered: a busy submit without it redirects and kills the running turn (recorded) |
+| Lifetime | Closing or reloading a pane detaches; it never closes the conversation on the server. The next spawn resumes the stored id, and a conversation that is gone falls back to a new one with a notice |
+
+The chat surface (`features/hermes-chat/`) is a view over the same ledger feed items every pane uses, restyled as bubbles and tool chips; composer, conditions and peeks are shared. `providerHasNoNativeTerminal` pins the display mode to agent.
+
+**Known gaps at this revision.** All recordings come from a local `hermes serve` v0.21.7 with its password sign-in and a scripted model; Nous OAuth, TLS, reverse-proxy path prefixes and real network latency are unrecorded. Agent Code's built-in MCP cannot reach a VPS, so Goal/TLDR/orchestration tools are absent inside Hermes. There is no provider switch, duplicate or rewind (no parser codec), no attachments and no saved-conversation picker.
+
+Sources: [Hermes runtime adapter](src/providers/hermes/runtime), [connections](src/main/hermes), [chat surface](src/renderer/src/features/hermes-chat), [design](docs/decomposition/hermes-remote-chat.md).
 
 ### 5.4 Renderer state and composition
 
@@ -3163,7 +3186,7 @@ Sources: [Vitest configuration](vitest.config.ts), [live configuration](vitest.l
 
 | Intended change / symptom | Start reading here | Evidence to preserve |
 | --- | --- | --- |
-| Add a provider or runtime flavor | [provider registries](src/providers), [session types](src/shared/types/session.ts) | Exhaustive capability policy, setup requirements, factory/teardown, mapper and resume contracts |
+| Add a provider or runtime flavor | [provider registries](src/providers), [session types](src/shared/types/session.ts), [provider kind sets](src/shared/types/providerKind.ts) | Exhaustive capability policy, setup requirements, factory/teardown, mapper and resume contracts; a provider with no local CLI joins `REMOTE_PROVIDER_KINDS`, so setup and binary lookup skip it |
 | Pane vanishes or duplicates after reload | [rehydration](src/renderer/src/workspace/hook/persistence/rehydrate.ts), [manager recovery](src/main/sessionManager.ts) | Stable IDs, one backend claim, retained failed pane, workspace save acknowledgement |
 | Wrong window receives events | [window registry](src/main/window/windowRegistry.ts), [forwarder](src/main/sessions/forwarder.ts) | Early ownership, transfer rollback, terminal-event routing and generation lifetime |
 | Prompt disappears or executes twice | [delivery adapters](src/providers), [manager reservation](src/main/sessionManager.ts) | Write-state uncertainty, readiness evidence, acceptance cursor and retry safety |

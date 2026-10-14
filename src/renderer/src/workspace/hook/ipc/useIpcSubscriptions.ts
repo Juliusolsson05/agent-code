@@ -1027,7 +1027,15 @@ export function useIpcSubscriptions(
           totalEntries: 0,
           historyOldestMarker: null,
           queuedMessages: [],
-          semantic: { ...current.semantic, currentTurn: null },
+          // A different conversation keeps none of the old one's turns; see
+          // ProviderHistoryBoundaryEvent.conversationChanged.
+          semantic: boundary.conversationChanged
+            ? { ...current.semantic, currentTurn: null, history: [] }
+            : { ...current.semantic, currentTurn: null },
+          // A brand-new conversation has nothing older to page in; keeping
+          // the flag left "Scroll up for earlier messages" over an empty
+          // chat after /new (round-2 review x1 #4).
+          ...(boundary.conversationChanged ? { hasOlderHistory: false } : {}),
         })
         return { ...prev, [sessionId]: next }
       })

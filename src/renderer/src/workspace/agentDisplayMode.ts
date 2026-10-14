@@ -1,6 +1,6 @@
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import type { AgentViewModeOverride, SessionKind } from '@renderer/workspace/types'
-import { effectiveProviderRuntime, isAgentProviderKind } from '@shared/types/providerKind'
+import { effectiveProviderRuntime, isAgentProviderKind, isChatSurfaceProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind, AgentProviderRuntime } from '@shared/types/providerKind'
 import type {
   RenderedViewLeaseFeature,
@@ -37,11 +37,27 @@ export function renderedViewLeaseCount(runtime: SessionRuntime): number {
   )
 }
 
+/**
+ * Does this pane have NO native terminal to show? Structured OpenCode (HTTP/SSE,
+ * no PTY) and every chat-surface provider (Hermes, a remote chat: there is no
+ * process here at all). One predicate for the three places that used to spell
+ * `kind === 'opencode'` (the view-mode pin below, the durable override guard in
+ * workspace/hook, the view-mode picker): a new provider without a PTY joins
+ * all three by being added to CHAT_SURFACE_PROVIDER_KINDS.
+ */
+export function providerHasNoNativeTerminal(
+  kind: SessionKind | undefined,
+  providerRuntime: AgentProviderRuntime | null | undefined,
+): boolean {
+  if (isChatSurfaceProviderKind(kind)) return true
+  return kind === 'opencode' && effectiveProviderRuntime(kind, providerRuntime) !== 'terminal'
+}
+
 function normalizeAgentViewModeForKind(
   kind: AgentProviderKind,
   mode: AgentViewMode,
 ): AgentViewMode {
-  if (kind !== 'opencode') return mode
+  if (kind !== 'opencode' && !isChatSurfaceProviderKind(kind)) return mode
   // WHY ordinary OpenCode is pinned to Agent mode:
   // Claude/Codex "Terminal" means "attach xterm to the real provider PTY."
   // The ordinary OpenCode choice is still HTTP/SSE and has no PTY, so mounting
