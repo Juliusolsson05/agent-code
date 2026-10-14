@@ -20,6 +20,8 @@ export const hermesApi = {
   hermesTest: (id: string): Promise<HermesTestResult> => ipcRenderer.invoke('hermes:test', id),
   hermesSignIn: (id: string): Promise<HermesConnectionInfo> => ipcRenderer.invoke('hermes:sign-in', id),
   hermesCancelSignIn: (id: string): Promise<void> => ipcRenderer.invoke('hermes:cancel-sign-in', id),
+  /** The gateway routing key of the connection's Telegram DM thread, or null (#1496). */
+  hermesDefaultLane: (id: string): Promise<string | null> => ipcRenderer.invoke('hermes:default-lane', id),
   hermesSignOut: (id: string): Promise<void> => ipcRenderer.invoke('hermes:sign-out', id),
   onHermesConnectionsChanged: (cb: (connections: HermesConnectionInfo[]) => void): Unsub =>
     subscribe('hermes:connections-changed', cb),

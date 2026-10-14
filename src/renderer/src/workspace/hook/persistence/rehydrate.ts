@@ -704,6 +704,7 @@ export async function rehydrateWorkspace(
             // (#1143); main uses them only if it has to start the backend.
             ...(isAgentProviderKind(kind) ? { userMcpOverrides: userMcpOverridesFrom(builtInMcpOverrides) } : {}),
             ...(meta.remoteConnectionId ? { remoteConnectionId: meta.remoteConnectionId } : {}),
+            ...(meta.hermesLaneKey ? { hermesLaneKey: meta.hermesLaneKey } : {}),
             // Only bootstrap can prove the predecessor ID still came from the
             // durable workspace. Ordinary retry/wake calls must not be able to
             // abort a same-pane replacement transaction.

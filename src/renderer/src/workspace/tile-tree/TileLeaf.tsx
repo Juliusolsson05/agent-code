@@ -2,6 +2,7 @@ import { sessionIsWorking } from '@renderer/session-runtime/working'
 import { useMonitorCommit } from '@renderer/performance/useMonitorCommit'
 import { useUsageLimitActions } from '@renderer/features/usage-limit/useUsageLimitActions'
 import { DEFAULT_PROVIDER, isAgentProviderKind, isChatSurfaceProviderKind } from '@shared/types/providerKind'
+import { useComposerCommandPicker } from '@renderer/features/composer-commands/useComposerCommandPicker'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
@@ -767,10 +768,21 @@ export function TileLeaf({
     onMessage: message => workspace.showPaneToast(sessionId, message),
   })
 
+  // Catalog-driven slash picker for chat-surface providers (Hermes, #1497).
+  // Claude's picker mirrors its terminal (runtime.picker); a structured
+  // provider's catalog arrives as data and is filtered here.
+  const commandPicker = useComposerCommandPicker({
+    sessionId,
+    enabled: isChatSurfaceProviderKind(provider),
+    input,
+    setInputText,
+  })
+
   const onComposerKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (dictation.handleShortcut(event)) return
+    if (commandPicker.onKeyDown(event)) return
     onKeyDown(event)
-  }, [dictation, onKeyDown])
+  }, [dictation, commandPicker, onKeyDown])
 
   useEffect(() => {
     return registerComposerEnterTarget({
@@ -1068,7 +1080,7 @@ export function TileLeaf({
         slashMode={slashMode}
         provider={provider}
         draftImages={composerLocked ? NO_DRAFT_IMAGES : runtime.draftImages}
-        pickerState={runtime.picker}
+        pickerState={commandPicker.state ?? runtime.picker}
         historyIndex={historyIndex}
         history={history}
         setInputText={setInputText}

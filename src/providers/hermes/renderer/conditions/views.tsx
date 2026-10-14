@@ -18,7 +18,7 @@
 // state until submit, sent once (renderer → main → Hermes), and cleared.
 // Nothing persists it; the condition state never contains it.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
 import { Input } from '@renderer/components/ui/input'
@@ -30,11 +30,13 @@ import type {
   HermesApprovalConditionState,
   HermesClarifyConditionState,
   HermesClarifyQuestion,
+  HermesHeldConditionState,
   HermesValueConditionState,
 } from '@shared/types/providerConditions'
 import { withVisibleControls } from '@shared/text/visibleControls'
 
 type HermesStateByKind = {
+  'hermes.held': HermesHeldConditionState
   'hermes.approval': HermesApprovalConditionState
   'hermes.clarify': HermesClarifyConditionState
   'hermes.sudo': HermesValueConditionState
@@ -221,6 +223,20 @@ export const hermesClarifyView = defineView<'hermes.clarify', HermesClarifyCondi
     state?.visible ? <ClarifyCard key={state.requestId} state={state} actions={actions} dispatch={dispatch} /> : null,
 })
 
+/**
+ * "Hermes stops waiting in 1:42" (r3 A5): a sudo prompt silently timed out
+ * after 120 s while the user was typing, and the click then did nothing.
+ */
+function Countdown({ until }: { until: number }) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+  const left = Math.max(0, Math.round((until - now) / 1000))
+  return <span>{left > 0 ? `Hermes stops waiting in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}.` : 'Hermes has stopped waiting.'}</span>
+}
+
 function ValueCard({
   title,
   state,
@@ -242,7 +258,7 @@ function ValueCard({
           {withVisibleControls(state.prompt)}
         </pre>
       )}
-      <p className="mb-1.5 text-[11px] text-muted">{hint}</p>
+      <p className="mb-1.5 text-[11px] text-muted">{hint}{state.expiresAt ? <> <Countdown until={state.expiresAt} /></> : null}</p>
       <form
         onSubmit={(event) => {
           event.preventDefault()
@@ -300,7 +316,27 @@ export const hermesSecretView = defineView<'hermes.secret', HermesValueCondition
     ) : null,
 })
 
+export const hermesHeldView = defineView<'hermes.held', HermesHeldConditionState>({
+  kind: 'hermes.held',
+  layout: 'strip',
+  // Never attention: nothing here waits on the user.
+  attention: () => null,
+  Component: ({ state, actions, dispatch }) =>
+    state?.visible && state.held.length > 0 ? (
+      <div role="group" aria-label="Waiting for Telegram" className="mx-3 mb-2 rounded-slab border border-border bg-surface px-3 py-2 text-[12px] leading-[1.55] text-ink-dim">
+        <div className="mb-1 text-ink">Waiting for Telegram — Hermes is replying there. {state.held.length === 1 ? 'Your message sends' : `Your ${state.held.length} messages send`} when it finishes.</div>
+        {state.held.map((hold) => (
+          <div key={hold.id} className="flex items-center gap-2">
+            <span className="min-w-0 flex-1 truncate font-code text-[11px] text-muted">{withVisibleControls(hold.text)}</span>
+            <ActionRow actions={actions.filter((action) => action.kind === 'custom' && (action.payload as { holdId?: string } | undefined)?.holdId === hold.id)} dispatch={dispatch} />
+          </div>
+        ))}
+      </div>
+    ) : null,
+})
+
 export const HERMES_VIEWS: Record<string, ConditionView> = eraseRegistry<HermesStateByKind>({
+  'hermes.held': hermesHeldView,
   'hermes.approval': hermesApprovalView,
   'hermes.clarify': hermesClarifyView,
   'hermes.sudo': hermesSudoView,

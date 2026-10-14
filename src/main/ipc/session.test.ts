@@ -515,6 +515,29 @@ describe('session:spawn rejections', () => {
     expect(JSON.stringify(journal.record.mock.calls)).not.toContain('sk-ant')
   })
 
+  // #1495: the Hermes start sentences were built to cross this boundary, but
+  // classifySpawnFailure had no branch for them, so a signed-out pane, an
+  // unreachable server and a too-old server all read "Session failed to
+  // start". Each is re-emitted from its constant (with any wrapping text
+  // dropped) and journaled with its stage.
+  it('lets every curated Hermes start sentence through, signed with its stage', async () => {
+    const session = await import('@shared/types/session.js')
+    const cases: Array<[string, string]> = [
+      [session.HERMES_NOT_CONNECTED_MESSAGE, 'remote-start:not-connected'],
+      [session.HERMES_SIGNED_OUT_MESSAGE, 'remote-start:signed-out'],
+      [session.HERMES_UNREACHABLE_MESSAGE, 'remote-start:unreachable'],
+      [session.HERMES_INCOMPATIBLE_MESSAGE, 'remote-start:incompatible'],
+      [session.HERMES_WS_REFUSED_MESSAGE, 'remote-start:ws-refused'],
+      [session.HERMES_HANDSHAKE_FAILED_MESSAGE, 'remote-start:handshake'],
+      [session.HERMES_ATTACH_FAILED_MESSAGE, 'remote-start:attach'],
+      [session.HERMES_LANE_NOT_FOUND_MESSAGE, 'remote-start:lane-not-found'],
+    ]
+    for (const [sentence, signature] of cases) {
+      expect(await rejectionOf(new Error(`Error: ${sentence} token=abc`), { kind: 'hermes', remoteConnectionId: 'c1' })).toBe(sentence)
+      expect(classifySpawnFailure(new Error(sentence), false).signature).toBe(signature)
+    }
+  })
+
   it('never relays a raw provider exception', async () => {
     const message = await rejectionOf(new Error(`${recorded} env=ANTHROPIC_API_KEY=sk-ant-secret https://user:pass@proxy.example`))
     expect(message).toBe('Session failed to start. Check provider setup and retry.')

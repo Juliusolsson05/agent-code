@@ -1,4 +1,6 @@
 import { mainOperations } from '@main/performance/operations.js'
+import type { ComposerCommand } from '@shared/composerCommands/types.js'
+import { RemoteProviderStartError } from '@shared/errors/remoteProviderStartError.js'
 import { ResponseTracker } from '@shared/performance/responseTracker.js'
 import { randomUUID } from 'crypto'
 import { REPORTING_DOMAINS, type ReportingDomain } from '@shared/types/tldr.js'
@@ -3242,6 +3244,7 @@ export class SessionManager extends EventEmitter {
         userMcpServers,
         ...(userMcpCodexShellPolicy ? { userMcpCodexShellPolicy } : {}),
         ...(remote ? { remoteConnectionId: options.remoteConnectionId } : {}),
+        ...(remote && options.hermesLaneKey ? { hermesLaneKey: options.hermesLaneKey } : {}),
         ...(kind === 'codex' && codexReplacementHandoff
           ? {
               // WHY the provider receives execution timing, not policy: Codex
@@ -3616,6 +3619,13 @@ export class SessionManager extends EventEmitter {
           kind,
           ok: false,
           durationMs: performance.now() - startStartedAt,
+          // A remote provider says WHERE it failed (#1495): before this, the
+          // journal of the owner's first Hermes connection held only
+          // `ok:false`, and the cause (-32601 from a v0.20.4 server) was in
+          // main's stdout alone. Fixed enum + integers only, never text.
+          ...(err instanceof RemoteProviderStartError
+            ? { stage: err.stage, ...(err.detail.rpcCode !== undefined ? { rpcCode: err.detail.rpcCode } : {}), ...(err.detail.httpStatus !== undefined ? { httpStatus: err.detail.httpStatus } : {}), ...(err.detail.method ? { method: err.detail.method } : {}) }
+            : {}),
         })
         performanceService.error('session.spawn.providerStart.error', err, {
           sessionId,
@@ -4694,6 +4704,17 @@ export class SessionManager extends EventEmitter {
    * scrollToBottom already does the job, so 'unsupported' is a normal answer,
    * not an error.
    */
+  /** The provider's slash commands for the composer picker (#1497); [] when it has none. */
+  async listComposerCommands(sessionId: string): Promise<ComposerCommand[]> {
+    const entry = this.sessions.get(sessionId)
+    if (!entry || entry.kind === 'terminal' || typeof entry.session.listComposerCommands !== 'function') return []
+    try {
+      return await entry.session.listComposerCommands()
+    } catch {
+      return []
+    }
+  }
+
   async jumpToLatest(sessionId: string): Promise<{ ok: true } | { ok: false; reason: string }> {
     const entry = this.sessions.get(sessionId)
     if (!entry || entry.kind === 'terminal') return { ok: false, reason: 'no-session' }

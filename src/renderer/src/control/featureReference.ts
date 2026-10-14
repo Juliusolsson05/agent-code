@@ -153,5 +153,8 @@ export const referenceOwnership = {
   "rendererHost": "conversation",
   // Both halves of the Hermes pane (#1482) share one page: hermes-chat's.
   "hermes-chat": "hermes",
-  "hermes-settings": "hermes"
+  "hermes-settings": "hermes",
+  // The composer's catalog-driven slash picker (#1497) is Hermes-only today;
+  // its page is Hermes'.
+  "composer-commands": "hermes"
 } as const

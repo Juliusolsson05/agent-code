@@ -13,17 +13,15 @@
 // ownership between live and committed rows is decided once, upstream
 // (chatProjection.ts header).
 
-import { useEffect, useMemo, useRef } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import type { FeedRenderItem } from '@renderer/features/feed/model/renderModel'
-import { MARKDOWN_COMPONENTS } from '@renderer/features/feed/ui/markdown/MarkdownComponents'
+import { TextProse } from '@renderer/features/feed/ui/markdown'
 import { withVisibleControls } from '@shared/text/visibleControls'
 
-import { projectChat, type ChatItem } from './chatProjection'
+import { useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 
-const REMARK_PLUGINS = [remarkGfm]
+import { formatToolResult, projectChat, splitReasoning, stabilizeChat, type ChatItem } from './chatProjection'
 
 // "Near the bottom" for follow-the-conversation: the reader has not scrolled
 // up to read older messages. Matches the feed's sticky-bottom slack.
@@ -47,7 +45,15 @@ export type HermesChatControls = {
   onUserEngagement?: () => void
 }
 
-export function HermesChatFeed({
+// WHY memo (the owner, 2026-10-14: "the Hermes composer is painstakingly
+// slow"): the composer's draft lives in the session runtime, so EVERY
+// keystroke re-renders TileLeaf, and TileLeaf re-rendered this whole chat
+// with it. Every prop here is stable across a keystroke (items is memoized
+// by the ledger, the callbacks are useCallback in TileLeaf, the rest are
+// primitives), so memo turns a keystroke into zero work for the
+// conversation. HermesChatFeed.typing.renderer.test.tsx counts it: before
+// this, 5 keystrokes on a 60-turn chat cost 300 markdown parses.
+export const HermesChatFeed = memo(function HermesChatFeed({
   sessionId,
   items,
   connectionName,
@@ -63,7 +69,23 @@ export function HermesChatFeed({
   /** The Settings connection this pane talks to, for the empty state. */
   connectionName: string | null
 } & HermesChatControls) {
-  const chat = useMemo(() => projectChat(items), [items])
+  // Spotlight (and editor fullscreen, Reader, Settings) keep the lane's copy
+  // of this pane mounted under display:none while a second live copy shows
+  // (MainSurface + RetainedWorkspaceSurface, #752). The hidden copy must do
+  // NOTHING per token: it keeps the last items it showed and catches up once,
+  // when it is revealed. AgentFeed has the same guard (Feed.tsx
+  // workspaceVisible). Without it every streamed token rendered the whole
+  // conversation twice in Spotlight (owner report, #1499).
+  const visible = useAgentTerminalOwnerVisible()
+  const shownItems = useRef(items)
+  if (visible) shownItems.current = items
+  const source = shownItems.current
+  const previousChat = useRef<ChatItem[] | null>(null)
+  const chat = useMemo(() => {
+    const next = stabilizeChat(previousChat.current, projectChat(source))
+    previousChat.current = next
+    return next
+  }, [source])
   const scroller = useRef<HTMLDivElement | null>(null)
   const following = useRef(true)
   const loadingOlder = useRef(false)
@@ -74,8 +96,12 @@ export function HermesChatFeed({
     // Follow new messages only while the reader is at the bottom (or the
     // pane is tailing): jumping a reader who scrolled up to an older answer
     // is the one thing a chat must never do.
+    // Hidden under display:none, scrollHeight is 0 and a pin is meaningless;
+    // `visible` in the deps re-pins on reveal, so a pane that grew while
+    // Spotlight was open comes back at the bottom (it used to stay at the top).
+    if (!visible) return
     if (node && (following.current || tailMode)) node.scrollTop = node.scrollHeight
-  }, [chat, tailMode])
+  }, [chat, tailMode, visible])
 
   useEffect(() => {
     // Jump to Latest: a monotonic request counter (0 = never asked).
@@ -158,9 +184,12 @@ export function HermesChatFeed({
       </div>
     </div>
   )
-}
+})
 
-function ChatRow({ item, connectionName, selected }: { item: ChatItem; connectionName: string | null; selected: boolean }) {
+// Memoized as well: while a reply streams, `items` changes on every token
+// and projectChat rebuilds the list, but a row whose content did not change
+// renders the same; TextProse below memoizes the expensive part on the text.
+const ChatRow = memo(function ChatRow({ item, connectionName, selected }: { item: ChatItem; connectionName: string | null; selected: boolean }) {
   switch (item.kind) {
     case 'user':
       return (
@@ -176,23 +205,24 @@ function ChatRow({ item, connectionName, selected }: { item: ChatItem; connectio
       return (
         <div className="flex justify-start" data-chat-role="assistant" data-entry-uuid={item.uuid}>
           <div
-            className={`prose-theme max-w-[88%] break-words rounded-slab bg-surface px-3 py-2 text-[13px] leading-[1.6] text-ink ${selected ? 'ring-1 ring-accent' : ''}`}
+            className={`max-w-[88%] break-words rounded-slab bg-surface px-3 py-2 text-[13px] leading-[1.6] text-ink ${selected ? 'ring-1 ring-accent' : ''}`}
             aria-current={selected ? 'true' : undefined}
           >
-            <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>
-              {item.text}
-            </ReactMarkdown>
+            {/* The feed's own prose renderer: memoized on the text string (a
+                bubble that did not change is never re-parsed, even while
+                another one streams) and bounded (an oversized reply becomes
+                paged plain text instead of an unbounded synchronous parse,
+                the fat-freeze lesson in Prose.tsx). The committed plugin set
+                for both live and final text: Hermes streams real markdown,
+                not a screen buffer, so StreamingProse's remark-breaks would
+                change how a finished reply renders mid-stream. */}
+            <TextProse text={item.text} />
             {item.streaming && <span aria-hidden className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-ink-dim align-middle" />}
           </div>
         </div>
       )
     case 'reasoning':
-      return (
-        <details className="max-w-[88%] text-[12px] text-ink-dim" data-chat-role="reasoning">
-          <summary className="cursor-pointer select-none text-muted">{item.streaming ? 'Thinking…' : 'Reasoning'}</summary>
-          <div className="mt-1 whitespace-pre-wrap border-l border-border pl-2">{withVisibleControls(item.text)}</div>
-        </details>
-      )
+      return <ReasoningRow item={item} />
     case 'tool':
       return <ToolChip item={item} />
     case 'notice':
@@ -220,30 +250,91 @@ function ChatRow({ item, connectionName, selected }: { item: ChatItem; connectio
         </div>
       )
   }
+})
+
+function ReasoningRow({ item }: { item: Extract<ChatItem, { kind: 'reasoning' }> }) {
+  const { headings, prose } = useMemo(() => splitReasoning(item.text), [item.text])
+  return (
+    <div className="flex max-w-[88%] flex-col gap-1" data-chat-role="reasoning">
+      <LazyDetails
+        className="text-[12px] text-ink-dim"
+        data-chat-role="reasoning-detail"
+        summary={
+          <span className="min-w-0 truncate text-muted">
+            {item.streaming ? 'Thinking…' : headings.length > 0 ? headings[headings.length - 1] : 'Reasoning'}
+          </span>
+        }
+      >
+        {/* Markdown, like every other bubble: 81 of 136 reasoning rows in
+            the owner's bundle showed raw `**` as plain text. */}
+        <div className="mt-1 border-l border-border pl-2"><TextProse text={item.text} /></div>
+      </LazyDetails>
+      {prose && (
+        // The agent's progress update, visible (splitReasoning says why).
+        <div className="text-[12px] italic leading-[1.55] text-ink-dim" data-chat-role="progress">
+          <TextProse text={prose} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * A <details> whose body is only MOUNTED while it is open.
+ *
+ * WHY (the owner's debug bundle 2026-10-14T16-26-49, #1499): a real Hermes
+ * conversation had 206 tool chips and 136 reasoning blocks; their bodies
+ * (181 KB of tool input JSON, 213 KB of reasoning) stayed in the DOM inside
+ * CLOSED <details>, 3,917 elements in total, and every Hermes send froze the
+ * window for 2–5.7 s (performance monitor). A closed body is never seen, so
+ * it is not built; opening one builds just that one.
+ */
+function LazyDetails({ summary, children, className, ...rest }: { summary: ReactNode; children: ReactNode; className: string; 'data-chat-role': string; 'data-tool-status'?: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <details className={className} {...rest} open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary className="flex cursor-pointer select-none items-center gap-1.5">{summary}</summary>
+      {open && children}
+    </details>
+  )
 }
 
 function ToolChip({ item }: { item: Extract<ChatItem, { kind: 'tool' }> }) {
   const tone = item.status === 'error' ? 'border-danger/60 text-danger' : item.status === 'running' ? 'border-accent/60' : 'border-border'
   return (
-    <details className={`max-w-[88%] rounded-chip border ${tone} bg-canvas px-2 py-1 text-[12px]`} data-chat-role="tool" data-tool-status={item.status}>
-      <summary className="flex cursor-pointer select-none items-center gap-1.5 text-ink-dim">
-        <span aria-hidden>{item.status === 'running' ? '◌' : item.status === 'error' ? '✕' : '✓'}</span>
-        <span className="font-code text-ink">{item.name}</span>
-        {item.label && <span className="min-w-0 truncate font-code text-muted">{withVisibleControls(item.label)}</span>}
-      </summary>
-      <div className="mt-1 flex flex-col gap-1">
-        <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-control bg-surface px-2 py-1 font-code text-[11px] text-ink-dim">
-          {JSON.stringify(item.input, null, 2)}
+    <LazyDetails
+      className={`max-w-[88%] rounded-chip border ${tone} bg-canvas px-2 py-1 text-[12px]`}
+      data-chat-role="tool"
+      data-tool-status={item.status}
+      summary={
+        <span className="flex min-w-0 items-center gap-1.5 text-ink-dim">
+          <span aria-hidden>{item.status === 'running' ? '◌' : item.status === 'error' ? '✕' : '✓'}</span>
+          <span className="font-code text-ink">{item.name}</span>
+          {item.label && <span className="min-w-0 truncate font-code text-muted">{withVisibleControls(item.label)}</span>}
+        </span>
+      }
+    >
+      <ToolBody item={item} />
+    </LazyDetails>
+  )
+}
+
+function ToolBody({ item }: { item: Extract<ChatItem, { kind: 'tool' }> }) {
+  const input = useMemo(() => JSON.stringify(item.input, null, 2), [item.input])
+  const result = useMemo(() => (item.result === null ? null : withVisibleControls(formatToolResult(item.result))), [item.result])
+  return (
+    <div className="mt-1 flex flex-col gap-1">
+      <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-control bg-surface px-2 py-1 font-code text-[11px] text-ink-dim">
+        {input}
+      </pre>
+      {result !== null && (
+        <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-control bg-surface px-2 py-1 font-code text-[11px] text-ink">
+          {result}
         </pre>
-        {item.result !== null && (
-          <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-control bg-surface px-2 py-1 font-code text-[11px] text-ink">
-            {withVisibleControls(item.result)}
-          </pre>
-        )}
-        {item.result === null && item.status !== 'running' && (
-          <span className="text-[11px] text-muted">Output is kept on your Hermes server.</span>
-        )}
-      </div>
-    </details>
+      )}
+      {item.result === null && item.status !== 'running' && (
+        <span className="text-[11px] text-muted">Output is kept on your Hermes server.</span>
+      )}
+    </div>
   )
 }

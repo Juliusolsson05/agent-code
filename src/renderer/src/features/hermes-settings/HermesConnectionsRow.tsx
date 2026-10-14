@@ -9,6 +9,7 @@
 // Nothing here ever holds a credential: signing in opens the system browser
 // on the Hermes server's own sign-in page; main receives and keeps the tokens.
 
+import { tailnetKindOfUrl } from '@shared/hermes/tailnet'
 import { useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
@@ -27,7 +28,9 @@ function stateLine(connection: HermesConnectionInfo): { text: string; tone: 'ok'
     case 'ready': {
       const who = connection.identity ? `Signed in as ${connection.identity.userId} (${connection.identity.provider})` : 'Signed in'
       if (connection.backend?.compatibility === 'unsupported') {
-        return { text: `${who} · this Hermes is too old for Agent Code (needs a release with server requests, v0.21.7 tested). Run \`hermes update\` on the server.`, tone: 'warn' }
+        // `hermes update` does not work inside a Docker image (the owner's
+        // Hostinger VPS, reference_integrations): say "update", not how.
+        return { text: `${who} · this Hermes is too old for Agent Code. Update Hermes on the server to v0.21.7 or newer (v0.22.0 is tested).`, tone: 'warn' }
       }
       if (connection.backend?.compatibility === 'skew') {
         return { text: `${who} · Hermes contract ${connection.backend.desktopContract} (Agent Code was tested with 8): it should work; update one side if anything looks off.`, tone: 'warn' }
@@ -105,7 +108,14 @@ function ConnectionCard({ connection }: { connection: HermesConnectionInfo }) {
         <>
           <div className="flex items-baseline justify-between gap-2">
             <span className="font-medium text-ink">☤ {connection.name}</span>
-            <span className="min-w-0 truncate font-code text-[11px] text-muted">{connection.baseUrl}</span>
+            <span className="flex min-w-0 items-baseline gap-1.5">
+              {tailnetKindOfUrl(connection.baseUrl) && (
+                // Tells the user which network path this connection needs:
+                // a failure here is usually Tailscale, not Hermes (#1498).
+                <span className="shrink-0 rounded-chip border border-border px-1 font-code text-[10px] text-ink-dim" title="Reached over your Tailscale network">Tailscale</span>
+              )}
+              <span className="min-w-0 truncate font-code text-[11px] text-muted">{connection.baseUrl}</span>
+            </span>
           </div>
           <p className={`mt-1 ${line.tone === 'warn' ? 'text-danger' : line.tone === 'ok' ? 'text-ink-dim' : 'text-muted'}`}>{line.text}</p>
           {test && (
@@ -173,10 +183,24 @@ export function HermesConnectionsRow() {
         }}
       >
         <Input className="w-40" aria-label="New connection name" placeholder="Name (e.g. Homelab)" value={name} onChange={(event) => setName(event.target.value)} />
-        <Input className="min-w-0 flex-1" aria-label="New Hermes URL" placeholder="https://hermes.example.com or 100.64.0.1:9119" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} />
+        <Input className="min-w-0 flex-1" aria-label="New Hermes URL" placeholder="https://myserver.tailnet.ts.net or https://hermes.example.com" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} />
         <Button type="submit" size="sm" disabled={busy || !name.trim() || !baseUrl.trim()}>Add and sign in</Button>
       </form>
       {problem && <p className="text-[12px] text-danger">{problem}</p>}
+      {/* #1498 (Tailscale phase 1): a Hermes that can run tools on your
+          server should not sit on the public internet behind one password.
+          The steps are the ones verified for the owner's VPS
+          (reference_integrations memory); Agent Code relies on the system
+          Tailscale client and never manages the VPN itself. */}
+      <details className="text-[11px] text-muted">
+        <summary className="cursor-pointer select-none">Recommended: reach Hermes privately over Tailscale</summary>
+        <ol className="mt-1 list-decimal space-y-0.5 pl-4">
+          <li>Install Tailscale on this Mac and on the server, and sign both into the same tailnet.</li>
+          <li>On the server: <span className="font-code">tailscale serve --bg --https=443 http://127.0.0.1:4860</span></li>
+          <li>Add the connection with the server’s tailnet name, e.g. <span className="font-code">https://myserver.tailnet-name.ts.net</span>.</li>
+          <li>Once it works, remove the server’s public HTTPS route.</li>
+        </ol>
+      </details>
     </div>
   )
 }
