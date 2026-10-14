@@ -442,6 +442,10 @@ export class HermesSession extends EventEmitter implements AgentSession {
   }
 
   private onRequest(request: HermesRequest): void {
+    // A detached pane (stopped, signed out, connection removed) shows no new
+    // card: nothing can answer it on a socket that is gone (round-2 review
+    // c1 #4, where a request surfaced late by a failed attach reopened one).
+    if (this.stopped || this.signedOut) return
     // Backstop only: hermes-headless already drops a repeated request id
     // (ConversationReconciler.openRequest, its own tests), so no app test can
     // reach this line today. It stays because a duplicate here would show as

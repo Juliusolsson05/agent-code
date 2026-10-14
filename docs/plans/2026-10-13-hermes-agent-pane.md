@@ -665,6 +665,32 @@ Reports in `temp/hermes-loop/review-r1/`. All four: FIX-BEFORE-MERGE. Fix commit
 | x1 survivor: TileLeaf chat-mount predicate | valid as a gap | declined: TileLeaf is not mountable in a unit test without the whole workspace; the predicate itself (`isChatSurfaceProviderKind`) is pinned |
 | x2 suspicion: live history keyed by stored id only | plausible, not probed | residual (two servers sharing a stored id) |
 
+## Review round 2 of 2 (2026-10-14; Codex on package + main, Claude on renderer + integration)
+
+Reports in `temp/hermes-loop/review-r2/`. All four FIX-BEFORE-MERGE; every round-1 fix verified correct by its owner area. Fix commits: package `175698f`, `a5c7041`; app `0ea3c57c`, `9d545a22`, plus the session fence and this ledger/gitlink commit.
+
+| Reviewer / finding | Verdict | Disposition |
+|---|---|---|
+| c1 #1 lastTurnEnd settles a prompt accepted-but-not-started with the PREVIOUS completion (round-1 regression) | valid (probe R3 + S3/S16 timing) | fallback only for a truncated ring with a partial inflight answer; probe kept |
+| c1 #2 ring omits a request registered before its reply was written; held live request dropped | valid (probe R1 + upstream interleaving script) | held live requests always surface; a parked cancel closes them in order; disproved test replaced |
+| c1 #3 head read separately from the events list; watermark jump drops a completion | valid (probe R2 + upstream interleaving) | watermark follows dispatched events; snapshot-only attaches cover only pre-rebind ring events; disproved M03 test replaced |
+| c1 #4 failed attach publishes held requests after stop / before their cancel | valid (probes R4, R5, app probe) | nothing published on a closed connection; requests before parked events; HermesSession ignores requests once detached |
+| c1 survivors N12 N14 N17 N18 | valid | reviewer's tests kept (resume fallbacks file) |
+| c2 #1 concurrent Settings edits lose an acknowledged change | valid (probe) | add/update/remove serialized; probe kept |
+| c2 #2 stale credential writer overwrites/deletes a newer sign-in | valid (probes) | per-connection token write queue with an owner check at write time; superseded sign-ins publish no state; probes kept |
+| c2 #3 Sign out does not cancel an in-flight sign-in | valid (probe) | Sign out aborts it; probe kept |
+| c2 #4 input ready before the conversation is re-attached | valid (probe) | input opens only after start/re-attach; early prompts refused as retry-safe not-ready; test |
+| x1 #1 committed tool rows wipe live output and turn a failure into success | valid (probe on S4) | reconciler attaches the live result to the committed row (`tool_error`); mapper never invents an empty success; tests package + app, mutation proven |
+| x1 #2 / x2 #1 replacement notice wiped by the following reset | valid (probe) | notice held until the new history caught up; order asserted |
+| x1 #3 no paging by wheel/touch at the top | valid (probe) | wheel/touch triggers as in Feed (#1413); test |
+| x1 #4 "Scroll up for earlier messages" over a new conversation | valid (probe) | `conversationChanged` reset clears hasOlderHistory; test |
+| x1 survivors: chat scroll contract, Settings states | valid | tests for follow/tail/jump/wheel and unreachable/skew/unsupported/Test/Add; Cancel test checks the text |
+| x2 #2 Agent MCP Servers enabled for Hermes but inert | valid (probe) | hidden for remote kinds |
+| x2 #3 false copy (MCP grid "natively", Skills "Type /") | valid | reworded |
+| x2 suspicion: start() fallback lacks conversationChanged | valid | start() replacement resets as new conversation; test |
+| x2 suspicion: Linked Agent under a folder-less Hermes pane starts in `/` | plausible, not built | residual |
+| x2 suspicion: package gitlink reachability under squash merge | valid concern | merge with `--merge` (owner rule), never delete the package branch before the app merges |
+
 ## Execution notes
 
 - **2026-10-13, plan-only:**
