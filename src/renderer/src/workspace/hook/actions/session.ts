@@ -117,6 +117,9 @@ export type SessionActions = {
        *  orchestration parentage. See the implementation for why only the
        *  caller can tell. */
       newConversation?: boolean
+      /** Hermes: the thread to follow (string), a separate chat (null), or
+       *  omitted to keep the pane's own. See the implementation. */
+      hermesLaneKey?: string | null
     },
   ) => Promise<SessionId | undefined>
   reloadAgentSessions: (dangerousMode?: boolean) => Promise<void>
@@ -1254,10 +1257,30 @@ export function useSessionActions(
          * and the pane's MCP choices still carry — it is still that pane.
          */
         newConversation?: boolean
+        /**
+         * Hermes (#1501, "Change Telegram Thread…"): which messaging thread the
+         * replacement follows. A routing key follows that thread, `null`
+         * makes the pane a separate chat, and OMITTING it keeps the pane's
+         * current thread — Reload Agent and every other caller must not have
+         * to know Hermes lanes exist to keep one.
+         *
+         * WHY a three-state option rather than letting the caller pass
+         * `hermesLaneKey` through `spawnOpts`: the carry below re-applies the
+         * old pane's key AFTER the spread (it has to win over nothing for
+         * reload), so a plain pass-through was silently overwritten and the
+         * picker would have reopened the very thread the user left.
+         */
+        hermesLaneKey?: string | null
       },
     ): Promise<SessionId | undefined> => {
       const snapshot = refs.stateRef.current
-      const { targetSessionId: _targetSessionId, preserveTldr, restoreTldrIdentity, ...spawnOpts } = opts ?? {}
+      const {
+        targetSessionId: _targetSessionId,
+        preserveTldr,
+        restoreTldrIdentity,
+        hermesLaneKey: laneChoice,
+        ...spawnOpts
+      } = opts ?? {}
       // `replaceSession` powers resume, reload, provider-switch, and rewind.
       // Those commands target the thing the user is visibly commanding — the
       // focused lane's occupant. Targeting anything else would make the
@@ -1329,6 +1352,12 @@ export function useSessionActions(
           kind: nextKind, resumeSessionId: spawnOpts.resumeSessionId, preserveTldr,
         }),
         ...spawnOpts,
+        // The kind the successor is RECORDED as (the commit below writes
+        // `kind: nextKind`). Spawning `spawnOpts.kind` instead let a caller
+        // that omitted `kind` launch the default provider (Claude) into a
+        // pane whose metadata still said Hermes; every caller happened to
+        // pass it, so it was latent until the thread picker (#1501).
+        kind: nextKind,
         providerRuntime,
         // WHY main needs the local predecessor even though the renderer kills
         // it below: resumed Codex owns an exact rollout lease before its PTY
@@ -1351,8 +1380,14 @@ export function useSessionActions(
         ...(nextKind === oldMeta.kind && oldMeta.remoteConnectionId
           ? { remoteConnectionId: oldMeta.remoteConnectionId }
           : {}),
-        // A Telegram-thread pane stays on the thread across Reload Agent.
-        ...(nextKind === oldMeta.kind && oldMeta.hermesLaneKey
+        // A Telegram-thread pane stays on the thread across Reload Agent,
+        // unless the caller chose a thread (or none) for the replacement.
+        // `hermesLane: 'none'` matters for the null choice: with neither a
+        // key nor a resume id, spawn would otherwise look the DEFAULT thread
+        // up and put the pane straight back on Telegram.
+        ...(laneChoice !== undefined
+          ? (laneChoice ? { hermesLaneKey: laneChoice } : { hermesLane: 'none' as const })
+          : nextKind === oldMeta.kind && oldMeta.hermesLaneKey
           ? { hermesLaneKey: oldMeta.hermesLaneKey }
           : {}),
       })

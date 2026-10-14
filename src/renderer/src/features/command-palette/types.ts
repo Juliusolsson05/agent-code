@@ -235,6 +235,8 @@ export type CommandContext = {
      *  id and treats a miss as closed, so a stale id here cannot throw. */
     openApp: (appId: string) => void
     openAgentViewModePicker: (sessionId: string) => void
+    /** Open "Change Telegram Thread…" for a Hermes pane (#1501). */
+    openHermesThreadPicker: (sessionId: string) => void
     /** Open the Dispatch color-flag swatch picker for a session. */
     openColorFlagPicker: (sessionId: string) => void
     /** Open the title editor for the captured command-target agent. */
