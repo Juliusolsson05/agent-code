@@ -60,7 +60,15 @@ export function useKeyboardRegionFollowsPointer(): void {
       const target = event.target as Element | null
       if (!target || typeof target.closest !== 'function') return
       if (target.closest(REGION_NEUTRAL_SELECTOR)) return
-      setRegion(target.closest(`[${SIDEKICK_PANEL_ATTRIBUTE}]`) ? 'sidekick' : 'workspace')
+      const inSidekick = target.closest(`[${SIDEKICK_PANEL_ATTRIBUTE}]`) !== null
+      // While the Sidekick is spotlit the lanes are hidden: a click on app
+      // chrome (tab bar, Settings bar, a side panel) is not the user choosing
+      // a lane, and handing the keyboard to hidden lanes let ⌘W close one of
+      // them (#1513 review). The region stays with the Sidekick until its
+      // Spotlight ends.
+      const state = useAppStore.getState()
+      if (!inSidekick && state.sidekickSpotlight && !state.settingsPageOpen) return
+      setRegion(inSidekick ? 'sidekick' : 'workspace')
     }
     document.addEventListener('pointerdown', onEvent, true)
     document.addEventListener('focusin', onEvent, true)

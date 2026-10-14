@@ -644,4 +644,7 @@ Owner: "make sure spotlight works for the sidekick".
   - Hiding the panel clears the flag. Settings does not clear it, so Esc out of Settings returns to the spotlit Sidekick.
 - **Known gaps (accepted).**
   - The `<main>` collapse in App.tsx has no dedicated test; the predicate it reads does.
-  - Lane picker leases are not cleared under Sidekick Spotlight, unlike Reader/Spotlight (useRenderedLeaseHygiene). The keyboard region gate already keeps lane keys from reaching them.
+- **Review round (#1513), all fixed.**
+  - Lane picker leases ARE now cleared under Sidekick Spotlight (useRenderedLeaseHygiene; sidekick rows skipped). The earlier claim that the region gate protected them was wrong: picker handlers run before that gate.
+  - While spotlit, the Sidekick owns the keyboard whatever `keyboardRegion` says. The useKeybinds gate keys on the flag too, and pointer/focus outside the panel no longer flips the region. The Surface re-pins the region when Settings closes.
+  - Esc leaves Sidekick Spotlight even with a retained fullscreen Global Editor underneath.

@@ -77,6 +77,15 @@ export function SidekickPanelSurface() {
     if (!open) setSidekickSpotlight(false)
   }, [open, setSidekickSpotlight])
 
+  // And a spotlit Sidekick owns the keyboard. Settings drops the region to
+  // 'workspace' (above); when Esc leaves Settings the Sidekick fills the
+  // window again, and without this the keyboard stayed with the hidden lanes
+  // (#1513 review).
+  const sidekickSpotlight = useAppStore(state => state.sidekickSpotlight)
+  useEffect(() => {
+    if (open && sidekickSpotlight && !settingsPageOpen) setRegion('sidekick')
+  }, [open, sidekickSpotlight, settingsPageOpen, setRegion])
+
   // WHY the panel hides while Settings is open (#1493 follow-up): Settings is
   // a takeover of the WORKSPACE — MainSurface retains the lanes under
   // display:none — and the Sidekick is a lane-shaped column beside them. It
