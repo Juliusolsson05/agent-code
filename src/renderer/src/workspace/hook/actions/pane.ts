@@ -77,7 +77,7 @@ import { curatedSpawnMessage } from '@renderer/workspace/spawn/errorMessage'
 // openExtensionViewInPane.
 // -----------------------------------------------------------------------------
 
-function forgetClosedSessionDebugState(refs: WorkspaceRefs, sessionId: SessionId): void {
+export function forgetSessionViewState(refs: WorkspaceRefs, sessionId: SessionId): void {
   delete refs.seenUuidsRef.current[sessionId]
   // The live-window bookkeeping (trimmed uuids, older-prepend grace) shares
   // the seen-uuid lifecycle by contract — trimmed ⊆ ever-seen (see
@@ -90,6 +90,15 @@ function forgetClosedSessionDebugState(refs: WorkspaceRefs, sessionId: SessionId
   // follow the session lifecycle, or every close leaves another bounded-but-
   // permanent trace behind for the life of the renderer process.
   forgetDebugTrace(sessionId)
+  // A pending bootstrap debounce would otherwise fire its deferred flip
+  // against a session this window no longer shows. Closing and moving an
+  // agent to another window (#1481) both end this window's view of it, so the
+  // release belongs with the rest of that view's bookkeeping.
+  const bootstrapTimer = refs.bootstrapTimersRef.current.get(sessionId)
+  if (bootstrapTimer) {
+    clearTimeout(bootstrapTimer)
+    refs.bootstrapTimersRef.current.delete(sessionId)
+  }
 }
 
 /**
@@ -1515,16 +1524,13 @@ export function usePaneActions(
         delete next[targetId]
         return next
       })
-      forgetClosedSessionDebugState(refs, targetId)
       // The Close Tab command used to end sessions through sessionActions
       // .killSession, which also cancels a pending bootstrap debounce. Both
       // Close Tab entry points now come through here, so keep that release:
       // the deferred flip would otherwise fire against a session that is gone.
-      const bootstrapTimer = refs.bootstrapTimersRef.current.get(targetId)
-      if (bootstrapTimer) {
-        clearTimeout(bootstrapTimer)
-        refs.bootstrapTimersRef.current.delete(targetId)
-      }
+      // (The bootstrap-timer release lives inside forgetSessionViewState
+      // since #1481, which needs the same cleanup for an agent moved out.)
+      forgetSessionViewState(refs, targetId)
 
       // Holder object, not a `let`: TypeScript keeps a `let` narrowed to its
       // initial value across the updater call. Reading it back is sound only

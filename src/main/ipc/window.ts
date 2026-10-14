@@ -1,16 +1,26 @@
+import { randomUUID } from 'node:crypto'
 import { ipcMain } from 'electron'
 
 import { commitDurableOwnership } from '@main/ipc/workspace.js'
 import type { SessionManager } from '@main/sessionManager.js'
 import type { WorkspaceFileStore } from '@main/storage/workspaceFileStore.js'
 import {
+  claimSessionForWindow,
   createAppWindow,
   captureSessionWindowLease,
+  isWindowRendererReady,
+  listWindowIds,
+  markSessionRoutingGap,
   releaseSession,
+  sendToWindow,
+  transferSession,
+  windowIdsByRecentFocus,
   windowIdFor,
   windowRendererGeneration,
 } from '@main/window/windowRegistry.js'
+import { SessionMoveCoordinator } from '@main/window/sessionMove.js'
 import type { SessionWindowLease } from '@main/window/sessionWindowRouter.js'
+import type { SessionMoveStartRequest, SessionMoveStartResult, SessionMoveTarget } from '@shared/types/sessionMove.js'
 
 // Window-chrome IPC, plus the confirmation half of the workspace handoff.
 //
@@ -71,6 +81,32 @@ export function abandonPendingBequest(closedWindowId: string): void {
   for (const lease of pending.leases) releaseSession(lease)
 }
 
+/**
+ * The live-window move coordinator (#1481), bound to the real window registry.
+ *
+ * WHY module scope rather than built inside registerWindowIpc: there is one
+ * router and one set of windows per process, so there must be one set of
+ * pending moves. A second coordinator (a test re-registering IPC, or a future
+ * second caller) would let two moves of one agent race each other's rollback.
+ */
+const sessionMoves = new SessionMoveCoordinator({
+  ownerOf: captureSessionWindowLease,
+  claim: (sessionId, windowId) => claimSessionForWindow(sessionId, windowId),
+  transfer: transferSession,
+  release: lease => releaseSession(lease),
+  markGap: markSessionRoutingGap,
+  isWindowReady: isWindowRendererReady,
+  rendererGeneration: windowRendererGeneration,
+  windowNumber: windowId => {
+    const index = listWindowIds().indexOf(windowId)
+    return index >= 0 ? index + 1 : null
+  },
+  send: (windowId, channel, payload) => sendToWindow(windowId, channel, payload),
+  setTimer: (callback, ms) => setTimeout(callback, ms),
+  clearTimer: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  newId: randomUUID,
+})
+
 export function registerWindowIpc(
   store: WorkspaceFileStore,
   manager: Pick<SessionManager, 'acknowledgePersistedSessionOwnership'>,
@@ -117,5 +153,40 @@ export function registerWindowIpc(
     // rolled back so the sessions do not stay pinned to a window that refused
     // to display them, which would accumulate ghost runtimes there forever.
     abandonPendingBequest(windowId)
+  })
+
+  // ── Live-window moves (#1481) ──────────────────────────────────────────
+  //
+  // The other open windows, labelled for a person. `number` is the same
+  // display order `app.windows` publishes, so a root-management agent and the
+  // picker name windows identically.
+  ipcMain.handle('window:move-targets', (evt): SessionMoveTarget[] => {
+    const sourceWindowId = windowIdFor(evt.sender)
+    const lastFocused = windowIdsByRecentFocus().find(windowId => windowId !== sourceWindowId)
+    // Not-ready windows (closing, or a renderer still loading) are left out
+    // rather than offered and then refused with a failure toast. `number`
+    // still comes from the unfiltered order so it matches app.windows.
+    return listWindowIds().flatMap((windowId, index) => windowId === sourceWindowId || !isWindowRendererReady(windowId) ? [] : [{
+      windowId,
+      number: index + 1,
+      ...store.describeWindow(windowId),
+      lastFocused: windowId === lastFocused,
+    }])
+  })
+
+  ipcMain.handle('window:send-sessions', (evt, request: SessionMoveStartRequest): SessionMoveStartResult => {
+    const sourceWindowId = windowIdFor(evt.sender)
+    if (!sourceWindowId) return { ok: false, reason: 'invalid-request', message: 'This window is not registered.' }
+    return sessionMoves.start(sourceWindowId, request)
+  })
+
+  ipcMain.handle('window:session-move-complete', (evt, moveId: string) => {
+    const windowId = windowIdFor(evt.sender)
+    if (windowId) sessionMoves.complete(windowId, moveId)
+  })
+
+  ipcMain.handle('window:session-move-refused', (evt, moveId: string, message: string) => {
+    const windowId = windowIdFor(evt.sender)
+    if (windowId) sessionMoves.refuse(windowId, moveId, typeof message === 'string' ? message : '')
   })
 }

@@ -2,6 +2,15 @@ import { ipcRenderer } from 'electron'
 
 import { subscribe } from '@preload/api/ipc.js'
 import type { Unsub } from '@preload/api/types.js'
+import type {
+  SessionMoveCancelled,
+  SessionMoveCommitted,
+  SessionMoveFailed,
+  SessionMoveOffer,
+  SessionMoveStartRequest,
+  SessionMoveStartResult,
+  SessionMoveTarget,
+} from '@shared/types/sessionMove.js'
 
 // Window-chrome bridge.
 //
@@ -49,4 +58,45 @@ export const windowApi = {
    */
   refuseWorkspaceAdoption: (windowId: string): Promise<void> =>
     ipcRenderer.invoke('window:adoption-refused', windowId),
+
+  // ── Moving agents between live windows (#1481) ────────────────────────
+  // The protocol and its ordering are documented on SessionMoveCoordinator
+  // (main/window/sessionMove.ts). In short: routing moves first, the target
+  // confirms only after a durable save, and only then does the source drop
+  // its rows.
+
+  /** The other open windows, labelled for the picker. */
+  listSessionMoveTargets: (): Promise<SessionMoveTarget[]> =>
+    ipcRenderer.invoke('window:move-targets'),
+
+  /** Source: ask main to move routing and offer the rows to the target. */
+  sendSessionsToWindow: (request: SessionMoveStartRequest): Promise<SessionMoveStartResult> =>
+    ipcRenderer.invoke('window:send-sessions', request),
+
+  /** Target: rows offered by another window. */
+  onSessionMoveOffer: (cb: (offer: SessionMoveOffer) => void): Unsub =>
+    subscribe('workspace:receive-sessions', cb),
+
+  /** Target: the merged rows are DURABLE. Called from the autosave success
+   *  path only, for the same reason as confirmWorkspaceAdoption: this makes
+   *  the source drop its rows, and until this window's save commits, the
+   *  source's slice is the only durable record of them. */
+  confirmSessionMove: (moveId: string): Promise<void> =>
+    ipcRenderer.invoke('window:session-move-complete', moveId),
+
+  /** Target: could not merge. Routing goes back to the source. */
+  refuseSessionMove: (moveId: string, message: string): Promise<void> =>
+    ipcRenderer.invoke('window:session-move-refused', moveId, message),
+
+  /** Source: the target committed; drop these rows WITHOUT killing them. */
+  onSessionsMovedOut: (cb: (event: SessionMoveCommitted) => void): Unsub =>
+    subscribe('workspace:sessions-moved-out', cb),
+
+  /** Source: the move did not happen; nothing changed here. */
+  onSessionMoveFailed: (cb: (event: SessionMoveFailed) => void): Unsub =>
+    subscribe('workspace:session-move-failed', cb),
+
+  /** Target: the move expired; remove what was merged for it (rows only). */
+  onSessionMoveCancelled: (cb: (event: SessionMoveCancelled) => void): Unsub =>
+    subscribe('workspace:session-move-cancelled', cb),
 }

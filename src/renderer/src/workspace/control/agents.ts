@@ -192,6 +192,28 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
       },
     }),
     defineCapability({
+      id: 'agents.moveToWindow', target: { kind: 'session', field: 'sessionId' }, title: 'Move an agent to another window', execution: 'window', effect: 'mutation',
+      // WHY a mutation that waits for the commit rather than an `accepted`
+      // receipt like agents.close: a move has no confirmation dialog to finish
+      // with computer use, and it settles in well under main's 20 s deadline.
+      // Returning only once the source has dropped its rows means the caller's
+      // next read already sees the agent in the target window, so it cannot
+      // act on a stale placement in between.
+      description: 'Move an exact agent or terminal, with its linked and orchestration children, to another open Agent Code window without restarting anything: process, conversation, draft, pin and MCP choices move as they are. In the target it joins a project that already holds the same folder (or a new project tab) and is shown in that window\'s focused lane; the lane it leaves here is cleared. Returns after the target has durably saved it and this window has dropped it; on refusal or timeout the agent stays here, unchanged. Session IDs do not change. Moving a child alone leaves its parent behind: the parent\'s orchestration tools can no longer read, wait on or close it. Get targetWindowId from app.windows.',
+      input: sessionInput.extend({ targetWindowId: z.string().min(1).describe('Stable windowId from app.windows; must be a different, open window.') }),
+      output: z.object({ sessionId: z.string(), targetWindowId: z.string(), targetWindowNumber: z.number().int(), movedSessionIds: z.array(z.string()).describe('The agent first, then every child that moved with it.') }),
+      handler: async ({ sessionId, targetWindowId }) => {
+        requireUi(); requireSession(sessionId)
+        const result = await getWorkspace().sendSessionToWindow(sessionId, targetWindowId)
+        // A refusal before anything moved, or a refusal/deadline after the
+        // offer (main rolled it back), leaves the agent fully here: safe to
+        // retry. Only "this renderer stopped waiting" is genuinely unknown, and
+        // says so, so the caller observes (agents.search) before another try.
+        if (!result.ok) throw new ControlError('unavailable', result.message, result.uncertain ? 'unknown' : 'not_started')
+        return { sessionId, targetWindowId, targetWindowNumber: result.targetWindowNumber, movedSessionIds: result.movedSessionIds }
+      },
+    }),
+    defineCapability({
       id: 'projects.open', title: 'Open a project', execution: 'window', effect: 'mutation',
       description: 'Open a directory in a new project tab with an initial agent. Reuses an existing tab with that exact directory unless createDuplicate is explicit.',
       input: z.object({ cwd: z.string().min(1).describe('Absolute local directory to open as a project.'), provider: provider.default('claude'), createDuplicate: z.boolean().default(false).describe('False reuses one existing project with exactly this directory; true explicitly creates another tab.') }).strict(),

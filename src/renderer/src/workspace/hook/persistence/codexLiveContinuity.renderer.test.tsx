@@ -217,6 +217,7 @@ function makeRefs(state: WorkspaceState, runtimes: Record<SessionId, SessionRunt
     inFlightFeedDebugIdRef: ref({}),
     paneToastTimers: ref({}),
     pendingAdoptionWindowIdsRef: ref([]),
+    pendingSessionMoveIdsRef: ref([]),
     saveTimerRef: ref(null),
     bootRef: ref(false),
     worktreeReconcilerRef: ref(null),

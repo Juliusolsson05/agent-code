@@ -92,6 +92,7 @@ function harness(bootstrapComplete: boolean): Harness {
     stateRef: { current: state },
     latestRuntimesRef: { current: runtimes },
     pendingAdoptionWindowIdsRef: { current: [] as string[] },
+    pendingSessionMoveIdsRef: { current: [] as string[] },
   } as unknown as WorkspaceRefs
 
   const captured: { handler?: AdoptHandler } = {}

@@ -515,6 +515,21 @@ export function windowIdForWebContentsId(webContentsId: number): WindowId | null
 }
 
 /** The focused window, else the most recently focused one that still exists. */
+/**
+ * Window ids, most recently focused first (live, non-closing windows only).
+ *
+ * Exported for the Send to Window picker (#1481): the window a person was in
+ * just before this one is the likeliest place they want to send work, and
+ * `focusedWindowId()` cannot say which that is, since while the picker is
+ * open the focused window is always the one sending.
+ */
+export function windowIdsByRecentFocus(): WindowId[] {
+  return focusOrder.filter(id => {
+    const entry = windows.get(id)
+    return Boolean(entry && !entry.closing && !entry.window.isDestroyed())
+  })
+}
+
 export function focusedWindowId(): WindowId | null {
   const native = BrowserWindow.getFocusedWindow()
   if (native && !native.isDestroyed()) {
@@ -609,7 +624,39 @@ export function windowForSession(sessionId: string): WindowId | null {
  *  its live agents to a survivor: ownership must move BEFORE the survivor is
  *  told about them, or events emitted mid-handoff route to a dying window. */
 export function transferSessions(sessionIds: Iterable<string>, to: WindowId): void {
-  for (const sessionId of sessionIds) sessionRouter.transfer(sessionId, to)
+  for (const sessionId of sessionIds) transferSession(sessionId, to)
+}
+
+/**
+ * Move ONE existing claim and return the lease it became (null when the
+ * session had no owner or the destination is not registered).
+ *
+ * WHY the lease is returned rather than discarded as `transferSessions` does:
+ * a move between two LIVE windows (#1481) can be rolled back, and a rollback
+ * must undo only the exact claim it made. Comparing against this returned
+ * lease by identity is what stops a late rollback from yanking a session the
+ * user has since moved again, or that a reload re-claimed.
+ */
+export function transferSession(sessionId: string, to: WindowId): SessionWindowLease | null {
+  return sessionRouter.transfer(sessionId, to)
+}
+
+/**
+ * Whether a window can take part in a handoff right now: registered, not
+ * destroyed or closing, and its renderer has finished loading.
+ *
+ * Exported for the live-window move (#1481), which must refuse up front rather
+ * than move routing to a window whose renderer cannot answer, since every event
+ * routed there in the meantime is held in the bounded pending queue.
+ */
+export function isWindowRendererReady(id: WindowId): boolean {
+  const entry = windows.get(id)
+  return Boolean(entry && !entry.window.isDestroyed() && entry.rendererReady && !entry.closing)
+}
+
+/** See SessionWindowRouter.markGap (#1481 rollback resync). */
+export function markSessionRoutingGap(sessionId: string): void {
+  sessionRouter.markGap(sessionId, 'owner_replaced')
 }
 
 export function sessionsOwnedBy(id: WindowId): string[] {

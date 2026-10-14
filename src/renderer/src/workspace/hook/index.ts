@@ -38,6 +38,7 @@ import { useIpcSubscriptions } from '@renderer/workspace/hook/ipc/useIpcSubscrip
 import { useTerminalForeground } from '@renderer/workspace/hook/ipc/useTerminalForeground'
 import { useSessionRoutingRecovery } from '@renderer/workspace/hook/ipc/useSessionRoutingRecovery'
 import { useWorkspaceAdoption } from '@renderer/workspace/hook/ipc/useWorkspaceAdoption'
+import { useSessionMoves } from '@renderer/workspace/hook/ipc/useSessionMoves'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
 import type { OrchestrationAgentRecord } from '@mcp/shared/orchestrationTypes'
 import type { AgentManagementRendererResponse } from '@mcp/shared/agentManagementTypes'
@@ -1004,6 +1005,17 @@ export function useWorkspace(
   useTerminalForeground(restoreStatus, setRuntimes, readRuntimeForForeground, recordTerminalUsage)
   useSessionRoutingRecovery(refs, setRuntimes, state.sessions)
   useWorkspaceAdoption(refs, setState, setRuntimes, bootstrapComplete)
+  // Live-window moves (#1481). Beside adoption because it is the same kind of
+  // handoff (sessions already alive and already routed here) and shares its
+  // bootstrap gate and seeding.
+  const { sendSessionToWindow } = useSessionMoves({
+    refs,
+    setState,
+    setRuntimes,
+    bootstrapComplete,
+    selectTiledLaneSession: dispatchActions.selectTiledLaneSession,
+    showToast,
+  })
   useBootstrap(
     refs,
     setState,
@@ -1101,6 +1113,7 @@ export function useWorkspace(
     activateTabByIndex: tabActions.activateTabByIndex,
     reorderTabs: tabActions.reorderTabs,
     mergeTabs: tabActions.mergeTabs,
+    sendSessionToWindow,
     nextTab: tabActions.nextTab,
     prevTab: tabActions.prevTab,
     beginOptimisticSubmit,

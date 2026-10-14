@@ -1,3 +1,5 @@
+import { isProcessSessionKind } from '@shared/types/providerKind'
+import { commandTarget } from '@renderer/features/command-palette/commandTarget'
 import type { CommandDef } from '@renderer/features/command-palette/types'
 
 // Window-level commands.
@@ -29,5 +31,33 @@ export const windowCommands: CommandDef[] = [
     run: () => {
       void window.api.newWindow()
     },
+  },
+  {
+    // #1481. Beside New Window so the two window commands browse together.
+    id: 'send-to-window',
+    category: 'layout-dispatch',
+    // `workspace`, like Pin Session: it acts on the focused lane's session
+    // (or the right-clicked row) and needs nothing from the current view.
+    surface: 'workspace',
+    title: 'Send to Window…',
+    description: '**What it does:** Moves the focused lane\'s agent or terminal, with its linked and orchestration children, to another open **window**. It appears in that window\'s focused lane, under a project with the same folder (or a new one), and the lane here is cleared.\n\n**Use when:** You want this work on your other monitor, or out of a crowded window.\n\n**Notes:** Nothing restarts: the process, conversation, draft, pin and MCP choices move as they are. Needs a second window (New Window).',
+    keywords: ['move', 'lane', 'window', 'monitor', 'display', 'transfer', 'send', 'other window', 'agent'],
+    when: ({ workspace, target }) => {
+      const sessionId = commandTarget({ workspace, target })
+      const meta = sessionId ? workspace.state.sessions[sessionId] : undefined
+      // Process sessions only (agents and terminals). An extension view has no
+      // backend to route, and its view would need the extension installed and
+      // running in the other window: nothing a row move can promise.
+      return Boolean(meta && isProcessSessionKind(meta.kind))
+    },
+    run: ({ workspace, target, ui }) => {
+      const sessionId = commandTarget({ workspace, target })
+      if (!sessionId) return
+      // The target is captured NOW: from the right-click menu it is the
+      // clicked row, and focus may move before the user picks a window.
+      ui.closePalette()
+      ui.openSendToWindow(sessionId)
+    },
+    contextMenu: { group: 'agent', order: 70 },
   },
 ]

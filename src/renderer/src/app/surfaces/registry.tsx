@@ -34,6 +34,7 @@ import { AppHostSurface } from '@renderer/apps/surfaces/AppHostSurface'
 import { ProviderSwitchPickerSurface } from '@renderer/features/workspace/surfaces/ProviderSwitchPickerSurface'
 import { KeyVaultModalSurface } from '@renderer/features/key-vault/surfaces/KeyVaultModalSurface'
 import { NewAgentInSurface } from '@renderer/features/workspace/surfaces/NewAgentInSurface'
+import { SendToWindowSurface } from '@renderer/features/workspace/surfaces/SendToWindowSurface'
 import { ReportHistorySurface } from '@renderer/features/tldr/surfaces/ReportHistorySurface'
 import { AgentAnalyticsSurface } from '@renderer/features/agent-analytics/surfaces/AgentAnalyticsSurface'
 import { McpServerDialogSurface } from '@renderer/features/mcp/surfaces/McpServerDialogSurface'
@@ -151,6 +152,10 @@ export const modalSurfaces: SurfaceEntry[] = [
   // because DialogContent portals out. It is a modal; it lives here, appended
   // per the contract above (its portal stacks by open order either way).
   { id: 'remote-panel', Component: RemotePanelSurface },
+  // Appended per the contract above (#1481). Opened from a command that closes
+  // the palette first, or from the Sessions right-click menu (a native menu,
+  // not a surface), so it only ever paints over what is already open.
+  { id: 'send-to-window', Component: SendToWindowSurface },
 ]
 
 /**

@@ -190,6 +190,22 @@ export class SessionWindowRouter {
     return lease
   }
 
+  /**
+   * Record that the current owner missed observations it cannot get back
+   * from the queue, and tell it, so its renderer runs the ordinary
+   * routing-gap repair (snapshot, conditions, history).
+   *
+   * WHY this is public (#1481): a rolled-back move hands routing BACK to a
+   * window that was not receiving while the target held the claim. Whatever
+   * was delivered to the target in that interval (a readiness change, a
+   * permission prompt) is neither queued nor counted as a gap by `transfer`,
+   * and providers publish those only when they change, so nothing would ever
+   * repair the source's view.
+   */
+  markGap(sessionId: string, reason: SessionRoutingGapReason): void {
+    this.noteGap(sessionId, reason, 0)
+  }
+
   /** Navigation invalidates publication into the old renderer, not the pane. */
   rendererChanged(windowId: string): void {
     for (const sessionId of this.sessionsOwnedBy(windowId)) {

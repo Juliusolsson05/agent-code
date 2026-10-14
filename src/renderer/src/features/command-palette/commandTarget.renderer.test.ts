@@ -126,6 +126,9 @@ const EXPECTED: Record<string, {
   },
   'rewind-to-prompt': { effect: ['ui.openRewindPrompt', [TARGET]] },
   'view-prompts': { effect: ['ui.openViewPrompts', [TARGET]] },
+  // The picker captures the clicked row, so a focus change while the user
+  // chooses a window cannot retarget the move (#1481).
+  'send-to-window': { effect: ['ui.openSendToWindow', [TARGET]] },
   'view-tldr-history': { effect: ['ui.openReportHistory', [TARGET, 'tldr']] },
   'view-goal-history': { effect: ['ui.openReportHistory', [TARGET, 'goal']] },
   'goal-loop-stop': { effect: ['api.controlGoalLoop', [{ sessionId: TARGET, action: 'stop' }]] },

@@ -163,6 +163,18 @@ export function useAutoSave(
         : undefined,
       drafts: Object.keys(drafts).length > 0 ? drafts : undefined,
     }
+    // WHY the handoff confirmations are captured HERE, at serialization, and
+    // not read when the save resolves (#1481 review, both reviewers): a save
+    // already in flight when an adoption or a move landed does NOT contain
+    // those rows, yet its success callback used to confirm every id queued by
+    // then. Main would drop the closed window's slice, or tell the source
+    // window to drop a moved agent's rows, on the strength of a write that
+    // never held them, and a crash before the next save lost the agent. Only
+    // ids queued BEFORE this snapshot was taken are proven by this save; newer
+    // ones wait for the save that includes them. (The queue push follows the
+    // synchronous merge, so an id present now means its rows are in `s`.)
+    const adoptionsInSnapshot = [...refs.pendingAdoptionWindowIdsRef.current]
+    const movesInSnapshot = [...refs.pendingSessionMoveIdsRef.current]
     let json = ''
     const finishSerialize = rendererOperations.begin('persistence.serialize')
     try {
@@ -185,13 +197,30 @@ export function useAutoSave(
         // resolve is deliberate: a failed confirm leaves main's slice in place,
         // which is the safe direction, and re-queuing would risk an unbounded
         // retry loop against a read-only store.
-        const pendingAdoptions = refs.pendingAdoptionWindowIdsRef.current
+        // Only ids this snapshot proves (see adoptionsInSnapshot), and only
+        // while still queued: a cancelled move has been dequeued and its rows
+        // given back, so confirming it would be a lie about what is on disk.
+        const pendingAdoptions = adoptionsInSnapshot.filter(id => refs.pendingAdoptionWindowIdsRef.current.includes(id))
         if (pendingAdoptions.length > 0) {
-          refs.pendingAdoptionWindowIdsRef.current = []
+          refs.pendingAdoptionWindowIdsRef.current = refs.pendingAdoptionWindowIdsRef.current.filter(id => !pendingAdoptions.includes(id))
           for (const windowId of pendingAdoptions) {
             void window.api.confirmWorkspaceAdoption(windowId).catch(err => {
               // eslint-disable-next-line no-console
               console.warn('[workspace] adoption confirmation failed:', err)
+            })
+          }
+        }
+        // Moves into this window (#1481), same rule: the source drops its rows
+        // on this call, so it must follow a committed save. A failed confirm
+        // leaves the move pending in main until its deadline, which hands the
+        // agent back to the source; that is the safe direction here too.
+        const pendingMoves = movesInSnapshot.filter(id => refs.pendingSessionMoveIdsRef.current.includes(id))
+        if (pendingMoves.length > 0) {
+          refs.pendingSessionMoveIdsRef.current = refs.pendingSessionMoveIdsRef.current.filter(id => !pendingMoves.includes(id))
+          for (const moveId of pendingMoves) {
+            void window.api.confirmSessionMove(moveId).catch(err => {
+              // eslint-disable-next-line no-console
+              console.warn('[workspace] session move confirmation failed:', err)
             })
           }
         }
@@ -241,6 +270,7 @@ export function useAutoSave(
     refs.latestRuntimesRef,
     refs.latestStateRef,
     refs.pendingAdoptionWindowIdsRef,
+    refs.pendingSessionMoveIdsRef,
   ])
 
   // The retry callback must always execute the newest serializer closure, but

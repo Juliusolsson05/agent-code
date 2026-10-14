@@ -52,6 +52,8 @@ describe('workspace autosave durability retry', () => {
       latestStateRef: ref(state),
       latestRuntimesRef: ref({ successor: emptyRuntime() }),
       saveTimerRef: ref<ReturnType<typeof setTimeout> | null>(null),
+      pendingAdoptionWindowIdsRef: ref<string[]>([]),
+      pendingSessionMoveIdsRef: ref<string[]>([]),
     } as unknown as WorkspaceRefs
     const saveWorkspace = vi.fn()
       .mockRejectedValueOnce(new Error('recorded atomic save rejection'))
@@ -115,6 +117,8 @@ describe('workspace autosave durability retry', () => {
       latestStateRef: ref(state),
       latestRuntimesRef: ref({ successor: emptyRuntime() }),
       saveTimerRef: ref<ReturnType<typeof setTimeout> | null>(null),
+      pendingAdoptionWindowIdsRef: ref<string[]>([]),
+      pendingSessionMoveIdsRef: ref<string[]>([]),
     } as unknown as WorkspaceRefs
     const saveWorkspace = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(window, 'api', {
@@ -174,6 +178,8 @@ describe('workspace autosave durability retry', () => {
       latestStateRef: ref(state),
       latestRuntimesRef: ref({ successor: emptyRuntime() }),
       saveTimerRef: ref<ReturnType<typeof setTimeout> | null>(null),
+      pendingAdoptionWindowIdsRef: ref<string[]>([]),
+      pendingSessionMoveIdsRef: ref<string[]>([]),
     } as unknown as WorkspaceRefs
     const saveWorkspace = vi.fn()
       .mockRejectedValueOnce(new Error('recorded vetoed-unload save rejection'))
@@ -227,6 +233,8 @@ describe('workspace autosave durability retry', () => {
       latestStateRef: ref(state),
       latestRuntimesRef: ref({ successor: emptyRuntime() }),
       saveTimerRef: ref<ReturnType<typeof setTimeout> | null>(null),
+      pendingAdoptionWindowIdsRef: ref<string[]>([]),
+      pendingSessionMoveIdsRef: ref<string[]>([]),
     } as unknown as WorkspaceRefs
     const saveWorkspace = vi.fn().mockRejectedValue(
       new Error('recorded persistent save rejection'),
@@ -278,6 +286,7 @@ describe('workspace autosave durability retry', () => {
       latestStateRef: ref(state), latestRuntimesRef: ref({ s: emptyRuntime() }),
       saveTimerRef: ref<ReturnType<typeof setTimeout> | null>(null),
       pendingAdoptionWindowIdsRef: ref<string[]>([]),
+      pendingSessionMoveIdsRef: ref<string[]>([]),
     } as unknown as WorkspaceRefs
     let failing = true
     const saveWorkspace = vi.fn(async () => { if (failing) throw ipcError })
@@ -321,6 +330,7 @@ describe('workspace autosave durability retry', () => {
       latestStateRef: ref(base), latestRuntimesRef: ref({ s: emptyRuntime() }),
       saveTimerRef: ref<ReturnType<typeof setTimeout> | null>(null),
       pendingAdoptionWindowIdsRef: ref<string[]>([]),
+      pendingSessionMoveIdsRef: ref<string[]>([]),
     } as unknown as WorkspaceRefs
     const saveWorkspace = vi.fn(async () => { throw new Error("Error invoking remote method 'workspace:save': Error: ENOSPC: no space left on device, write") })
     Object.defineProperty(window, 'api', { configurable: true, value: { saveWorkspace } })
@@ -336,6 +346,51 @@ describe('workspace autosave durability retry', () => {
     }
     expect(saveWorkspace.mock.calls.length).toBeGreaterThanOrEqual(3)
     expect(health).toHaveBeenCalledWith('ENOSPC: no space left on device, write')
+    unmount()
+  })
+
+  // #1481 review (both reviewers): a confirmation tells ANOTHER window to drop
+  // its rows (a move) or main to delete a closed window's slice (adoption). It
+  // may only follow a save whose snapshot contained the rows. A save already
+  // in flight when the move landed did not.
+  it('confirms a move only from a save serialized after the move was queued', async () => {
+    vi.useFakeTimers()
+    const base: WorkspaceState = {
+      tabs: [{ id: 'tab-a', title: 'recorded' }], activeTabId: 'tab-a', stage: oneLaneStage('s'),
+      sessions: { s: { cwd: '/recorded', kind: 'claude', projectId: 'tab-a', joinedAt: 0 } }, pinnedSessionIds: [],
+    }
+    const refs = {
+      latestStateRef: ref(base), latestRuntimesRef: ref({ s: emptyRuntime() }),
+      saveTimerRef: ref<ReturnType<typeof setTimeout> | null>(null),
+      pendingAdoptionWindowIdsRef: ref<string[]>([]),
+      pendingSessionMoveIdsRef: ref<string[]>([]),
+    } as unknown as WorkspaceRefs
+    const settle: Array<() => void> = []
+    const saveWorkspace = vi.fn((_json: string) => new Promise<void>(resolve => { settle.push(resolve) }))
+    const confirmSessionMove = vi.fn(async () => undefined)
+    Object.defineProperty(window, 'api', { configurable: true, value: { saveWorkspace, confirmSessionMove } })
+    let state = base
+    const { rerender, unmount } = renderHook(() => useAutoSave(state, 0, refs, true))
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(400) })
+    expect(saveWorkspace).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(saveWorkspace.mock.calls[0]![0]).workspace.sessions.moved).toBeUndefined()
+
+    // The move merges while that save is still in flight.
+    state = { ...base, sessions: { ...base.sessions, moved: { cwd: '/recorded', kind: 'claude', projectId: 'tab-a', joinedAt: 1 } } }
+    refs.latestStateRef.current = state
+    refs.pendingSessionMoveIdsRef.current = ['move-1']
+    rerender()
+
+    await act(async () => { settle.shift()!() })
+    expect(confirmSessionMove).not.toHaveBeenCalled()
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(400) })
+    expect(JSON.parse(saveWorkspace.mock.calls.at(-1)![0]).workspace.sessions.moved).toBeDefined()
+    await act(async () => { settle.shift()!() })
+    expect(confirmSessionMove).toHaveBeenCalledTimes(1)
+    expect(confirmSessionMove).toHaveBeenCalledWith('move-1')
+    expect(refs.pendingSessionMoveIdsRef.current).toEqual([])
     unmount()
   })
 })

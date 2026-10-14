@@ -67,6 +67,9 @@ export type UiShellSlice = UiShellState & {
   closeAgentMcpServers: () => void
   openAgentTitlePrompt: (sessionId: SessionId) => void
   closeAgentTitlePrompt: () => void
+  /** Open/close the Send to Window picker for one session (#1481). */
+  openSendToWindow: (sessionId: SessionId) => void
+  closeSendToWindow: () => void
   openRootManagementPrompt: (sessionId: SessionId, stagedOverrides?: BuiltInMcpOverrides, stopGoalLoop?: boolean) => void
   closeRootManagementPrompt: () => void
   openDebugBundleNotePrompt: (payload: {
