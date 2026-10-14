@@ -395,6 +395,8 @@ export type HermesConnectionConditionState = {
     instructions: string | null
     connectUrl: string | null
     requiredEnv: Array<{ name: string; prompt: string | null; required: boolean; secret: boolean; default: string }>
+    /** Catalog plugin/skill rows: what the user judges third-party code by. */
+    catalog: { display: string | null; description: string | null; tier: string | null; repo: string | null; sha: string | null; scan: { status: string; summary: string } | null } | null
   }>
 }
 

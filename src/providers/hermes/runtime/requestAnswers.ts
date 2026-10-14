@@ -13,6 +13,29 @@ export const HERMES_DECLINE = 'hermes.decline'
 /** Answer a connection card (Hermes' connection.respond). */
 export const HERMES_CONNECTION_RESPOND = 'hermes.connection.respond'
 
+/**
+ * When Hermes acts on an `approved` answer for a row, from Hermes' own
+ * apply_answer (tools/connectors/mcp.py, catalog.py) — anything else is a
+ * no-op that still answers {status:'ok'}, i.e. a dead button (reviews A F2,
+ * B F2; recorded S28: an approved install goes `initiated` with no link,
+ * then `failed`):
+ *   - `pending` mcp/plugin/skill rows: approve installs/enables it;
+ *   - `failed`/`expired` mcp/plugin/skill rows: approve retries it;
+ *   - hosted `connector` rows: never; their card only skips and continues
+ *     (run.apply_answer: "a managed operation's card only skips and
+ *     continues"), the browser link is how they connect;
+ *   - a catalog row whose security scan FAILED: never one-click (review B
+ *     F1); installing third-party code that failed Hermes' scan is a
+ *     decision for the terminal (`hermes plugins install`), not a button.
+ */
+export function connectionRowApprovable(target: HermesConnectionOperation['targets'][number]): 'install' | 'retry' | null {
+  if (target.resolved || target.kind === 'connector') return null
+  if (target.catalog?.scan?.status === 'failed') return null
+  if (target.state === 'pending') return 'install'
+  if (target.state === 'failed' || target.state === 'expired') return 'retry'
+  return null
+}
+
 export type HermesConnectionAnswer = {
   targets: Array<{ name: string; status: 'approved' | 'skipped'; env?: Record<string, string> }>
   settledBy?: 'continue'
@@ -33,9 +56,14 @@ export function validateConnectionAnswer(operation: HermesConnectionOperation, p
   if (record.settledBy !== undefined && !settledBy) return null
   const rawTargets = Array.isArray(record.targets) ? record.targets : []
   const targets: HermesConnectionAnswer['targets'] = []
+  const seen = new Set<string>()
   for (const entry of rawTargets) {
     const answer = asRecord(entry)
     if (!answer || typeof answer.name !== 'string') return null
+    // One answer per row (review B F10): Hermes applies a list in order, so
+    // [approved, skipped] for one row would start and then cancel it.
+    if (seen.has(answer.name)) return null
+    seen.add(answer.name)
     const target = operation.targets.find((candidate) => candidate.name === answer.name)
     if (!target || target.resolved) return null
     if (answer.status !== 'approved' && answer.status !== 'skipped') return null
@@ -43,6 +71,8 @@ export function validateConnectionAnswer(operation: HermesConnectionOperation, p
       targets.push({ name: target.name, status: 'skipped' })
       continue
     }
+    // Approve only where Hermes acts on it (connectionRowApprovable).
+    if (!connectionRowApprovable(target)) return null
     const env = asRecord(answer.env) ?? {}
     const allowed = new Map(target.requiredEnv.map((field) => [field.name, field]))
     const out: Record<string, string> = {}
