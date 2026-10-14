@@ -11,12 +11,39 @@ export type JsonValue =
 // objects, which carry renderer-only handles and would not survive the frame
 // boundary. These are point-in-time reads; live updates arrive over the push
 // channel (Group D). Kept deliberately minimal: an extension gets identity and
-// shape, not the host's internal runtime.
+// shape, not the host's internal runtime. The one runtime-derived exception is
+// a session's `activity` and `notification` (#1479): two published answers
+// (Dispatch's working rule and badge), never the raw runtime fields behind them.
 
 export type ExtensionWorkspaceSnapshot = {
   activeTabId: string | null
   tabIds: string[]
   sessionCount: number
+}
+
+/**
+ * Is the session busy right now? Exactly `sessionIsWorking(runtime)`.
+ *
+ * WHY binary and not Dispatch's starting/running/working/exited/idle: those
+ * five states are Dispatch PRESENTATION and have changed with it (#880, #865).
+ * A published SDK field outlives any one UI, and the question an extension
+ * actually asks — "is this agent doing something" — has one host answer
+ * already. Widening it later is additive; narrowing a published union is not.
+ */
+export type ExtensionSessionActivity = 'working' | 'idle'
+
+/**
+ * The badge Dispatch shows for this session, or null for none. Exactly
+ * `dispatchUnreadBadge(runtime)` (session-runtime/unreadBadge.ts).
+ *
+ * `label` is the word Dispatch paints (NEW, ACTION, QUESTION, ERROR, …) so an
+ * extension shows the same word without re-deriving the provider condition
+ * table. `kind` is the stable machine value: `attention` means something is
+ * blocking on the user NOW; `output` means finished work nobody has looked at.
+ */
+export type ExtensionSessionNotification = {
+  kind: 'output' | 'attention'
+  label: string
 }
 
 export type ExtensionSessionSnapshot = {
@@ -25,6 +52,10 @@ export type ExtensionSessionSnapshot = {
   kind: string | null
   cwd: string
   title: string | null
+  /** Added in SDK 0.11.0 (#1479). The SDK mirror marks these OPTIONAL because
+   *  older hosts omit them; this host always sends both. */
+  activity: ExtensionSessionActivity
+  notification: ExtensionSessionNotification | null
 }
 
 export type ExtensionPaneSnapshot = {
@@ -130,9 +161,11 @@ export interface AgentCodeApiV1 {
   }
 
   readonly sessions: {
-    /** All sessions' identity/shape. Requires `sessions.observe`. */
+    /** All sessions' identity, shape and live status. Requires `sessions.observe`. */
     observe(): Promise<ExtensionSessionSnapshot[]>
-    /** Fire on any session change; returns an unsubscribe. Re-read via observe(). */
+    /** Fire on any session change, including an `activity` or `notification`
+     *  change (coalesced, never per streamed token); returns an unsubscribe.
+     *  Re-read via observe(). */
     subscribe(listener: () => void): () => void
   }
 

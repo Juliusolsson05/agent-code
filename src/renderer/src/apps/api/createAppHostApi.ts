@@ -5,6 +5,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 
 import type { AgentCodeApiV1, JsonValue } from '@renderer/apps/api/types'
+import { projectSessionStatus, sessionStatusSignature } from '@renderer/apps/api/sessionStatus'
 import { CUSTOM_APPEARANCE_CSS_VARS } from '@renderer/app-state/settings/customAppearance'
 
 // Discovering which `--theme-*` custom properties exist requires walking every
@@ -138,15 +139,32 @@ export function createAppHostApi(deps: AppHostApiDeps): AgentCodeApiV1 {
     },
 
     sessions: {
-      observe: async () =>
-        Object.entries(useAppStore.getState().workspaceState.sessions).map(([id, meta]) => ({
+      observe: async () => {
+        const state = useAppStore.getState()
+        return Object.entries(state.workspaceState.sessions).map(([id, meta]) => ({
           id,
           kind: meta.kind ?? null,
           cwd: meta.cwd,
           title: meta.title ?? null,
-        })),
+          // Live status (#1479) lives on the RUNTIME, not the session row, so
+          // it is joined here from the same store read. See sessionStatus.ts
+          // for why both fields delegate to the Dispatch rules.
+          ...projectSessionStatus(state.workspaceRuntimes[id]),
+        }))
+      },
+      // The snapshot has two sources: session rows (metadata) and runtimes
+      // (status). ONE selector over both, compared field by field, so a write
+      // that changes both (a session added: new row AND new signature
+      // segment) calls the listener once, not twice (#1479 review). The
+      // runtime half is the projected signature, never the runtime map — see
+      // sessionStatusSignature for why the map would fire on every token.
+      // Frames do not use this: they are woken by observeNudges' pushes.
       subscribe: listener =>
-        useAppStore.subscribe(s => s.workspaceState.sessions, () => listener()),
+        useAppStore.subscribe(
+          s => ({ rows: s.workspaceState.sessions, status: sessionStatusSignature(s) }),
+          () => listener(),
+          { equalityFn: (a, b) => a.rows === b.rows && a.status === b.status },
+        ),
     },
 
     panes: {
