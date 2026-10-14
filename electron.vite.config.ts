@@ -40,6 +40,8 @@ const headlessAlias = [
   { find: 'codex-headless', replacement: resolve(__dirname, 'packages/codex-headless/src/index.ts') },
   { find: /^grok-code-headless\/(.+)$/, replacement: `${resolve(__dirname, 'packages/grok-code-headless/src')}/$1` },
   { find: 'grok-code-headless', replacement: resolve(__dirname, 'packages/grok-code-headless/src/index.ts') },
+  { find: /^hermes-headless\/(.+)$/, replacement: `${resolve(__dirname, 'packages/hermes-headless/src')}/$1` },
+  { find: 'hermes-headless', replacement: resolve(__dirname, 'packages/hermes-headless/src/index.ts') },
   { find: /^opencode-headless\/(.+)$/, replacement: `${resolve(__dirname, 'packages/opencode-headless/src')}/$1` },
   { find: 'opencode-headless', replacement: resolve(__dirname, 'packages/opencode-headless/src/index.ts') },
   // The native-TUI OpenCode runtime's reader. Main-only like its siblings: it
@@ -87,6 +89,7 @@ const headlessExclude = [
   'claude-code-headless',
   'codex-headless',
   'grok-code-headless',
+  'hermes-headless',
   'opencode-headless',
   'opencode-terminal-headless',
   'pi-terminal-headless',

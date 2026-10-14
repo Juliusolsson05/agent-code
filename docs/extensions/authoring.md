@@ -332,7 +332,7 @@ api.secrets.delete(key)
 api.workspace.observe()              // { activeTabId, tabIds, sessionCount }
 api.workspace.subscribe(listener)    // returns an unsubscribe
 
-api.sessions.observe()               // [{ id, kind, cwd, title }]
+api.sessions.observe()               // [{ id, kind, cwd, title, activity, notification }]
 api.sessions.subscribe(listener)
 
 api.panes.observe()                  // [{ tabId, leafSessionIds }]
@@ -341,6 +341,23 @@ api.panes.subscribe(listener)
 
 `subscribe` gives you a change *nudge* carrying no data — re-read with `observe()`
 when it fires. Calling `observe()` without the matching permission rejects.
+
+Each session row also says what the agent is doing (SDK 0.11.0, #1479):
+
+- `activity: 'working' | 'idle'` is the rule behind Dispatch's running count and
+  the composer's Stop button.
+- `notification: { kind: 'output' | 'attention', label } | null` is the badge
+  Dispatch shows on that row. `label` is the word it paints (NEW, ACTION,
+  QUESTION, ERROR, …); `attention` means it is waiting on the user right now.
+
+`output` clears when the user engages with the agent or rests on its pane;
+`attention` clears when what blocks it resolves (the prompt is answered, or a
+failed start recovers), not when the user looks.
+
+`sessions.subscribe` also fires when either field changes, coalesced, never per
+streamed token. Agent Code versions before the first one supporting SDK 0.11.0
+omit both fields, so treat a row without `activity` as "this Agent Code is too
+old" rather than "idle".
 
 ### Tier 2/3 — scoped project files (API v2)
 

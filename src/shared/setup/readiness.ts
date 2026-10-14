@@ -1,6 +1,6 @@
 import {
-  AGENT_PROVIDER_KINDS,
   DEFAULT_PROVIDER,
+  LOCAL_PROVIDER_KINDS,
   type AgentProviderKind,
 } from '@shared/types/providerKind.js'
 import type { SetupCheckResult, SetupToolId, SetupToolStatus } from '@shared/types/setup.js'
@@ -36,7 +36,10 @@ export function deriveReadiness(
   // A bundled provider counts: `found` is already true for it (the probe
   // sets found = bundled || system path). That is the whole point of #994:
   // the packaged app's OpenCode makes a clean Mac usable.
-  const usableProviders = AGENT_PROVIDER_KINDS.filter(kind => tools[kind]?.found === true)
+  // Local providers only: a remote provider (Hermes) is not a probed tool and
+  // must not become a fresh install's first pane. Its availability is a
+  // signed-in connection, folded into enablement by providerEnablement.ts.
+  const usableProviders: AgentProviderKind[] = LOCAL_PROVIDER_KINDS.filter(kind => tools[kind]?.found === true)
   return { usableProviders, firstSessionKind: firstSessionKindFor(usableProviders) }
 }
 

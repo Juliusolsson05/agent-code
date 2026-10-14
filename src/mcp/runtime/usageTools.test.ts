@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { createBuiltInMcpServer } from '@mcp/runtime/createBuiltInMcpServer.js'
 import { filterBuiltInMcpDomainsForProvider, CONFIGURABLE_BUILT_IN_MCP_DOMAINS, CONFIRMATION_GATED_BUILT_IN_MCP_DOMAINS, PARENT_HELD_ONLY_BUILT_IN_MCP_DOMAINS, type BuiltInMcpDomain } from '@mcp/shared/types.js'
-import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind.js'
+import { LOCAL_PROVIDER_KINDS } from '@shared/types/providerKind.js'
 
 // #1339: the `usage` domain at the tool boundary, through a real MCP client.
 // The snapshot is a real `ac_usage_read` answer from the owner's machine
@@ -92,6 +92,9 @@ describe('usage MCP domain (#1339)', () => {
     expect(CONFIRMATION_GATED_BUILT_IN_MCP_DOMAINS).not.toContain('usage')
     // #1451 review a: only a parent that holds usage may grant it to a child.
     expect(PARENT_HELD_ONLY_BUILT_IN_MCP_DOMAINS.has('usage')).toBe(true)
-    for (const provider of AGENT_PROVIDER_KINDS) expect(filterBuiltInMcpDomainsForProvider(provider, ['usage'])).toEqual(['usage'])
+    // Every LOCAL provider. A remote Hermes agent (#1482) cannot reach the
+    // loopback MCP host at all, so it gets no built-in domain, usage included.
+    for (const provider of LOCAL_PROVIDER_KINDS) expect(filterBuiltInMcpDomainsForProvider(provider, ['usage'])).toEqual(['usage'])
+    expect(filterBuiltInMcpDomainsForProvider('hermes', ['usage'])).toEqual([])
   })
 })

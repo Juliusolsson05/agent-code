@@ -31,9 +31,9 @@ import { listManagedAgentDescriptors } from '@renderer/workspace/agentManagement
 import {
   dispatchActivity,
   dispatchSubtitle,
-  dispatchUnreadBadge,
   type DispatchAgentActivity,
 } from '@renderer/workspace/dispatch/DispatchAgentList'
+import { dispatchUnreadBadge } from '@renderer/session-runtime/unreadBadge'
 import type { WorkspaceSetRuntimes, WorkspaceSetState } from '@renderer/workspace/hook/context'
 import { useWorkspaceHelpers } from '@renderer/workspace/hook/helpers'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'

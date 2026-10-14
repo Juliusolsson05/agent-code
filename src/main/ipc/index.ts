@@ -49,6 +49,8 @@ import { registerIncidentIpc } from '@main/ipc/incident.js'
 import { registerLifecycleIpc } from '@main/ipc/lifecycle.js'
 import { registerProviderEnablementIpc } from '@main/ipc/providerEnablement.js'
 import { registerUserMcpIpc } from '@main/ipc/userMcp.js'
+import { registerHermesIpc } from '@main/ipc/hermes.js'
+import type { HermesConnectionService } from '@main/hermes/service.js'
 import type { UserMcpService } from '@main/userMcp/service.js'
 import { registerUsageIpc } from '@main/ipc/usage.js'
 import { registerCliUpdatesIpc } from '@main/ipc/cliUpdates.js'
@@ -79,6 +81,8 @@ export type IpcDeps = {
   updates?: Parameters<typeof registerUpdatesIpc>[0]
   manager: SessionManager
   userMcpService: UserMcpService
+  /** Hermes connections (#1482). */
+  hermesConnections: HermesConnectionService
   lspManager: LspManager
   dictationDebugJournals: DictationDebugJournalRegistry
   pasteDebugJournals: PasteDebugJournalRegistry
@@ -148,6 +152,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerDebugIpc(deps.appRunJournal, lifecycleDiagnostics)
   registerProviderEnablementIpc()
   registerUserMcpIpc(deps.userMcpService)
+  registerHermesIpc(deps.hermesConnections)
   registerUsageIpc()
   registerCliUpdatesIpc(deps.cliUpdateOrchestrator)
   registerWorkflowIpc(deps.workflowBridge)

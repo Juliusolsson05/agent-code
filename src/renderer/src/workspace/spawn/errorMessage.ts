@@ -5,6 +5,7 @@ import {
   MISSING_WORKSPACE_FOLDER_PREFIX,
   PROVIDER_CLI_NOT_FOUND_SUFFIX,
   SESSION_START_FAILED_MESSAGE,
+  curatedRemoteProviderMessage,
 } from '@shared/types/session'
 import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
 
@@ -29,7 +30,7 @@ import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
 
 /**
  * The spawn failures whose text is safe to show AND tells the user what to
- * do, or null for everything else (#1286 review C). Exactly three, and the
+ * do, or null for everything else (#1286 review C). Exactly four, and the
  * returned text is ALWAYS rebuilt from our own constants, never copied from
  * the error (#1286 review C round 2):
  *  - the Claude proxy rewrite above (this file);
@@ -38,7 +39,8 @@ import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
  *    returned instead, and a provider exception that happened to contain the
  *    prefix followed by a URL or token passed it straight to a toast;
  *  - main's ProviderCliNotFoundError, only for a known provider id (an
- *    arbitrary lowercase token before the suffix is not a kind).
+ *    arbitrary lowercase token before the suffix is not a kind);
+ *  - a remote provider's connection sentences (Hermes, #1482).
  * Recognised on both sides of `spawn`: sessionSpawnErrorMessage maps a raw
  * rejection onto one of these, and a create's toast re-reads the message
  * `spawn` threw. That second read is why the proxy sentence is recognised by
@@ -47,6 +49,10 @@ import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
 export function curatedSpawnMessage(raw: string, cwd: string): string | null {
   if (raw.includes(PROXY_STARTUP_FAILED_MESSAGE)) return PROXY_STARTUP_FAILED_MESSAGE
   if (raw.includes(MISSING_WORKSPACE_FOLDER_PREFIX)) return `${MISSING_WORKSPACE_FOLDER_PREFIX}${cwd}`
+  // Hermes' connection failures (#1482): whole fixed sentences, re-emitted
+  // from shared constants (curatedRemoteProviderMessage).
+  const remote = curatedRemoteProviderMessage(raw)
+  if (remote) return remote
   const cli = raw.indexOf(PROVIDER_CLI_NOT_FOUND_SUFFIX)
   if (cli >= 0) {
     const kind = /[a-z][a-z0-9-]*$/u.exec(raw.slice(0, cli))?.[0]

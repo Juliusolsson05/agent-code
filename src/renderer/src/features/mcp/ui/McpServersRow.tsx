@@ -9,7 +9,7 @@ import { Button } from '@renderer/components/ui/button'
 import { BUILT_IN_MCP_SERVERS } from '@renderer/features/mcp/lib/builtInServers'
 import { applyUserMcpResult, useUserMcpSnapshot } from '@renderer/features/mcp/store'
 import { useEnabledAgentProviderKinds } from '@renderer/features/providers/store'
-import { AGENT_PROVIDER_KINDS, type AgentProviderKind } from '@shared/types/providerKind'
+import { AGENT_PROVIDER_KINDS, isRemoteProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
 import { isUserMcpProvider, USER_MCP_PROVIDERS, type NativeMcpServer, type UserMcpServerView } from '@shared/userMcp/types'
 
 type Props = {
@@ -84,7 +84,14 @@ export function McpServersRow({ settings, onChange }: Props) {
               />
             </Cell>
           ) : (
-            <Unsupported key={kind} reason={`${getRendererProviderCapabilities(kind).shortLabel} provides this natively`} />
+            <Unsupported
+              key={kind}
+              // A remote agent (Hermes) is not "native": it runs on another
+              // machine that Agent Code's MCP host cannot reach.
+              reason={isRemoteProviderKind(kind)
+                ? `${getRendererProviderCapabilities(kind).shortLabel} runs on your own server, which Agent Code's MCP servers cannot reach`
+                : `${getRendererProviderCapabilities(kind).shortLabel} provides this natively`}
+            />
           ))}
           <span />
         </div>

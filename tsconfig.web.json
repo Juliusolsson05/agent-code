@@ -32,6 +32,8 @@
       "codex-headless/*": ["./packages/codex-headless/src/*"],
       "grok-code-headless": ["./packages/grok-code-headless/src/index.ts"],
       "grok-code-headless/*": ["./packages/grok-code-headless/src/*"],
+      "hermes-headless": ["./packages/hermes-headless/src/index.ts"],
+      "hermes-headless/*": ["./packages/hermes-headless/src/*"],
       "opencode-headless": ["./packages/opencode-headless/src/index.ts"],
       "opencode-headless/*": ["./packages/opencode-headless/src/*"],
       "opencode-terminal-headless": ["./packages/opencode-terminal-headless/src/index.ts"],

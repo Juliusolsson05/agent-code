@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { create } from 'zustand'
 
-import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, LOCAL_PROVIDER_KINDS, type AgentProviderKind } from '@shared/types/providerKind'
 import type { SetupCheckResult } from '@shared/types/setup'
 import { SETUP_CHECK_FAILED } from '@renderer/features/settings/setupWriteFailed'
 
@@ -158,7 +158,12 @@ function decided(check: SetupCheckResult | null | undefined): boolean {
 export function useMissingProviders(): ReadonlySet<AgentProviderKind> {
   const usable = useSetupStore(state => state.check?.usableProviders)
   return useMemo(
-    () => new Set(usable ? AGENT_PROVIDER_KINDS.filter(kind => !usable.includes(kind)) : []),
+    // Local kinds only: "Not installed · File › Setup…" is about a CLI on
+    // this Mac. A remote kind (Hermes) has no binary and no Setup row, and
+    // the setup check never lists it as usable, so the hint would mark a
+    // signed-in Hermes as missing forever (review a #9). Its readiness is
+    // its connection; a spawn without one says so (HERMES_NOT_CONNECTED_MESSAGE).
+    () => new Set<AgentProviderKind>(usable ? LOCAL_PROVIDER_KINDS.filter(kind => !usable.includes(kind)) : []),
     [usable],
   )
 }

@@ -337,6 +337,13 @@ export type SessionMeta = {
    * behind it live in `builtInMcpOverrides` under `user:<id>` keys. */
   userMcpServerIds?: string[]
   /**
+   * Remote providers only (Hermes, #1482): the Settings connection this pane's
+   * conversation lives on. Persisted so a reload, recovery or Reload Agent
+   * reopens the conversation on the SAME server, never on whichever server is
+   * the default today. A connection id, never a URL or credential.
+   */
+  remoteConnectionId?: string
+  /**
    * Project membership (#992). THE ownership fact: a session belongs to the
    * workspace because it names a live project. It replaces all three ways a
    * v2 session could be owned — "I am a leaf of tabs[i].root", a

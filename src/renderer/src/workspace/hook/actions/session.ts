@@ -7,6 +7,7 @@ import {
   effectiveProviderRuntime,
   isAgentProviderKind,
   isAgentSessionKind,
+  isRemoteProviderKind,
   isSessionKind,
 } from '@shared/types/providerKind'
 import type { AgentProviderRuntime } from '@shared/types/providerKind'
@@ -20,6 +21,7 @@ import type { SessionId, SessionKind, SessionMeta, WorkspaceState } from '@rende
 import type { BuiltInMcpDomain, BuiltInMcpOverrides } from '@mcp/shared/types'
 import { resolveSessionBuiltInMcpDomains, sessionMcpOverrides, spawnMcpOverrides } from '@renderer/workspace/mcpDomains'
 import { userMcpOverridesFrom } from '@shared/userMcp/types'
+import { resolveRemoteConnectionId } from '@renderer/workspace/remoteConnection'
 import {
   remapTiledLanes,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
@@ -412,9 +414,19 @@ export function useSessionActions(
         tldrIdentity?: string
         builtInMcpOverrides?: BuiltInMcpOverrides
         builtInMcpDomains?: BuiltInMcpDomain[]
+        /** Remote providers: the connection to open the conversation on. */
+        remoteConnectionId?: string
       },
     ): Promise<SessionId> => {
       const kind: SessionKind = opts?.kind ?? DEFAULT_PROVIDER
+      // Only remote kinds wait for the connection list. An unconditional
+      // await here deferred EVERY spawn's IPC by a microtask, which broke
+      // replaceSession's ordering against edits made while a replacement is
+      // in flight (sessionRecovery.renderer.test.tsx "delayed session
+      // replacement").
+      const remoteConnectionId = isRemoteProviderKind(kind)
+        ? await resolveRemoteConnectionId(kind, opts?.remoteConnectionId)
+        : undefined
       const dangerousMode =
         opts?.dangerousMode ??
         (isAgentSessionKind(kind) ? refs.dangerousAgentsRef.current : undefined)
@@ -469,6 +481,7 @@ export function useSessionActions(
             // Only the pane's explicit choices cross; main applies Settings,
             // secrets and support itself (#1143, spec Revision 2 §4).
             ...(isAgentProviderKind(kind) ? { userMcpOverrides: userMcpOverridesFrom(builtInMcpOverrides) } : {}),
+            ...(remoteConnectionId ? { remoteConnectionId } : {}),
           })
           sessionId = result.sessionId
           tmuxName = result.tmuxName
@@ -546,6 +559,7 @@ export function useSessionActions(
             ? { builtInMcpDomains, builtInMcpOverrides }
             : {}),
           ...(isAgentProviderKind(kind) ? { userMcpServerIds: startedUserMcpServerIds ?? [] } : {}),
+          ...(remoteConnectionId ? { remoteConnectionId } : {}),
         }
         setState(prev => ({
           ...prev,
@@ -748,6 +762,7 @@ export function useSessionActions(
             resumeSessionId,
             builtInMcpDomains,
             ...(isAgentProviderKind(kind) ? { userMcpOverrides: userMcpOverridesFrom(builtInMcpOverrides) } : {}),
+            ...(meta.remoteConnectionId ? { remoteConnectionId: meta.remoteConnectionId } : {}),
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
             dangerousMode: isAgentSessionKind(kind) ? refs.dangerousAgentsRef.current : undefined,
             useProxy: isAgentSessionKind(kind) ? refs.useProxyStreamingRef.current : undefined,
@@ -1310,6 +1325,14 @@ export function useSessionActions(
         // same-rollout handoff) or the renderer (every other swap) does it.
         predecessorKillCaller: 'replace.predecessor',
         ...(builtInMcpDomains !== undefined ? { builtInMcpDomains, builtInMcpOverrides } : {}),
+        // A remote pane continues on the SAME server. Without this, spawn
+        // re-resolves "first signed-in connection" and Reload Agent could
+        // carry the pane's stored id to another Hermes, which then starts a
+        // new conversation there (review a #3). A provider switch to a
+        // different kind has nothing to carry.
+        ...(nextKind === oldMeta.kind && oldMeta.remoteConnectionId
+          ? { remoteConnectionId: oldMeta.remoteConnectionId }
+          : {}),
       })
       // WHY a finally, and why it wraps EVERY exit path including the bail-outs:
       // a stranded reservation would leave that pane permanently unnamed, which is
@@ -1696,6 +1719,7 @@ export function useSessionActions(
             useProxy: isAgentSessionKind(kind) ? refs.useProxyStreamingRef.current : undefined,
             builtInMcpDomains,
             ...(isAgentProviderKind(kind) ? { userMcpOverrides: userMcpOverridesFrom(builtInMcpOverrides) } : {}),
+            ...(meta.remoteConnectionId ? { remoteConnectionId: meta.remoteConnectionId } : {}),
           })
         } catch (err) {
           // WHY only a curated sentence survives (#1252 review, #1324 review

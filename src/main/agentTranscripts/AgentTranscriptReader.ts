@@ -408,6 +408,11 @@ function extractItems(
       return []
     case 'pi':
       return extractPiItems(raw, timestamp)
+    // A Hermes conversation lives on the user's VPS, not in a local file
+    // this reader could open; the MCP transcript surface does not offer it.
+    // Kept total so the switch fails to compile, not silently, if that changes.
+    case 'hermes':
+      return []
   }
 }
 

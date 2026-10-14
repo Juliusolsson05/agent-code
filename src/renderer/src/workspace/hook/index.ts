@@ -71,6 +71,7 @@ import { closeCompletedGoalAgents as runCompletedGoalClose } from '@renderer/wor
 import type { TldrRecord } from '@shared/types/tldr'
 import { withTerminalLastUsed, withTerminalLastUsedFloor } from '@renderer/workspace/terminalLastUsed'
 import type { AgentActivitySelection } from '@renderer/workspace/agentActivityClose'
+import { providerHasNoNativeTerminal } from '@renderer/workspace/agentDisplayMode'
 
 // -----------------------------------------------------------------------------
 // useWorkspace — the composer.
@@ -168,8 +169,7 @@ export function useWorkspace(
     const kind = meta.kind ?? DEFAULT_PROVIDER
     if (!isAgentProviderKind(kind)) return false
     if (
-      kind === 'opencode' &&
-      meta.providerRuntime !== 'terminal' &&
+      providerHasNoNativeTerminal(kind, meta.providerRuntime) &&
       override === 'terminal'
     ) {
       // WHY this repeats the render-policy guard instead of relying only on

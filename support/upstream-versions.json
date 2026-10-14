@@ -36,5 +36,22 @@
         "Added with the Pi terminal provider (Refs #1132). Acceptance rides packages/pi-terminal-headless's own support/upstream-versions.json and its Stage 0 recordings (research/census-2026-09-22.md, recorded on 0.87.1); the app pins the same number. Pi ships breaking changes in 0.x minors, so a bump needs that package's compatibility pass (re-record with its probe, diff the corpus) before this number moves."
       ]
     }
+  },
+  "remoteBackends": {
+    "_comment": "Backends Agent Code talks to on the user's own server. Not npm packages, so check-upstream.mjs (which reads only `providers`) does not watch them; compatibility is also checked at runtime against the backend's own contract number.",
+    "hermes": {
+      "label": "Hermes Agent",
+      "repo": "https://github.com/NousResearch/hermes-agent",
+      "changelog": "https://github.com/NousResearch/hermes-agent/releases",
+      "accepted": "0.21.7",
+      "desktopContract": {
+        "tested": 8,
+        "minimum": 7
+      },
+      "checkedAt": "2026-10-13",
+      "notes": [
+        "Added with the Hermes chat pane (Refs #1482). Acceptance rides packages/hermes-headless's Stage 0 corpus, recorded against `hermes serve` built from vendor/hermes-agent-src at 71d34bad (v0.21.7), and its live tier. The source of truth for the runtime check is hermes-headless src/version.ts (backendCompatibility); keep these numbers equal to it. Hermes updates itself on the user's server, so a newer backend is expected: re-record the corpus against it before moving `accepted`."
+      ]
+    }
   }
 }

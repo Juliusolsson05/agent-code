@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
 
+import { HERMES_NOT_CONNECTED_MESSAGE, HERMES_SIGNED_OUT_MESSAGE } from '@shared/types/session'
 import { curatedSpawnMessage, sessionSpawnErrorMessage } from './errorMessage'
 
 // #1286 review B (steering q22): this string is what session.ts throws for
@@ -59,4 +60,16 @@ it('keeps the proxy guidance main hands over through IPC', () => {
   const relayed = "Error invoking remote method 'session:spawn': Error: Claude proxy startup failed. Restart Agent Code after rebuilding, or disable Proxy-Streamed Semantic Rendering in settings if the proxy will not start in this environment."
   expect(curatedSpawnMessage(relayed, '/repo')).toContain('Claude proxy startup failed')
   expect(sessionSpawnErrorMessage('claude', new Error(relayed), true, '/repo')).toContain('Claude proxy startup failed')
+})
+
+// Review a #8 (#1482): main's Hermes sentences name the fix (Settings →
+// Hermes); before they were curated, every one became the generic failure.
+it('keeps Hermes connection sentences and drops anything around them', () => {
+  const relayed = `Error invoking remote method 'session:spawn': RemoteProviderNotConnectedError: ${HERMES_NOT_CONNECTED_MESSAGE}`
+  expect(sessionSpawnErrorMessage('hermes', new Error(relayed), false, '/')).toBe(HERMES_NOT_CONNECTED_MESSAGE)
+  const signedOut = `Error invoking remote method 'session:spawn': Error: ${HERMES_SIGNED_OUT_MESSAGE} token=abc`
+  expect(sessionSpawnErrorMessage('hermes', new Error(signedOut), false, '/')).toBe(HERMES_SIGNED_OUT_MESSAGE)
+  // A server's own error text is NOT curated, even about Hermes.
+  expect(sessionSpawnErrorMessage('hermes', new Error('Could not open the Hermes conversation: secret detail'), false, '/'))
+    .toBe('Session failed to start. Check provider setup and retry.')
 })

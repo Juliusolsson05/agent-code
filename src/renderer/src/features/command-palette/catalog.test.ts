@@ -78,6 +78,8 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'grok-horizontal',
   'pi-vertical',
   'pi-horizontal',
+  'hermes-vertical',
+  'hermes-horizontal',
   'undo-close',
   'toggle-tail',
   'toggle-tail-all',
@@ -267,12 +269,12 @@ const NAVIGATION_COMMAND_GROUP: readonly string[] = [
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 136 governed commands in registration order', () => {
+  it('contains exactly the 138 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 136 commands', () => {
+  it('has exactly 138 commands', () => {
     // Stated separately from the order assertion because this number is the
     // thing that moves, and a bare count failure is a clearer signal than a
     // 99-line array diff.
@@ -305,11 +307,13 @@ describe('built-in command catalog — baseline characterization', () => {
     // the single-agent counterpart of Pin Sessions… that the Sessions
     // right-click menu offers → 134 with View Goal History (#1190) → 135 with
     // Reply to Reader Message (c882a41d, which moved the count without
-    // extending this line) → 136 with Send to Window… (#1481).
+    // extending this line) → 137 with the two generated Hermes splits
+    // `hermes-vertical` / `hermes-horizontal` (#1482) → 138 with Send to
+    // Window… (#1481).
     // Each step of that arithmetic was a deliberate edit to this line, which is the entire point of pinning it. (The two test
     // titles above had drifted to "115" while this line said 116; they now
     // track it again.)
-    expect(builtInCommandCatalog).toHaveLength(136)
+    expect(builtInCommandCatalog).toHaveLength(138)
   })
 
   it('reports no structural defects', () => {
@@ -343,7 +347,7 @@ describe('generated per-provider split commands', () => {
   })
 
   it('accounts for the difference between literal and total command count', () => {
-    // 136 total - 8 generated = 128 literal `id:` fields across the command
+    // 138 total - 10 generated = 128 literal `id:` fields across the command
     // modules. At the original baseline this read 102 - 4 = 98; it moved down by
     // the five retirements, then back up by the nine additions, Grid Dispatch's
     // six row commands, New Window, and the later additions recorded in the
@@ -510,9 +514,10 @@ describe('governance targets', () => {
     // `add-skill` and `check-skill-updates` (#1161). Then
     // `close-completed-agents` (#1182). Then `pin-agent` (#1180). Then
     // `view-goal-history` (#1190). Then `reply-to-reader-message` (#1221, K2-4).
-    // Then `send-to-window` (#1481).
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 62).toBe(104)
-    expect(builtInCommandCatalog).toHaveLength(136)
+    // Then `hermes-vertical` and `hermes-horizontal` (#1482, generated from
+    // AGENT_PROVIDER_KINDS like Grok's and Pi's). Then `send-to-window` (#1481).
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 64).toBe(104)
+    expect(builtInCommandCatalog).toHaveLength(138)
   })
 })
 

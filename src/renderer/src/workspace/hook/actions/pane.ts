@@ -1,4 +1,4 @@
-import { DEFAULT_PROVIDER, effectiveProviderRuntime } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, effectiveProviderRuntime, isRemoteProviderKind } from '@shared/types/providerKind'
 import { SESSION_START_FAILED_MESSAGE } from '@shared/types/session'
 import { enabledAgentProviderChoices } from '@renderer/workspace/providerChoices'
 import { currentOrchestrationParent } from '@renderer/workspace/hook/actions/successorCarry'
@@ -950,7 +950,10 @@ export function usePaneActions(
       const cwd =
         continuation?.cwd ??
         (target.cwdSessionId ? dispatchSnapshot.sessions[target.cwdSessionId]?.cwd : null) ??
-        projectCwd(dispatchSnapshot, tab.id)
+        projectCwd(dispatchSnapshot, tab.id) ??
+        // Same remote fallback as detached creation below: a Hermes chat
+        // needs no project folder ('/' is display metadata only).
+        (isRemoteProviderKind(kind) ? '/' : null)
       if (!cwd) {
         showToast(
           kind === 'terminal'
@@ -1145,7 +1148,11 @@ export function usePaneActions(
         (target.cwdSessionId ? snapshot.sessions[target.cwdSessionId]?.cwd : null) ??
         // No agent under the cursor to borrow from: any session of the
         // resolved project will do — all are valid directories for it.
-        projectCwd(snapshot, tab.id)
+        projectCwd(snapshot, tab.id) ??
+        // A remote agent (Hermes, #1482) never uses the local folder (the
+        // session does not send it; REMOTE_PROVIDER_KINDS), so a tab without
+        // one must not block it. '/' is display metadata only.
+        (isRemoteProviderKind(kind) ? '/' : null)
       if (!cwd) {
         showToast('Could not create dispatch agent: no project folder found.')
         return null

@@ -24,7 +24,7 @@ import { createExternalControlSettings } from './settings/externalControl'
 import { createExternalCodexIntegration } from './settings/externalCodexIntegration'
 import operatorSkillSource from '../../operator-skills/agent-code-computer-execution/SKILL.md?raw'
 
-import { app, BrowserWindow, clipboard, crashReporter, dialog, Menu, Notification, powerMonitor, systemPreferences } from 'electron'
+import { app, BrowserWindow, clipboard, crashReporter, dialog, Menu, Notification, powerMonitor, shell, systemPreferences } from 'electron'
 import { existsSync } from 'fs'
 import { readFile } from 'fs/promises'
 import { join } from 'path'
@@ -149,6 +149,9 @@ import { CaffeinateController } from '@main/caffeinate/CaffeinateController.js'
 import { createFileVaultStore } from '@main/keyVault/vaultStore.js'
 import { createSafeStorageCodec } from '@main/keyVault/safeStorageCodec.js'
 import { UserMcpService } from '@main/userMcp/service.js'
+import { HermesConnectionService } from '@main/hermes/service.js'
+import { setHermesConnectionService } from '@main/hermes/registry.js'
+import { refreshRemoteProviderDetection } from '@main/setup/providerEnablement.js'
 import { sweepStalePrivateMcpConfigs } from '@providers/shared/runtime/builtInMcpLaunch.js'
 import { VaultService } from '@main/keyVault/VaultService.js'
 import { buildAppMenu } from '@main/menu/appMenu.js'
@@ -1047,6 +1050,21 @@ async function startApp(): Promise<void> {
   // document is moved aside and reported in Settings instead).
   const userMcpService = new UserMcpService({ stateDir: STATE_DIR, codec: createSafeStorageCodec() })
   await userMcpService.initialize()
+  // Hermes connections (#1482). Before the manager for the same reason as
+  // user MCP: a restored Hermes pane dials through this service on its first
+  // spawn. initialize() reads disk only; it never touches the network.
+  const hermesConnections = new HermesConnectionService({
+    stateDir: STATE_DIR,
+    codec: createSafeStorageCodec(),
+    openExternal: (url) => shell.openExternal(url),
+  })
+  await hermesConnections.initialize()
+  setHermesConnectionService(hermesConnections)
+  // Signing in/out flips Hermes' "detected" in Settings → Providers and the
+  // New Agent picker; re-resolve when connections change.
+  hermesConnections.on('changed', () => {
+    void refreshRemoteProviderDetection().catch(() => undefined)
+  })
   // Private MCP config files now carry user secrets; a crash must not leave
   // them in the temp dir. Before any agent can launch, so nothing live is hit.
   void sweepStalePrivateMcpConfigs().then(removed => {
@@ -1567,6 +1585,7 @@ async function startApp(): Promise<void> {
     manager,
     sessionFeedTap: feedTap,
     userMcpService,
+    hermesConnections,
     updates: { updateService, updateChecks, app: { version: app.getVersion(), isPackaged: app.isPackaged } },
     remoteController,
     lspManager,

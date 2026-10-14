@@ -88,6 +88,20 @@ import {
   extractCodexProviderSessionId,
   isCodexTypedUserPrompt,
 } from '@providers/codex/renderer/transcript/mapper'
+import { HERMES_IDENTITY } from '@providers/hermes/renderer/identity'
+import { HERMES_VIEWS } from '@providers/hermes/renderer/conditions/views'
+import { HERMES_CONDITION_POLICY } from '@providers/hermes/renderer/conditions/policy'
+import { renderHermesOperation } from '@providers/hermes/renderer/rows/dispatch'
+import { renderHermesDurableEntry } from '@providers/hermes/renderer/entries/dispatch'
+import { classifyHermesDurableEntry } from '@providers/hermes/renderer/entries/classify'
+import {
+  createHermesTranscriptEntryMapper,
+  extractHermesProviderSessionId,
+  isHermesTypedUserPrompt,
+} from '@providers/hermes/renderer/transcript/mapper'
+import { hermesComposerSubmit } from '@providers/hermes/renderer/composerSubmit'
+import { HERMES_SEMANTIC_FOLD_POLICY } from '@providers/hermes/renderer/semanticFoldPolicy'
+import { HERMES_LEDGER_POLICY } from '@providers/hermes/renderer/ledgerPolicy'
 
 export type RendererProviderCapabilities = {
   id: AgentProviderKind
@@ -468,12 +482,40 @@ const piCapabilities: RendererProviderCapabilities = {
   ledgerPolicy: PI_LEDGER_POLICY,
 }
 
+const hermesCapabilities: RendererProviderCapabilities = {
+  id: 'hermes',
+  name: 'Hermes',
+  ...HERMES_IDENTITY,
+  // Inline cards above the composer (conditions/views.tsx), answered over the
+  // WebSocket through session:resolveCondition.
+  conditionViews: HERMES_VIEWS,
+  renderOperation: renderHermesOperation,
+  renderDurableEntry: renderHermesDurableEntry,
+  classifyDurableEntry: classifyHermesDurableEntry,
+  // Hermes' delegate_task runs subagents ON ITS SERVER; they are not Agent
+  // Code panes, so no tool is a fleet spawn here.
+  isSpawnTool: () => false,
+  createTranscriptEntryMapper: () => createHermesTranscriptEntryMapper(),
+  extractProviderSessionId: extractHermesProviderSessionId,
+  isTypedUserPrompt: isHermesTypedUserPrompt,
+  typedUserPromptText: text => text,
+  composerSubmit: hermesComposerSubmit,
+  // hermes serve accepts image.attach / file.attach, but attachment upload is
+  // out of scope for v1 (plan Out of scope).
+  supportsImageAttachments: false,
+  usesOptimisticUserEcho: true,
+  conditionPolicy: HERMES_CONDITION_POLICY,
+  semanticFoldPolicy: HERMES_SEMANTIC_FOLD_POLICY,
+  ledgerPolicy: HERMES_LEDGER_POLICY,
+}
+
 const rendererProviderCapabilities: Record<AgentProviderKind, RendererProviderCapabilities> = {
   claude: claudeCapabilities,
   codex: codexCapabilities,
   opencode: opencodeCapabilities,
   grok: grokCapabilities,
   pi: piCapabilities,
+  hermes: hermesCapabilities,
 }
 
 export function getRendererProviderCapabilities(id: string): RendererProviderCapabilities {

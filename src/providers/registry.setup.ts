@@ -15,8 +15,8 @@
 // The descriptors are pure literals so this file is importable from
 // anywhere in main without dragging in node-pty, proxies, or fs.
 
-import { AGENT_PROVIDER_KINDS, isAgentProviderKind } from '@shared/types/providerKind.js'
-import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import { LOCAL_PROVIDER_KINDS, isLocalProviderKind } from '@shared/types/providerKind.js'
+import type { LocalProviderKind } from '@shared/types/providerKind.js'
 
 export type ProviderSetupDescriptor = {
   /** The executable name resolved on PATH and cached by toolchain.
@@ -106,7 +106,10 @@ const piSetup: ProviderSetupDescriptor = {
   },
 }
 
-const providerSetupDescriptors: Record<AgentProviderKind, ProviderSetupDescriptor> = {
+// Keyed by LOCAL providers: a remote provider (Hermes) has no CLI to find or
+// install, so it has no setup row (see SetupToolId). Its readiness is a
+// signed-in connection under Settings → Hermes.
+const providerSetupDescriptors: Record<LocalProviderKind, ProviderSetupDescriptor> = {
   claude: claudeSetup,
   codex: codexSetup,
   opencode: opencodeSetup,
@@ -115,13 +118,13 @@ const providerSetupDescriptors: Record<AgentProviderKind, ProviderSetupDescripto
 }
 
 export function getProviderSetupDescriptor(id: string): ProviderSetupDescriptor {
-  if (!isAgentProviderKind(id)) throw new Error(`Unknown provider: ${id}`)
+  if (!isLocalProviderKind(id)) throw new Error(`No local CLI setup for provider: ${id}`)
   return providerSetupDescriptors[id]
 }
 
 /** Iteration helper for setup modules deriving their tool tables. */
 export function listProviderSetupDescriptors(): Array<
-  [AgentProviderKind, ProviderSetupDescriptor]
+  [LocalProviderKind, ProviderSetupDescriptor]
 > {
-  return AGENT_PROVIDER_KINDS.map(kind => [kind, providerSetupDescriptors[kind]])
+  return LOCAL_PROVIDER_KINDS.map(kind => [kind, providerSetupDescriptors[kind]])
 }
