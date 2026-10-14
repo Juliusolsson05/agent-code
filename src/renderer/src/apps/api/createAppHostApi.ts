@@ -5,6 +5,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 
 import type { AgentCodeApiV1, JsonValue } from '@renderer/apps/api/types'
+import { projectSessionStatus, sessionStatusSignature } from '@renderer/apps/api/sessionStatus'
 import { CUSTOM_APPEARANCE_CSS_VARS } from '@renderer/app-state/settings/customAppearance'
 
 // Discovering which `--theme-*` custom properties exist requires walking every
@@ -138,15 +139,28 @@ export function createAppHostApi(deps: AppHostApiDeps): AgentCodeApiV1 {
     },
 
     sessions: {
-      observe: async () =>
-        Object.entries(useAppStore.getState().workspaceState.sessions).map(([id, meta]) => ({
+      observe: async () => {
+        const state = useAppStore.getState()
+        return Object.entries(state.workspaceState.sessions).map(([id, meta]) => ({
           id,
           kind: meta.kind ?? null,
           cwd: meta.cwd,
           title: meta.title ?? null,
-        })),
-      subscribe: listener =>
-        useAppStore.subscribe(s => s.workspaceState.sessions, () => listener()),
+          // Live status (#1479) lives on the RUNTIME, not the session row, so
+          // it is joined here from the same store read. See sessionStatus.ts
+          // for why both fields delegate to the Dispatch rules.
+          ...projectSessionStatus(state.workspaceRuntimes[id]),
+        }))
+      },
+      // Two triggers because the snapshot now has two sources: session rows
+      // (metadata) and runtimes (status). The runtime half listens to the
+      // projected signature, never the runtime map itself — see
+      // sessionStatusSignature for why the map would fire on every token.
+      subscribe: listener => {
+        const offSessions = useAppStore.subscribe(s => s.workspaceState.sessions, () => listener())
+        const offStatus = useAppStore.subscribe(sessionStatusSignature, () => listener())
+        return () => { offSessions(); offStatus() }
+      },
     },
 
     panes: {
