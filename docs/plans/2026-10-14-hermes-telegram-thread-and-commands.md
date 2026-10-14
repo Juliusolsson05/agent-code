@@ -717,19 +717,43 @@ This would get its own issue + plan.
 
 *(Filled in during execution: Stage 0 results with numbers, hypothesis verdicts H1–H6 as HOLDS / REFINED / DISPROVEN with evidence paths, a graveyard for disproven ideas, rulings, and deviations from this plan, each recorded in the same commit as the change.)*
 
+### Stage 0 results (2026-10-14; full report in temp/hermes-build/stage0/REPORT.md, package commit dc5dc88)
+
+- **Recorded:**
+  - S1 and S3–S16 re-recorded on v0.22.0 (e06df9c2);
+  - S17–S24 on v0.22.0;
+  - S25 on v0.20.4 (upstream tag v2026.8.18, Python 3.13);
+  - T1–T8 plus T7b with Hermes' real Telegram adapter against upstream's Bot API stand-in, on one database with `serve`;
+  - T2 also on v0.21.7.
+  - 51 files, about 9.5 MB, scanner clean, every file read end to end.
+- **The deterministic suite on the v0.22.0 corpus:** 90/90 at the time. The one later test that is release-sensitive (the S12 narrower window) is pinned to v0.21.7, because v0.22.0's /compress succeeds and its S12 resume is already compacted.
+- **H1 HOLDS (locally).** REST without a bearer is 401 (T1:27); with the bearer, every lane column (T1:29). WS `session.list` has no `session_key` (T1:33). The VPS half is open (L14).
+- **H2 HOLDS.** S23 shows idle `queued:true` equal to a plain submit (0 differing frames, identical model inputs). Always-`queued` stays.
+- **H3 REFINED.** Over 214 scored points, every hold decision was right. The blind spot: in the phone-first race the tail is our own just-submitted row for about 5 s. Fix: busy also while Hermes says "Another Hermes process is using this session", until "Session is free" (package cf5e37d). Residual: 4 edges of 51 ms or less.
+- **H4 REFINED.**
+  - After Telegram /new: no older rows (T6:85).
+  - Rotating compression (`in_place:false`): history includes the ancestors (T7:291,293).
+  - DEFAULT in-place compression: the id never moves and history is the compacted rows only (T7b:296). Lane mode treats that as a history rewrite, not a lane move.
+- **H5 HOLDS.** `sessions.changed` arrives 214–854 ms after each phone commit, and a burst of commits within the 2 s debounce yields one signal.
+- **H6 HOLDS.** S24: `POST /api/gateway/restart` → `{ok,pid,name}`. The gateway is down at 10.5 s and back by 14.7 s; a repeat within 10 s is coalesced. **Hazard:** it kills every unsupervised `hermes gateway` of the user on that machine. On Hostinger's s6 image this is still unverified (U3).
+- **U7 answered:** v0.21.7 sends `sessions.changed` and serves the same REST.
+- **Graveyard:**
+  - "Compression always moves the lane's id": disproven by T7b (the default is in place).
+  - "/new is immediate": in v0.22.0 Telegram asks for an Approve Once tap first (T6:34).
+
 ### Ledger (the goal loop reads and updates this every pass)
 
 **States:** todo / doing / done / blocked. GitHub wins over this file if they disagree.
 
 | # | Item | State | Notes |
 |---|---|---|---|
-| L0 | Stage 0 recordings: v0.22.0 S1–S16, S17–S25, T1–T8, H1–H6 verdicts | doing | Background agent, brief `temp/hermes-build/stage0-brief.md`, report `temp/hermes-build/stage0/REPORT.md`. Review it line by line and commit its research/ + src/testing/ paths. |
-| L1 | Package: `errors.ts` (HermesStartError, HermesIncompatibleBackendError); `RpcConnection.open` closes on handshake failure | doing | Code written; tests still owed (S25 once it is recorded). |
-| L2 | Package: close cards at turn end; handle notification / review / subagent / tool-risk / connection / bg+btw answers; catalog moved | doing | Reconciler written. HermesHeadless must still emit `notice` / `notice-cleared` / `side-answer`. |
-| L3 | Package: ticket as a subprotocol (`buildWsUrl(base)` + `wsTicketProtocols`) | doing | Package side done. App `openWs` must pass protocols and check `socket.protocol`. |
-| L4 | Package: slash routes (`slash/routes.ts`) wired into `runSlash`; `commandCatalog()`; `SlashOutcome` side-task / refused | todo | |
-| L5 | Package: `HermesRest` (done); lane (`lanes.ts` and `laneBusy.ts` done); lane mode in HermesHeadless (tip resolution, `sessions.changed`, backstop, holds); always `queued:true` (gated on H2); `turn-lost` on an epoch change | todo | |
-| L6 | Package tests on the recordings (S17–S25, T1–T8), plus the existing tests updated for HermesStartError wrapping; `npm run check` green; live tests run on v0.21.7 + v0.22.0 | todo | |
+| L0 | Stage 0 recordings: v0.22.0 S1–S16, S17–S25, T1–T8, H1–H6 verdicts | done | Package dc5dc88; results above. |
+| L1 | Package: `errors.ts` (HermesStartError, HermesIncompatibleBackendError); `RpcConnection.open` closes on handshake failure | done | Package dc5dc88 + 35f6457 (S25 tests). |
+| L2 | Package: close cards at turn end; handle notification / review / subagent / tool-risk / connection / bg+btw answers; catalog moved | done | 35f6457 (S22 settled, S18/S19 side answers, S20 compress). |
+| L3 | Package: ticket as a subprotocol (`buildWsUrl(base)` + `wsTicketProtocols`) | done | Package + app openWs subprotocol; live test asserts socket.protocol. |
+| L4 | Package: slash routes (`slash/routes.ts`) wired into `runSlash`; `commandCatalog()`; `SlashOutcome` side-task / refused | done | Routes + catalog + side-task outcomes, tested on S17–S20. |
+| L5 | Package: `HermesRest` (done); lane (`lanes.ts` and `laneBusy.ts` done); lane mode in HermesHeadless (tip resolution, `sessions.changed`, backstop, holds); always `queued:true` (gated on H2); `turn-lost` on an epoch change | done | Lane mode + holds + lease wait (cf5e37d); queued:true always (H2); turn-lost on a new epoch. |
+| L6 | Package tests on the recordings (S17–S25, T1–T8), plus the existing tests updated for HermesStartError wrapping; `npm run check` green; live tests run on v0.21.7 + v0.22.0 | done | 107 package tests; the live matrix runs in GitHub Actions (L13). |
 | L7 | App Stage A: `RemoteStartFailure` stages, curated sentences, `classifySpawnFailure` fix (#1495), journal stage, `openWs` 401/403 wording, turn-lost notice, sudo/secret countdown | doing | 6473dabd4: everything except the countdown and the S25-backed system test. Proven fail-first: reverting the classify branch turns the new session.test case red. |
 | L8 | App Stage C: Copy Assistant on Hermes (C0 reproduction first) | blocked | C0 test passes on recorded S4/S12: picker and Copy Last Response work on committed rows. Known gap: the newest reply is copyable only once it commits (right after the turn ends). U6 is asked to the owner. |
 | L9 | App Stage D: lane mode (spawn option `hermesLane`, commands, `hermes:lanes` IPC, chip / notice / divider / busy line, held prompts as a non-blocking condition, `/new` refusal) | doing | a94e2ded3: lane spawn default + hermesLaneKey persisted, the separate-chat command, the held card (non-blocking condition), notices, /new refusal. Owed: tests on T1–T8 once Stage 0 reports; "Change Telegram Thread…" picker (deferred, see R5). |
