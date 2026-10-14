@@ -225,6 +225,110 @@ function sameItem(a: ChatItem, b: ChatItem): boolean {
   return keys.every((key) => left[key] === right[key])
 }
 
+/** A unit of the agent's work between two messages: a thought or a tool call. */
+export type ChatStep = Extract<ChatItem, { kind: 'reasoning' | 'tool' }>
+
+/** What the chat draws: messages as they are, every run of work folded into one row. */
+export type ChatRowItem = Exclude<ChatItem, ChatStep> | { kind: 'activity'; key: string; steps: ChatStep[] }
+
+/**
+ * Fold every run of consecutive reasoning/tool items into ONE activity row.
+ *
+ * WHY (the owner's real conversation, debug bundle 2026-10-14T16-26-49): 425
+ * rows, of which 21 were prompts, 61 replies and 342 (80%) were reasoning
+ * disclosures and tool chips, stacked one per row. A four-command lookup put
+ * nine rows between the question and its answer. In a chat the work is
+ * supporting detail: the reader wants to see THAT the agent worked (and what
+ * it is doing right now), and open the detail only when something looks
+ * wrong. So a run of work is one quiet line, and the messages read as a
+ * conversation again.
+ *
+ * The run is maximal: it ends only at something the reader reads (a prompt,
+ * a reply, a notice). Splitting it at reasoning/tool boundaries would bring
+ * back the stripes this removes.
+ *
+ * The key is the FIRST step's key: a live run grows at its end, so its row
+ * keeps its identity (and its open/closed state) while tools stream in.
+ * Steps are the stabilized items (stabilizeChat ran first), so `sameRow`
+ * can compare them by identity.
+ */
+export function groupActivity(chat: readonly ChatItem[], previous: readonly ChatRowItem[] | null = null): ChatRowItem[] {
+  const out: ChatRowItem[] = []
+  let run: ChatStep[] | null = null
+  for (const item of chat) {
+    if (item.kind === 'reasoning' || item.kind === 'tool') {
+      if (run) run.push(item)
+      else {
+        run = [item]
+        out.push({ kind: 'activity', key: `activity:${item.key}`, steps: run })
+      }
+      continue
+    }
+    run = null
+    out.push(item)
+  }
+  if (!previous || previous.length === 0) return out
+  // Same row reuse as stabilizeChat, so memo(ChatRow) skips a finished run
+  // while the next reply streams below it.
+  const byKey = new Map(previous.map((row) => [row.key, row]))
+  return out.map((row) => {
+    const before = byKey.get(row.key)
+    if (!before) return row
+    if (row.kind === 'activity') {
+      return before.kind === 'activity' && before.steps.length === row.steps.length && before.steps.every((step, i) => step === row.steps[i]) ? before : row
+    }
+    return before === row ? before : row
+  })
+}
+
+/**
+ * The one line a folded run shows: what the agent did, at a glance.
+ *
+ * Tool names are counted, not listed per call (109 of the owner's 206 chips
+ * were `terminal`; "terminal ×4" says it, four rows did not). The headline is
+ * what is happening NOW while the run is live (the running tool's label), and
+ * the agent's own latest heading once it is done, because that heading is
+ * the model's summary of the step ("Checking Gmail watcher cron status").
+ *
+ * `progress` is the LATEST progress update the agent wrote inside its
+ * reasoning (splitReasoning). It stays visible under the folded line: it is
+ * the agent talking to the reader ("I'm running a full live audit now…"), and
+ * hiding it is what made the owner ask "what is going on?" (see
+ * splitReasoning). Only the latest one, because each update supersedes the
+ * one before it.
+ */
+export function summarizeActivity(steps: readonly ChatStep[]): {
+  status: ChatToolStatus
+  tools: string
+  headline: string
+  thoughts: number
+  progress: string
+} {
+  const counts = new Map<string, number>()
+  let thoughts = 0
+  let headline = ''
+  let progress = ''
+  let status: ChatToolStatus = 'done'
+  for (const step of steps) {
+    if (step.kind === 'tool') {
+      counts.set(step.name, (counts.get(step.name) ?? 0) + 1)
+      if (step.status === 'error' && status !== 'running') status = 'error'
+      if (step.status === 'running') {
+        status = 'running'
+        headline = step.label ? `${step.name} ${step.label}` : step.name
+      }
+    } else {
+      thoughts += 1
+      if (step.streaming) status = 'running'
+      const { headings, prose } = splitReasoning(step.text)
+      if (status !== 'running' && headings.length > 0) headline = headings[headings.length - 1]!
+      if (prose) progress = prose
+    }
+  }
+  const tools = [...counts].map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(', ')
+  return { status, tools, headline, thoughts, progress }
+}
+
 /**
  * A reasoning block's readable part, split from its headings.
  *

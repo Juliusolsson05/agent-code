@@ -77,26 +77,54 @@ describe('typing in a Hermes pane', () => {
 // body is never seen, so it must not be in the DOM. Rows: recorded S4 (a
 // tool turn) through the real mapper and ledger.
 describe('collapsed chat rows', () => {
-  it('builds a tool chip body only when it is opened', () => {
+  // Two levels now: the folded run of work, then each tool inside it. Neither
+  // body exists until it is opened.
+  it('builds a run of work, and each tool body, only when opened', () => {
     const view = render(<Pane runtime={{ ...emptyRuntime(), entries: recordedEntries('S4') }} draft="" />)
-    const chips = view.container.querySelectorAll<HTMLDetailsElement>('[data-chat-role="tool"]')
-    expect(chips.length).toBeGreaterThan(0)
+    const run = view.container.querySelector<HTMLDetailsElement>('[data-chat-role="activity-detail"]')!
+    expect(run).not.toBeNull()
+    expect(view.container.querySelectorAll('[data-chat-role="tool"]')).toHaveLength(0)
+    run.open = true
+    fireEvent(run, new Event('toggle'))
+    const tools = view.container.querySelectorAll<HTMLDetailsElement>('[data-chat-role="tool"]')
+    expect(tools.length).toBeGreaterThan(0)
     expect(view.container.querySelectorAll('[data-chat-role="tool"] pre')).toHaveLength(0)
-    chips[0]!.open = true
-    fireEvent(chips[0]!, new Event('toggle'))
-    expect(chips[0]!.querySelectorAll('pre').length).toBeGreaterThan(0)
+    tools[0]!.open = true
+    fireEvent(tools[0]!, new Event('toggle'))
+    expect(tools[0]!.querySelectorAll('pre').length).toBeGreaterThan(0)
   })
+})
 
-  // Owner report 2026-10-14: an opened chip drew its multi-line body inside
-  // the pill (9999px radius) and the curve cut through the text.
-  it('is a pill only while closed; opened, it takes the bubble radius', () => {
+// The owner's real conversation (debug bundle 2026-10-14T16-26-49): 342 of
+// 425 rows were reasoning disclosures and tool chips, one per row, so the
+// answers were hard to find. Every run of work between two messages is one
+// row now. Rows: recorded S4 (a tool turn) through the real mapper and ledger.
+describe('a run of work between two messages', () => {
+  it('is one row naming its tools, not one row per step', () => {
     const view = render(<Pane runtime={{ ...emptyRuntime(), entries: recordedEntries('S4') }} draft="" />)
-    const chip = view.container.querySelector<HTMLDetailsElement>('[data-chat-role="tool"]')!
-    expect(chip.className).toContain('rounded-chip')
-    chip.open = true
-    fireEvent(chip, new Event('toggle'))
-    expect(chip.className).not.toContain('rounded-chip')
-    expect(chip.className).toContain('rounded-slab')
+    const runs = view.container.querySelectorAll('[data-chat-role="activity"]')
+    expect(runs).toHaveLength(1)
+    expect(view.container.querySelectorAll('[data-chat-role="reasoning"], [data-chat-role="tool"]')).toHaveLength(0)
+    expect(runs[0]!.querySelector('summary')!.textContent).toContain('terminal')
+  })
+})
+
+// The owner pasted a whole setup guide as one prompt (same bundle) and the
+// bubble filled more than a screen. Rows: recorded S4 with its prompt text
+// replaced by a long paste (a mechanical mutation of the recording).
+describe('a long prompt', () => {
+  it('folds behind Show more and opens on click', () => {
+    const entries = recordedEntries('S4').map((entry) =>
+      // Only the prompt; user rows that carry tool results stay as recorded.
+      entry.type === 'user' && ((entry as { message?: { content?: unknown } }).message?.content as Array<{ type: string }> | undefined)?.some?.((block) => block.type === 'text')
+        ? { ...entry, message: { role: 'user' as const, content: [{ type: 'text' as const, text: Array.from({ length: 30 }, (_, i) => `Line ${i + 1} of a pasted guide.`).join('\n') }] } }
+        : entry)
+    const view = render(<Pane runtime={{ ...emptyRuntime(), entries }} draft="" />)
+    const prompt = view.container.querySelector('[data-chat-role="user"]')!
+    expect(prompt.querySelector('[data-prompt-folded="true"]')).not.toBeNull()
+    fireEvent.click(prompt.querySelector('button')!)
+    expect(prompt.querySelector('[data-prompt-folded="true"]')).toBeNull()
+    expect(prompt.querySelector('button')!.textContent).toBe('Show less')
   })
 })
 
