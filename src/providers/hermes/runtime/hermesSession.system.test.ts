@@ -234,6 +234,33 @@ describe('HermesSession (AgentSession contract on recorded frames)', () => {
     expect(sid).toBeTruthy()
   })
 
+  // Owner's debug bundle 2026-10-14T16-26-49: pane d9567053 sat dead for
+  // 10m42s after the user signed in again, until a manual reload.
+  it('re-attaches the same conversation by itself after the user signs in again', async () => {
+    const { socket, created } = await startedSession('S3')
+    serviceEvents.emit('disconnect', 'conn-1', 'signed-out')
+    await flush()
+    expect(socket.readyState).toBe(3)
+    serviceEvents.emit('signed-in', 'conn-1')
+    const next = await waitForSocket(1)
+    expect(next).toBeDefined()
+    next.push(READY_FRAME())
+    await next.answerCall('client.capabilities', CAPS)
+    // Same backend process (same epoch): the conversation is re-activated on
+    // its runtime id, the cheap rung of the reconnect ladder.
+    const activate = await next.nextSent((frame) => frame.method === 'session.activate')
+    expect((activate.params as { session_id: string }).session_id).toBe(created.session_id)
+  })
+
+  it('stays away from a REMOVED connection even if a sign-in event arrives', async () => {
+    await startedSession('S3')
+    serviceEvents.emit('disconnect', 'conn-1', 'removed')
+    await flush()
+    serviceEvents.emit('signed-in', 'conn-1')
+    for (let tick = 0; tick < 20; tick += 1) await flush()
+    expect(sockets).toHaveLength(1)
+  })
+
   // Round-1 review c1 #1. A server that keeps refusing the re-attach (here: an
   // RPC error on every resume after a restart) must see ONE retry chain: a
   // superseded socket closing mid-attempt used to schedule a second chain.

@@ -211,6 +211,10 @@ export class HermesConnectionService extends EventEmitter {
       this.revoke(id)
       if (!(await this.tokens.set(id, connection.baseUrl, tokens, owns))) throw new SignInCancelledError()
       this.patchRuntime(id, { state: 'ready', identity: { userId: tokens.userId, provider: tokens.provider }, lastError: null })
+      // Panes that let go of this connection when its sign-in died come back
+      // on their own now (owner's debug bundle: a pane sat dead for 10m42s
+      // after a fresh sign-in, until a manual reload).
+      this.emit('signed-in', id)
     } catch (error) {
       // A superseded attempt publishes nothing: the newer sign-in, Sign out,
       // edit or removal that replaced it owns the state now (round-2 c2 #2).

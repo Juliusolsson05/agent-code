@@ -130,6 +130,19 @@ export class HermesSession extends EventEmitter implements AgentSession {
     if (id !== this.connectionId) return
     this.detach(reason)
   }
+  /** Why this pane let go, so only a sign-out (never a removal) is undone by a new sign-in. */
+  private detachedFor: HermesDisconnectReason | null = null
+  private readonly onServiceSignedIn = (id: string): void => {
+    if (id !== this.connectionId || this.stopped || !this.signedOut || this.detachedFor !== 'signed-out') return
+    // A fresh sign-in on this connection: re-attach the same conversation.
+    // Before this a detached pane stayed dead until Reload Agent (owner's
+    // debug bundle 2026-10-14T16-26-49: pane d9567053, 10m42s).
+    this.signedOut = false
+    this.detachedFor = null
+    this.attempt = 0
+    this.emit('process-state', { active: false, status: 'Reconnecting to Hermes…' })
+    void this.reconnect()
+  }
 
   /**
    * Let go of the server for good (until Reload Agent): signed out, or the
@@ -141,9 +154,11 @@ export class HermesSession extends EventEmitter implements AgentSession {
     // Stays detached: the socket closing below must not start the reconnect
     // loop, which would only redial a connection with no credentials.
     this.signedOut = true
+    this.detachedFor = reason
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
     this.reconnectTimer = null
-    void this.headless.stop().catch(() => undefined)
+    // detach(), not stop(): a fresh sign-in re-attaches (onServiceSignedIn).
+    void this.headless.detach().catch(() => undefined)
     // Open cards can no longer be answered (the socket is gone), and leaving
     // them up kept the pane "blocked on you" with every click failing
     // (round-1 review c1 #2). Hermes fails them closed on its own timeout.
@@ -219,11 +234,13 @@ export class HermesSession extends EventEmitter implements AgentSession {
     headless.on('request-closed', ({ id }: { id: string }) => this.onRequestClosed(id))
     headless.on('connection', (state: HermesConnectionState) => this.onConnection(state))
     service.on('disconnect', this.onServiceDisconnect)
+    service.on('signed-in', this.onServiceSignedIn)
 
     try {
       await headless.start()
     } catch (error) {
       service.off('disconnect', this.onServiceDisconnect)
+      service.off('signed-in', this.onServiceSignedIn)
       service.reportReachability(this.connectionId, false, error)
       this.exited = true
       // A failed start is a failed spawn: SessionManager rejects session:spawn
@@ -247,6 +264,7 @@ export class HermesSession extends EventEmitter implements AgentSession {
     this.unregisterHistory?.()
     this.unregisterHistory = null
     getHermesConnectionService().off('disconnect', this.onServiceDisconnect)
+    getHermesConnectionService().off('signed-in', this.onServiceSignedIn)
     // Detach only: the conversation stays on the server and resumes on the
     // next spawn of this pane (hermes-headless stop() never session.close's).
     await this.headless?.stop().catch(() => undefined)
@@ -293,7 +311,14 @@ export class HermesSession extends EventEmitter implements AgentSession {
       if (outcome.kind === 'prefill') this.emitNotice(`Suggested message: ${outcome.text}`)
       return
     }
-    await this.headless.prompt(text)
+    const outcome = await this.headless.prompt(text)
+    if (outcome.status === 'queued') {
+      // Hermes is still on the previous task and will answer this after it.
+      // Without saying so the typing row under the new message read as if
+      // Hermes were answering IT (owner's debug bundle: "what is going on?"
+      // sent while a gateway restart was still running).
+      this.emit('process-state', { active: true, status: 'Your message is queued; Hermes answers it after the current task.' })
+    }
   }
 
   async resolveCondition(action: ConditionCustomAction): Promise<
