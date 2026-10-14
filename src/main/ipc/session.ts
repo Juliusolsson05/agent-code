@@ -495,6 +495,10 @@ export function registerSessionIpc(
     return await manager.jumpToLatest(sessionId)
   })
 
+  ipcMain.handle('session:composerCommands', async (_evt, sessionId: string) => {
+    return await manager.listComposerCommands(sessionId)
+  })
+
   ipcMain.handle(
     'session:resolveCondition',
     async (_evt, sessionId: string, action: ConditionCustomAction) => {

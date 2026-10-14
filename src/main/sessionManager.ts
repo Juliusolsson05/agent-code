@@ -1,4 +1,5 @@
 import { mainOperations } from '@main/performance/operations.js'
+import type { ComposerCommand } from '@shared/composerCommands/types.js'
 import { RemoteProviderStartError } from '@shared/errors/remoteProviderStartError.js'
 import { ResponseTracker } from '@shared/performance/responseTracker.js'
 import { randomUUID } from 'crypto'
@@ -4702,6 +4703,17 @@ export class SessionManager extends EventEmitter {
    * scrollToBottom already does the job, so 'unsupported' is a normal answer,
    * not an error.
    */
+  /** The provider's slash commands for the composer picker (#1497); [] when it has none. */
+  async listComposerCommands(sessionId: string): Promise<ComposerCommand[]> {
+    const entry = this.sessions.get(sessionId)
+    if (!entry || entry.kind === 'terminal' || typeof entry.session.listComposerCommands !== 'function') return []
+    try {
+      return await entry.session.listComposerCommands()
+    } catch {
+      return []
+    }
+  }
+
   async jumpToLatest(sessionId: string): Promise<{ ok: true } | { ok: false; reason: string }> {
     const entry = this.sessions.get(sessionId)
     if (!entry || entry.kind === 'terminal') return { ok: false, reason: 'no-session' }

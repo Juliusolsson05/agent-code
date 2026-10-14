@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import {
   HermesAuthError,
+  HermesRest,
   HermesStartError,
   backendCompatibility,
   buildWsUrl,
@@ -285,6 +286,34 @@ export class HermesConnectionService extends EventEmitter {
       const url = buildWsUrl(connection.baseUrl)
       const protocols = wsTicketProtocols(ticket)
       return this.deps.openSocket ? this.deps.openSocket(url, protocols) : openWs(url, protocols)
+    }
+  }
+
+  /**
+   * The dashboard REST client for a connection (Telegram lane lookup,
+   * gateway restart). Same broker as the WebSocket, so REST never holds a
+   * second copy of the tokens or refreshes on its own schedule.
+   */
+  restFor(id: string): HermesRest {
+    const connection = this.require(id)
+    return new HermesRest({
+      baseUrl: connection.baseUrl,
+      accessToken: (options) => this.broker(connection).restAccessToken(options),
+      fetchImpl: this.deps.fetchImpl,
+    })
+  }
+
+  /** Unauthenticated `/api/status`: is the messaging gateway running? Null when unreachable. */
+  async gatewayRunning(id: string): Promise<boolean | null> {
+    const connection = this.require(id)
+    try {
+      const fetchImpl = this.deps.fetchImpl ?? fetch
+      const response = await fetchImpl(`${connection.baseUrl.replace(/\/+$/, '')}/api/status`, { signal: AbortSignal.timeout(10_000) })
+      if (!response.ok) return null
+      const body = (await response.json()) as { gateway_running?: unknown }
+      return body.gateway_running === true
+    } catch {
+      return null
     }
   }
 

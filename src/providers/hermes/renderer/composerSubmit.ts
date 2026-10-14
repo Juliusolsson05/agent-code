@@ -9,9 +9,22 @@
 // "may have run" (a socket that died after sending).
 
 import type { ComposerSubmitIo } from '@providers/registry.renderer.capabilities'
+import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
 import type { PromptAcceptance, PromptDeliveryResult } from '@shared/types/providerConfig'
 
-export async function hermesComposerSubmit(io: ComposerSubmitIo): Promise<PromptAcceptance> {
+export async function hermesComposerSubmit(io: ComposerSubmitIo, confirm: typeof requestConfirm = requestConfirm): Promise<PromptAcceptance> {
+  // /restart takes the owner's Telegram bot offline for about a minute and
+  // drains running work (#1497, plan Decision 6, UNCONFIRMED: confirm every
+  // time). Asked here, in the renderer, because main has no UI to ask with;
+  // a cancelled restart sends nothing.
+  if (/^\/restart(\s|$)/i.test(io.input.trim())) {
+    const confirmed = await confirm({
+      title: 'Restart the Hermes gateway?',
+      description: 'Telegram goes offline for about a minute while Hermes restarts its messaging gateway. This conversation stays open.',
+      confirmLabel: 'Restart Gateway',
+    })
+    if (!confirmed) return { kind: 'transport', acceptedAt: Date.now() }
+  }
   const result = await io.deliverPrompt(io.input)
   if (!result.ok) {
     const error = new Error(result.message) as Error & { promptDeliveryResult: PromptDeliveryResult }

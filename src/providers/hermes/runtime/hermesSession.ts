@@ -49,6 +49,8 @@ import type {
 import { HERMES_SIGNED_OUT_MESSAGE, type AgentSession, type SessionOptions } from '@shared/types/session.js'
 import { classifyHermesStartFailure } from '@providers/hermes/runtime/startFailure.js'
 import { toolResultCacheFor } from '@providers/hermes/runtime/toolResultCache.js'
+import { composerCommandsFromCatalog, findComposerCommand } from '@providers/hermes/runtime/composerCommands.js'
+import type { ComposerCommand } from '@shared/composerCommands/types.js'
 import {
   HERMES_ANSWER,
   HERMES_DECLINE,
@@ -70,6 +72,16 @@ export type HermesEntryPayload = {
   storedSessionId: string
   row: Record<string, unknown>
 }
+
+// /restart: wait before the first status check (the old gateway may still be
+// up), then poll; Hermes' own restart takes about a minute in the owner's
+// Docker deployment.
+const RESTART_SETTLE_MS = 5_000
+const RESTART_POLL_MS = 2_000
+const RESTART_DEADLINE_MS = 90_000
+
+/** Before the catalog arrives: what Agent Code handles or refuses on its own. */
+const HERMES_APP_COMMANDS_WITH_REFUSALS: ComposerCommand[] = composerCommandsFromCatalog({})
 
 // Hermes Desktop's reconnect backoff (apps/shared/src/reconnect-backoff.ts):
 // full jitter, 300 ms base, 15 s cap; a socket counts as stable after 5 s.
@@ -107,6 +119,8 @@ export class HermesSession extends EventEmitter implements AgentSession {
   /** Open requests in arrival order; the card shows the oldest per kind. */
   private readonly openRequests: HermesRequest[] = []
   private noticeCounter = 0
+  /** commands.catalog for this attach (listComposerCommands). */
+  private composerCommands: ComposerCommand[] | null = null
   /**
    * The current conversation's rows as emitted, for a renderer that reloads
    * while this session lives (hermesHistory.ts). Reset with the history, so
@@ -309,9 +323,27 @@ export class HermesSession extends EventEmitter implements AgentSession {
     // the re-attach instead of losing it to a dead runtime id.
     if (!this.attached) throw new HermesPromptError('not-ready', 'Hermes is reconnecting; send again in a moment.')
     if (/^\/[a-z0-9]/i.test(text.trim())) {
-      const outcome = await this.headless.runSlash(text.trim())
+      const typed = text.trim()
+      const command = findComposerCommand(this.composerCommands ?? HERMES_APP_COMMANDS_WITH_REFUSALS, typed.slice(1).split(/\s+/)[0] ?? '')
+      if (command?.availability.kind === 'unavailable') {
+        // Never sent: these need a surface Agent Code does not have (or are
+        // terminal-only in Hermes), and slash.exec would act on the slash
+        // worker's copy of the session or print nothing useful.
+        this.emitNotice(command.availability.reason)
+        return
+      }
+      if (command?.source === 'app' && command.name === 'restart') {
+        void this.restartGateway()
+        return
+      }
+      const outcome = await this.headless.runSlash(typed)
       if (outcome.kind === 'output' && outcome.text.trim()) this.emitNotice(outcome.text.trim())
       if (outcome.kind === 'prefill') this.emitNotice(`Suggested message: ${outcome.text}`)
+      if (outcome.kind === 'side-task') {
+        this.emitNotice(outcome.side === 'btw'
+          ? 'Asked on the side; the answer appears here without interrupting the conversation.'
+          : 'Started in the background; the result appears here when it is done.')
+      }
       return
     }
     const outcome = await this.headless.prompt(text)
@@ -322,6 +354,50 @@ export class HermesSession extends EventEmitter implements AgentSession {
       // sent while a gateway restart was still running).
       this.emit('process-state', { active: true, status: 'Your message is queued; Hermes answers it after the current task.' })
     }
+  }
+
+  /** The composer picker's catalog (#1497). Cached per attach; the app commands always come along. */
+  async listComposerCommands(): Promise<ComposerCommand[]> {
+    if (this.composerCommands) return this.composerCommands
+    if (!this.headless || !this.attached) return HERMES_APP_COMMANDS_WITH_REFUSALS
+    try {
+      this.composerCommands = composerCommandsFromCatalog(await this.headless.commandCatalog())
+    } catch {
+      // An older server or a failed discovery: the picker still offers what
+      // Agent Code handles itself, and typed commands still run.
+      return HERMES_APP_COMMANDS_WITH_REFUSALS
+    }
+    return this.composerCommands
+  }
+
+  /**
+   * `/restart` (#1497): Hermes' gateway restart, through the dashboard
+   * (`/restart` is gateway-only and cannot run over the WebSocket). The pane
+   * talks to the dashboard process, which this does not restart, so the
+   * conversation stays attached while Telegram comes back.
+   */
+  private async restartGateway(): Promise<void> {
+    const service = getHermesConnectionService()
+    try {
+      await service.restFor(this.connectionId).restartGateway()
+    } catch (error) {
+      this.emitNotice(`Could not restart Hermes’ gateway: ${describeError(error)}`)
+      return
+    }
+    this.emitNotice('Restarting Hermes’ messaging gateway. Telegram is offline for about a minute.')
+    // Watch the unauthenticated status until the gateway reports running
+    // again. The first seconds are skipped: right after the request the OLD
+    // gateway may still say "running" before it stops.
+    const started = Date.now()
+    await new Promise((resolve) => setTimeout(resolve, RESTART_SETTLE_MS))
+    while (!this.stopped && Date.now() - started < RESTART_DEADLINE_MS) {
+      if ((await service.gatewayRunning(this.connectionId)) === true) {
+        this.emitNotice('Hermes’ gateway is back.')
+        return
+      }
+      await new Promise((resolve) => setTimeout(resolve, RESTART_POLL_MS))
+    }
+    if (!this.stopped) this.emitNotice('Hermes’ gateway did not report back within 90 seconds. Check the server (Hostinger → Docker Manager).')
   }
 
   async resolveCondition(action: ConditionCustomAction): Promise<
@@ -423,6 +499,8 @@ export class HermesSession extends EventEmitter implements AgentSession {
     }
     if (state.kind === 'disconnected') {
       this.attached = false
+      // A reconnect may land on an upgraded or restarted server; refetch.
+      this.composerCommands = null
       this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
       this.emit('process-state', { active: false, status: 'Reconnecting to Hermes…' })
       // A socket that lived less than STABLE_AFTER_MS was a failed attempt:

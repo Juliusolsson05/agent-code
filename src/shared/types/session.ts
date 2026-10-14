@@ -691,6 +691,11 @@ export interface AgentSession extends AgentSessionEmitter {
     | { ok: false; reason: string; lastState?: unknown; failedAtStep?: string }
   >
 
+  /** Optional (Hermes today, #1497): the slash commands the composer's
+   *  command picker offers for this session. Fetched when the picker first
+   *  opens; a provider without it keeps its own slash behaviour. */
+  listComposerCommands?(): Promise<import('@shared/composerCommands/types.js').ComposerCommand[]>
+
   /** Optional (OpenCode Terminal today): scroll the provider's OWN transcript
    *  view to its newest message. For a TUI that pages its transcript on the
    *  alternate screen, xterm's scrollToBottom cannot move anything (#843). The
