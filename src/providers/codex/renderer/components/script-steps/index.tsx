@@ -25,17 +25,27 @@ const PREVIEW_LINES = 4
 // Lines alone are not enough: minified JSON or one long log line wraps into
 // a wall. Fold by characters too.
 const PREVIEW_CHARS = 480
+const RESULTS_SHOWN = 50
+
+// Past this, "Show all" opens the bounded pager instead of one giant <pre>
+// (review B2: a 1.5 MB build log became a single text node).
+const INLINE_MAX_CHARS = 16 * 1024
 
 export function ScriptOutput({ text, tone = 'text-ink-dim' }: { text: string; tone?: string }) {
   const [open, setOpen] = useState(false)
-  const lines = text.replace(/\s+$/, '').split('\n')
-  if (lines.length === 1 && lines[0] === '') return <div className="pl-5 text-[11px] italic text-muted">no output</div>
+  // trimEnd, never /\s+$/: that regex backtracks quadratically over any long
+  // whitespace run (measured 7 s at 50k blank characters, review B1).
+  const trimmed = text.trimEnd()
+  if (!trimmed) return <div className="pl-5 text-[11px] italic text-muted">no output</div>
+  const lines = trimmed.split('\n')
   const head = lines.slice(0, PREVIEW_LINES).join('\n')
   const long = lines.length > PREVIEW_LINES || head.length > PREVIEW_CHARS
-  const shown = open || !long ? text.replace(/\s+$/, '') : head.length > PREVIEW_CHARS ? `${head.slice(0, PREVIEW_CHARS)}…` : head
+  const preview = head.length > PREVIEW_CHARS ? `${head.slice(0, PREVIEW_CHARS)}…` : head
   return (
     <div className="ml-5 border-l border-border pl-2">
-      <pre className={`max-h-72 overflow-auto whitespace-pre-wrap break-words font-code text-[11.5px] leading-[1.5] ${tone}`}>{shown}</pre>
+      {open && trimmed.length > INLINE_MAX_CHARS
+        ? <PagedTextViewer source={trimmed} />
+        : <pre className={`max-h-72 overflow-auto whitespace-pre-wrap break-words font-code text-[11.5px] leading-[1.5] ${tone}`}>{open || !long ? trimmed : preview}</pre>}
       {long && (
         <button type="button" aria-expanded={open} className="font-code text-[11px] text-muted hover:text-ink" onClick={() => setOpen((value) => !value)}>
           {open ? 'Show less' : lines.length > 1 ? `Show all ${lines.length} lines` : 'Show all'}
@@ -63,28 +73,52 @@ function DataSummary({ value }: { value: unknown }) {
   )
 }
 
-/** One short verdict per result, only from what the result itself says. */
-function verdict(result: ScriptResult | undefined): { text: string; tone: string } | null {
+/** One short verdict per result, only from what the result itself says. `label` is what a screen reader says. */
+function verdict(result: ScriptResult | undefined): { text: string; tone: string; label: string } | null {
   if (!result) return null
   if (result.kind === 'command') {
-    if (result.exitCode !== null) return result.exitCode === 0 ? { text: '✓', tone: 'text-ink-dim' } : { text: `✕ exit ${result.exitCode}`, tone: 'text-danger' }
-    if (result.sessionId !== null) return { text: `◌ still running · session ${result.sessionId}`, tone: 'text-accent' }
+    if (result.exitCode !== null) return result.exitCode === 0 ? { text: '✓', tone: 'text-ink-dim', label: 'succeeded' } : { text: `✕ exit ${result.exitCode}`, tone: 'text-danger', label: `failed with exit code ${result.exitCode}` }
+    // A fact about the moment the result was taken, not a live claim: in a
+    // reloaded conversation the session ended long ago (review A10).
+    if (result.sessionId !== null) return { text: `◌ left running · session ${result.sessionId}`, tone: 'text-accent', label: `left running in session ${result.sessionId}` }
     return null
   }
-  if (result.kind === 'mcp') return result.isError ? { text: '✕ error', tone: 'text-danger' } : { text: '✓', tone: 'text-ink-dim' }
-  if (result.kind === 'rejected') return { text: '✕ failed', tone: 'text-danger' }
+  if (result.kind === 'mcp') {
+    if (result.isError || mcpRefused(result.text)) return { text: '✕ error', tone: 'text-danger', label: 'failed' }
+    return { text: '✓', tone: 'text-ink-dim', label: 'succeeded' }
+  }
+  if (result.kind === 'rejected') return { text: '✕ failed', tone: 'text-danger', label: 'failed' }
   return null
 }
 
-/** MCP replies are mostly `{"ok":true,…}` acknowledgements: the ✓ says it. A refusal is a sentence in JSON: show the sentence. */
-function mcpText(text: string): string | null {
+/** An MCP reply `{"ok":false,…}` without isError is still a refusal (review A9). */
+function mcpRefused(text: string): boolean {
+  try {
+    const value = JSON.parse(text) as { ok?: unknown }
+    return Boolean(value && typeof value === 'object' && value.ok === false)
+  } catch {
+    return false
+  }
+}
+
+function Verdict({ result }: { result: ScriptResult | undefined }) {
+  const badge = verdict(result)
+  return badge ? <span className={`ml-auto shrink-0 font-code text-[11px] ${badge.tone}`} aria-label={badge.label}>{badge.text}</span> : null
+}
+
+/**
+ * What an MCP reply shows: nothing for an `{"ok":true,…}` acknowledgement
+ * (the ✓ says it), the sentence of a refusal, the text of plain content, and
+ * any other JSON CLOSED (review B5: it used to open as a pretty dump).
+ */
+function mcpBody(text: string): { kind: 'none' } | { kind: 'text'; text: string } | { kind: 'json'; value: unknown } {
   try {
     const value = JSON.parse(text) as Record<string, unknown>
-    if (value && typeof value === 'object' && value.ok === true) return null
-    for (const key of ['message', 'error', 'text']) if (typeof value?.[key] === 'string') return value[key] as string
-    return JSON.stringify(value, null, 2)
+    if (value && typeof value === 'object' && value.ok === true) return { kind: 'none' }
+    for (const key of ['message', 'error', 'text']) if (typeof value?.[key] === 'string') return { kind: 'text', text: value[key] as string }
+    return { kind: 'json', value }
   } catch {
-    return text
+    return { kind: 'text', text }
   }
 }
 
@@ -101,8 +135,10 @@ function ResultBody({ result }: { result: ScriptResult }): ReactNode {
         </>
       )
     case 'mcp': {
-      const text = mcpText(result.text)
-      return text === null ? null : <ScriptOutput text={text} tone={result.isError ? 'text-danger' : 'text-ink-dim'} />
+      const body = mcpBody(result.text)
+      if (body.kind === 'none') return null
+      if (body.kind === 'json') return <DataSummary value={body.value} />
+      return <ScriptOutput text={body.text} tone={result.isError || mcpRefused(result.text) ? 'text-danger' : 'text-ink-dim'} />
     }
     case 'rejected':
     case 'script-error':
@@ -115,20 +151,18 @@ function ResultBody({ result }: { result: ScriptResult }): ReactNode {
       return <DataSummary value={result.value} />
     case 'empty':
       return null
-    case 'image':
-      return <div className="pl-5 text-[11px] italic text-muted">image attached</div>
   }
 }
 
-function StepLine({ step, result }: { step: ScriptStep; result?: ScriptResult }) {
-  const badge = verdict(result)
+function StepLine({ step, result, time }: { step: ScriptStep; result?: ScriptResult; time?: string | null }) {
   return (
     <div className="flex flex-col gap-0.5" data-script-step={step.kind}>
       <div className="flex min-w-0 items-baseline gap-2 text-[12.5px]">
         <span aria-hidden className="w-3 shrink-0 text-center font-code text-muted">{GLYPH[step.kind]}</span>
         {step.kind !== 'command' && <span className="shrink-0 font-code text-ink">{step.title}</span>}
         <span className={`min-w-0 truncate font-code ${step.kind === 'command' ? 'text-ink' : 'text-muted'}`} title={step.detail}>{step.detail}</span>
-        {badge && <span className={`ml-auto shrink-0 font-code text-[11px] ${badge.tone}`}>{badge.text}</span>}
+        <Verdict result={result} />
+        {time && <span className="shrink-0 font-code text-[11px] text-muted">{time}</span>}
       </div>
       {result && <ResultBody result={result} />}
     </div>
@@ -153,11 +187,22 @@ export function CodexScriptStepsRow({ model }: { model: ScriptStepsModel }) {
           </div>
         )}
         {model.paired
-          ? model.steps.map((step, index) => <StepLine key={index} step={step} result={model.results[index]} />)
+          ? model.steps.map((step, index) => <StepLine key={index} step={step} result={model.results[index]} time={single ? time : null} />)
           : (
             <>
               {model.steps.map((step, index) => <StepLine key={index} step={step} />)}
-              {model.results.map((result, index) => <ResultBody key={`r${index}`} result={result} />)}
+              {/* Not attributable to a step: each result still carries its own
+                  verdict (review B4: exit codes vanished here), capped so a
+                  pathological script cannot mount thousands of rows. */}
+              {model.results.slice(0, RESULTS_SHOWN).map((result, index) => (
+                <div key={`r${index}`} className="flex flex-col gap-0.5" data-script-result={result.kind}>
+                  {verdict(result) && <div className="flex pl-5 text-[11px]"><Verdict result={result} /></div>}
+                  <ResultBody result={result} />
+                </div>
+              ))}
+              {model.results.length > RESULTS_SHOWN && (
+                <div className="pl-5 text-[11px] text-muted">{(model.results.length - RESULTS_SHOWN).toLocaleString()} more results · view exact output</div>
+              )}
             </>
           )}
         {model.truncatedTokens !== null && (

@@ -9,6 +9,7 @@ import { fromCodexScriptSteps, type ScriptStepsModel } from '@providers/codex/re
 import { CodexScriptStepsRow } from '@providers/codex/renderer/components/script-steps'
 import { renderCodexOperation } from '@providers/codex/renderer/rows/dispatch'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
+import { toolResultContentText } from '@providers/shared/renderer/rows/toolResultContent'
 
 // Readable Codex exec scripts (#1510) on RECORDED scripts: the owner's own
 // rollouts, one per script-shape × output-shape class
@@ -136,5 +137,91 @@ describe('the card', () => {
   it('says a script failed', () => {
     render(<CodexScriptStepsRow model={model('seq:exec_command+mcp', 'FAILED')} />)
     expect(screen.getByText('script failed')).toBeTruthy()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Review round on #1518. Each test names the finding it pins.
+// ---------------------------------------------------------------------------
+
+describe('evidence and honesty (review round)', () => {
+  it('exact output is the whole result text every other consumer reads (A3)', () => {
+    for (const entry of fixture.samples) {
+      const { toolUse, result } = mapped(entry)
+      const built = fromCodexScriptSteps(toolUse, result)
+      if (built) expect(built.exactOutput, entry.shape).toBe(toolResultContentText(result.content))
+    }
+  })
+
+  it('a script Codex truncated keeps its note, and the text it printed stays one block (A5, B3; recorded)', () => {
+    const cut = model('inline-output-1', 'SCRIPT-TRUNC')
+    expect(cut.truncatedTokens).toBe(1570)
+    expect(cut.results).toHaveLength(1)
+    expect(cut.results[0]!.kind).toBe('text')
+    expect((cut.results[0] as { text: string }).text).toContain('scrollToLatestRequest: number')
+  })
+
+  it('a JSONL dump printed as one text() stays one block, not a row per line (B3)', () => {
+    // Mechanical mutation of the recorded inline sample: its output part
+    // replaced by 300 JSON lines, as `text(r.output)` of a .jsonl file.
+    const base = sample('inline-1', 'plain')
+    const jsonl = Array.from({ length: 300 }, (_, i) => JSON.stringify({ ts: i, type: 'event', payload: { n: i } })).join('\n')
+    const header = (base.output.output as Array<{ text: string }>)[0]!
+    const mutated = { ...base, output: { ...base.output, output: [header, { type: 'input_text', text: jsonl }] } }
+    const { toolUse, result } = mapped(mutated)
+    const built = fromCodexScriptSteps(toolUse, result)!
+    // One readable text block (the lines are a log, not one JSON value).
+    expect(built.results).toHaveLength(1)
+    expect(built.results[0]!.kind).toBe('text')
+  })
+
+  it('an image result is left to the row that paints images (A2; recorded)', () => {
+    const recorded = JSON.parse(readFileSync(join(import.meta.dirname, '../../../../testing/fixtures/image-reads/codex-exec-single-image.json'), 'utf8')) as { entry: Record<string, unknown> }
+    const mapper = getRendererProviderCapabilities('codex').createTranscriptEntryMapper()
+    const payload = recorded.entry.payload as { call_id: string }
+    const call = { type: 'custom_tool_call', call_id: payload.call_id, name: 'exec', input: 'const r = await tools.view_image({path:"/tmp/a.png"}); image(r.image_url);' }
+    const blocks = [{ timestamp: '2026-07-23T17:50:47.000Z', type: 'response_item', payload: call }, recorded.entry]
+      .flatMap((line) => mapper.map(line).entries)
+      .flatMap((entry) => ((entry as { message?: { content?: unknown } }).message?.content as Array<Record<string, unknown>>) ?? [])
+    const toolUse = blocks.find((block) => block.type === 'tool_use') as unknown as ToolUseBlock
+    const result = blocks.find((block) => block.type === 'tool_result') as unknown as ToolResultBlock
+    expect(fromCodexScriptSteps(toolUse, result)).toBeNull()
+    expect(renderCodexOperation({ toolUse, result, live: false, streaming: false }).toolUse).not.toMatchObject({ receipt: { protocolId: 'codex.script-steps' } })
+  })
+
+  it('a live row is left to the live headline (B6)', () => {
+    const { toolUse, result } = mapped(sample('inline-1', 'plain'))
+    expect(fromCodexScriptSteps(toolUse, result, { live: true })).toBeNull()
+  })
+})
+
+describe('a result is shown under a step only when it is that step\'s (review A1, A4)', () => {
+  it('a fan-out printed in a different order is placed by its own index labels', () => {
+    // Mechanical mutation of the recorded fan-out: its two `{i, result}` parts swapped.
+    const base = sample('fanout:exec_command', 'plain')
+    const parts = base.output.output as Array<{ text: string }>
+    const mutated = { ...base, output: { ...base.output, output: [parts[0], parts[2], parts[1]] } }
+    const { toolUse, result } = mapped(mutated)
+    const built = fromCodexScriptSteps(toolUse, result)!
+    expect(built.paired).toBe(true)
+    expect((built.results[0] as { output: string }).output).toContain('startVitest')
+  })
+
+  it('a count coincidence does not pair an unprinted step with a trailing text("done")', () => {
+    // Mechanical mutation: the recorded fan-out's script, with its results
+    // replaced by one command record and a plain "done".
+    const base = sample('fanout:exec_command', 'plain')
+    const parts = base.output.output as Array<{ text: string }>
+    const record = JSON.parse(parts[1]!.text) as { result: { value: unknown } }
+    const mutated = { ...base, output: { ...base.output, output: [parts[0], { type: 'input_text', text: JSON.stringify(record.result.value) }, { type: 'input_text', text: 'done' }] } }
+    const { toolUse, result } = mapped(mutated)
+    expect(fromCodexScriptSteps(toolUse, result)!.paired).toBe(false)
+  })
+
+  it('results that cannot be attributed still show their own verdict (B4; recorded)', () => {
+    const unpaired = model('fanout:exec_command+mcp', 'BG')
+    expect(unpaired.paired).toBe(false)
+    render(<CodexScriptStepsRow model={unpaired} />)
+    expect(screen.getAllByText(/left running · session/)).toHaveLength(2)
   })
 })

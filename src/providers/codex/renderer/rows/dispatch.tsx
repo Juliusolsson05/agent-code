@@ -248,7 +248,7 @@ export function renderCodexOperation(
   // Placed AFTER every exact adapter and the wait/embedded ones so a proven
   // attribution always wins; the card keeps the exact transport text one
   // click away, so absorbing the result row hides no bytes.
-  const scriptSteps = fromCodexScriptSteps(input.toolUse, input.result)
+  const scriptSteps = fromCodexScriptSteps(input.toolUse, input.result, { live: input.live })
   if (scriptSteps) {
     return {
       toolUse: {

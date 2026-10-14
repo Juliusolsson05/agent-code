@@ -52,3 +52,36 @@ The fixture is `testing/fixtures/codex-exec-scripts/samples.json`: 12 recorded s
 
 ## Out of scope
 The Claude tool-row cleanup goes in a separate PR (G3b).
+
+## Review round (one round, two reviewers; 20 findings)
+
+### Root cause, fixed at the source
+The draft guessed `text()` boundaries from lines, because the rollout mapper flattens text-only output arrays. Now `rollout.ts` records `codex.partLengths` next to the joined string, which is byte-identical for every other consumer, and the adapter reads exact parts. That alone resolves:
+- **A5:** the truncation header is detected;
+- **A6:** "Script error:" counts only as a failed script's last part;
+- **A7 / B3:** JSONL or log output stays one block;
+- **A8:** pretty-printed results no longer merge.
+
+### Pairing (A1, A4)
+- A result shows under a step only when it is that step's kind of record. The recognised records are an ExecCommandResult (identified by its own key set, A11), an MCP CallToolResult, and an allSettled or labelled wrapper.
+- Index labels (`{i, result}`) place results.
+- Otherwise results are listed with their own verdicts (B4), capped at 50 rows (B3).
+
+### Images (A2, A3)
+- Any image part makes the adapter decline, so the existing painter keeps each image beside its filename.
+- `exactOutput = toolResultContentText(content)`.
+
+### Card fixes
+- **B1:** `trimEnd()` replaces the quadratic `/\s+$/`.
+- **B2:** "Show all" for long output goes through the bounded pager.
+- **B5:** unknown MCP JSON is closed; a Promise.all array of records becomes one result each.
+- **A9:** MCP `ok:false` gets ✕.
+- **A10:** "left running · session N".
+- **B9:** duration shown on single steps; spoken verdict labels.
+- **B6:** live rows are declined (the committed card replaces them).
+
+### Tests
+- **B7:** the re-pinned tests now render the card and assert that the outputs and the failure text are visible.
+- **B8 (recorded):** a script-level truncation sample (this repo's own code); the image-reads fixture is declined; exact-output equality for every sample.
+- **Mechanical mutations of recordings:** index placement, a count coincidence, a JSONL dump, a live decline.
+- **Mutation-checked:** 5/6 caught. The survivor is the optional leading newline in the truncation regex, a defensive branch for results without recorded part lengths.
