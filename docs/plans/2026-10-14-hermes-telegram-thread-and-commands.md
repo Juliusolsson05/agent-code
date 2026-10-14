@@ -717,7 +717,36 @@ This would get its own issue + plan.
 
 *(Filled in during execution: Stage 0 results with numbers, hypothesis verdicts H1–H6 as HOLDS / REFINED / DISPROVEN with evidence paths, a graveyard for disproven ideas, rulings, and deviations from this plan, each recorded in the same commit as the change.)*
 
+### Ledger (the goal loop reads and updates this every pass)
+
+**States:** todo / doing / done / blocked. GitHub wins over this file if they disagree.
+
+| # | Item | State | Notes |
+|---|---|---|---|
+| L0 | Stage 0 recordings: v0.22.0 S1–S16, S17–S25, T1–T8, H1–H6 verdicts | doing | Background agent, brief `temp/hermes-build/stage0-brief.md`, report `temp/hermes-build/stage0/REPORT.md`. Review it line by line and commit its research/ + src/testing/ paths. |
+| L1 | Package: `errors.ts` (HermesStartError, HermesIncompatibleBackendError); `RpcConnection.open` closes on handshake failure | doing | Code written; tests still owed (S25 once it is recorded). |
+| L2 | Package: close cards at turn end; handle notification / review / subagent / tool-risk / connection / bg+btw answers; catalog moved | doing | Reconciler written. HermesHeadless must still emit `notice` / `notice-cleared` / `side-answer`. |
+| L3 | Package: ticket as a subprotocol (`buildWsUrl(base)` + `wsTicketProtocols`) | doing | Package side done. App `openWs` must pass protocols and check `socket.protocol`. |
+| L4 | Package: slash routes (`slash/routes.ts`) wired into `runSlash`; `commandCatalog()`; `SlashOutcome` side-task / refused | todo | |
+| L5 | Package: `HermesRest` (done); lane (`lanes.ts` and `laneBusy.ts` done); lane mode in HermesHeadless (tip resolution, `sessions.changed`, backstop, holds); always `queued:true` (gated on H2); `turn-lost` on an epoch change | todo | |
+| L6 | Package tests on the recordings (S17–S25, T1–T8), plus the existing tests updated for HermesStartError wrapping; `npm run check` green; live tests run on v0.21.7 + v0.22.0 | todo | |
+| L7 | App Stage A: `RemoteStartFailure` stages, curated sentences, `classifySpawnFailure` fix (#1495), journal stage, `openWs` 401/403 wording, turn-lost notice, sudo/secret countdown | todo | |
+| L8 | App Stage C: Copy Assistant on Hermes (C0 reproduction first) | todo | |
+| L9 | App Stage D: lane mode (spawn option `hermesLane`, commands, `hermes:lanes` IPC, chip / notice / divider / busy line, held prompts as a non-blocking condition, `/new` refusal) | todo | |
+| L10 | App Stage E: composer command catalog + picker; `/restart` with confirmation and status polling; side-answer cards | todo | |
+| L11 | Tailscale phase 1 (`tailnet.ts`, `describeError`, Settings tag + help, memory register steps) | todo | |
+| L12 | App tests (startup matrix, first pane, lane, picker, copy); `npx tsc -b`; full vitest once | todo | |
+| L13 | Live matrix workflow in the package; `support/upstream-versions.json` tested releases | todo | |
+| L14 | Read-only VPS probe (U1/U4); record the verdicts | todo | Two GETs, bearer from the app's token store, never printed. |
+| L15 | Plan vs built walk-through; package PR, then the app PR (submodule bump + lockfile resync); one review round (2 Claude + 2 Codex reviewers); fix the findings; CI green | todo | Never merge without the owner. |
+
+### Progress log
+
+- 2026-10-14: plan + Tailscale plan committed; issues #1495–#1498 opened; Stage 0 agent started; L1/L2/L3 package code written, plus `HermesRest`, `lanes.ts` and `laneBusy.ts`.
+
 ### Rulings
 
 - **R1: all §2 decisions default, UNCONFIRMED.** The owner asked to build without answering them. Each default is restated in the PR body under "UNCONFIRMED product calls". The cost if wrong is a small UI change per decision; none of them changes the data model.
+- **R3: lane tip candidates include compression-ended rows.** `order=recent` may list a compressed lineage's ROOT, which compression ended. `pickLaneRow` therefore accepts rows that are not ended or that ended with `compression`, and `latest-descendant` walks to the tip. Every other end reason means the lane moved. T6/T7 verify this.
+- **R4: cards close at turn end only, not on the next stream frame.** A spinner frame can arrive while a clarify is open, so closing on "any later frame" (the plan's optional variant) could close a live card.
 - **R2: Tailscale phase 1 ships in this PR.** "Build out the full thing" covers it, and phase 1 is small and Hermes-scoped (URL recognition, connection hint, setup docs). Phase 2 (local Tailscale detection, team rollout) stays a follow-up issue. Plan: `docs/plans/2026-10-14-tailscale-hermes-phase1.md`. The cost if wrong is one reverted commit.
