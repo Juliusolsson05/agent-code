@@ -22,12 +22,14 @@ import { useEffect, useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
 import { Input } from '@renderer/components/ui/input'
-import { HERMES_ANSWER } from '@providers/hermes/runtime/requestAnswers'
+import { HERMES_ANSWER, HERMES_CONNECTION_RESPOND } from '@providers/hermes/runtime/requestAnswers'
+import { useRendererHost } from '@renderer/features/rendererHost/RendererHostContext'
 import { defineView, eraseRegistry } from '@shared/conditions-core/view'
 import type { ConditionView } from '@shared/conditions-core/view'
 import type { ConditionAction, ConditionCustomAction } from '@shared/conditions-core/contract'
 import type {
   HermesApprovalConditionState,
+  HermesConnectionConditionState,
   HermesClarifyConditionState,
   HermesClarifyQuestion,
   HermesHeldConditionState,
@@ -37,6 +39,7 @@ import { withVisibleControls } from '@shared/text/visibleControls'
 
 type HermesStateByKind = {
   'hermes.held': HermesHeldConditionState
+  'hermes.connection': HermesConnectionConditionState
   'hermes.approval': HermesApprovalConditionState
   'hermes.clarify': HermesClarifyConditionState
   'hermes.sudo': HermesValueConditionState
@@ -44,7 +47,7 @@ type HermesStateByKind = {
 }
 
 function isDecline(action: ConditionAction): boolean {
-  return action.kind === 'custom' && action.name !== HERMES_ANSWER
+  return action.kind === 'custom' && action.name !== HERMES_ANSWER && !(action.name === HERMES_CONNECTION_RESPOND && action.label === 'Connect')
 }
 
 function Card({ title, queued, children }: { title: string; queued: number; children: React.ReactNode }) {
@@ -316,6 +319,145 @@ export const hermesSecretView = defineView<'hermes.secret', HermesValueCondition
     ) : null,
 })
 
+// What Hermes is asking for, in words (target.kind × target.action, the
+// vocabulary of tui_gateway/contracts/connectors_operation.py).
+function connectionHeadline(target: HermesConnectionConditionState['targets'][number]): string {
+  const name = target.name
+  if (target.kind === 'connector') return target.action === 'reconnect' ? `Reconnect your ${name} account` : `Connect your ${name} account`
+  if (target.kind === 'mcp') return target.action === 'authorize' ? `Authorize the ${name} MCP server` : `Install the ${name} MCP server`
+  if (target.kind === 'plugin') return `Install the ${name} plugin`
+  if (target.kind === 'skill') return `Enable the ${name} skill`
+  return `Set up ${name}`
+}
+
+const TARGET_STATE_TEXT: Record<string, string> = {
+  initiated: 'waiting for you to finish signing in…',
+  connected: 'connected',
+  skipped: 'skipped',
+  failed: 'failed',
+  expired: 'the link expired',
+  not_connected: 'not connected',
+}
+
+/**
+ * One row of the connection card. Credentials typed here live only in this
+ * component until Connect, are sent once (renderer → main → Hermes, which
+ * writes them to its own config), and are never in the condition state.
+ */
+function ConnectionTargetRow({
+  opId,
+  target,
+  actions,
+  dispatch,
+}: {
+  opId: string
+  target: HermesConnectionConditionState['targets'][number]
+  actions: ConditionAction[]
+  dispatch: (action: ConditionAction) => Promise<void>
+}) {
+  const host = useRendererHost()
+  const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(target.requiredEnv.map((field) => [field.name, field.default])))
+  const [linkProblem, setLinkProblem] = useState<string | null>(null)
+  const mine = actions.filter((action) => action.kind === 'custom' && action.id.startsWith(`${opId}:${target.name}:`))
+  const missing = target.requiredEnv.some((field) => field.required && !values[field.name]?.trim())
+  return (
+    <div className="mt-1.5 rounded-control border border-border bg-canvas px-2.5 py-2" data-connection-target={target.name}>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="font-medium text-ink">{connectionHeadline(target)}</span>
+        {target.state !== 'pending' && <span className={`text-[11px] ${target.state === 'failed' || target.state === 'expired' ? 'text-danger' : 'text-muted'}`}>{TARGET_STATE_TEXT[target.state] ?? target.state}</span>}
+      </div>
+      {target.detail && <p className="mt-0.5 text-[11px] text-ink-dim">{withVisibleControls(target.detail)}</p>}
+      {target.instructions && (
+        // Hermes' own setup text: long, so folded; the buttons stay in reach.
+        <details className="mt-1 text-[11px] text-ink-dim">
+          <summary className="cursor-pointer select-none text-muted">How to set it up</summary>
+          <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words font-code">{withVisibleControls(target.instructions)}</pre>
+        </details>
+      )}
+      {!target.resolved && (
+        <>
+          {target.requiredEnv.length > 0 && (
+            <form
+              className="mt-1.5 flex flex-col gap-1.5"
+              onSubmit={(event) => {
+                event.preventDefault()
+                const env = values
+                // Cleared before dispatch: typed values leave component state as soon as they are handed off.
+                setValues(Object.fromEntries(target.requiredEnv.map((field) => [field.name, ''])))
+                void dispatch({ kind: 'custom', id: `${opId}:${target.name}:composed`, label: 'Connect', name: HERMES_CONNECTION_RESPOND, payload: { opId, answer: { targets: [{ name: target.name, status: 'approved', env }] } } })
+              }}
+            >
+              {target.requiredEnv.map((field) => (
+                <label key={field.name} className="flex flex-col gap-0.5 text-[11px] text-ink-dim">
+                  <span>{field.prompt ?? field.name}{field.required ? '' : ' (optional)'}</span>
+                  <Input
+                    type={field.secret ? 'password' : 'text'}
+                    autoComplete="off"
+                    aria-label={field.name}
+                    value={values[field.name] ?? ''}
+                    onChange={(event) => setValues((current) => ({ ...current, [field.name]: event.target.value }))}
+                  />
+                </label>
+              ))}
+              <div className="flex flex-wrap gap-1.5">
+                <Button type="submit" size="sm" disabled={missing}>Connect</Button>
+                {mine.filter(isDecline).map((action) => (
+                  <Button key={action.kind === 'custom' ? action.id : 'skip'} type="button" size="sm" variant="ghost" onClick={() => void dispatch(action)}>{action.label}</Button>
+                ))}
+              </div>
+            </form>
+          )}
+          {target.requiredEnv.length === 0 && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              {target.connectUrl && (
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => {
+                    setLinkProblem(null)
+                    // modifierHeld: the system browser, never the lane's
+                    // pocket — a sign-in belongs where the user's accounts are.
+                    void host.openExternalUrl({ url: target.connectUrl!, sessionId: '', modifierHeld: true }).then((outcome) => {
+                      if (outcome !== 'opened') setLinkProblem('The sign-in link could not be opened.')
+                    })
+                  }}
+                >
+                  Open sign-in
+                </Button>
+              )}
+              <ActionRow actions={mine} dispatch={dispatch} />
+            </div>
+          )}
+          {target.connectUrl && <p className="mt-1 text-[11px] text-muted">Sign in in your browser; this card updates when Hermes sees the account.</p>}
+          {linkProblem && <p className="mt-1 text-[11px] text-danger">{linkProblem}</p>}
+        </>
+      )}
+    </div>
+  )
+}
+
+export const hermesConnectionView = defineView<'hermes.connection', HermesConnectionConditionState>({
+  kind: 'hermes.connection',
+  layout: 'strip',
+  attention: (state) => (state?.visible ? 'ACTION' : null),
+  Component: ({ state, actions, dispatch }) => {
+    if (!state?.visible) return null
+    const open = state.targets.filter((target) => !target.resolved).length
+    const continueAction = actions.filter((action) => action.kind === 'custom' && action.id === `${state.opId}:continue`)
+    return (
+      <Card title={open === 1 ? 'Hermes needs an account connected' : 'Hermes needs accounts connected'} queued={0}>
+        <p className="text-[11px] text-muted">
+          The reply is paused until you answer.{state.deadlineAt ? <> <Countdown until={state.deadlineAt} /></> : null}
+        </p>
+        {state.targets.map((target) => (
+          <ConnectionTargetRow key={`${state.opId}:${target.name}`} opId={state.opId} target={target} actions={actions} dispatch={dispatch} />
+        ))}
+        <ActionRow actions={continueAction} dispatch={dispatch} />
+      </Card>
+    )
+  },
+})
+
 export const hermesHeldView = defineView<'hermes.held', HermesHeldConditionState>({
   kind: 'hermes.held',
   layout: 'strip',
@@ -337,6 +479,7 @@ export const hermesHeldView = defineView<'hermes.held', HermesHeldConditionState
 
 export const HERMES_VIEWS: Record<string, ConditionView> = eraseRegistry<HermesStateByKind>({
   'hermes.held': hermesHeldView,
+  'hermes.connection': hermesConnectionView,
   'hermes.approval': hermesApprovalView,
   'hermes.clarify': hermesClarifyView,
   'hermes.sudo': hermesSudoView,

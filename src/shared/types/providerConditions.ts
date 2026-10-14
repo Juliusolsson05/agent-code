@@ -374,8 +374,33 @@ export type HermesHeldConditionState = {
   held: Array<{ id: string; text: string }>
 }
 
+/**
+ * Hermes' manage_connections card (a connection operation, recorded S26/S27).
+ * The turn WAITS on it until each target is answered, Continue, or the
+ * deadline. `connectUrl` is the browser sign-in a hosted connector minted;
+ * `requiredEnv` names the values an install still needs (the view collects
+ * them; resolveCondition checks them against THIS operation).
+ */
+export type HermesConnectionConditionState = {
+  visible: boolean
+  opId: string
+  deadlineAt: number | null
+  targets: Array<{
+    name: string
+    kind: string
+    action: string
+    state: string
+    resolved: boolean
+    detail: string | null
+    instructions: string | null
+    connectUrl: string | null
+    requiredEnv: Array<{ name: string; prompt: string | null; required: boolean; secret: boolean; default: string }>
+  }>
+}
+
 export type HermesCondition =
   | { kind: 'hermes.held'; state: HermesHeldConditionState; actions: ConditionAction[] }
+  | { kind: 'hermes.connection'; state: HermesConnectionConditionState; actions: ConditionAction[] }
   | { kind: 'hermes.approval'; state: HermesApprovalConditionState; actions: ConditionAction[] }
   | { kind: 'hermes.clarify'; state: HermesClarifyConditionState; actions: ConditionAction[] }
   | { kind: 'hermes.sudo'; state: HermesValueConditionState; actions: ConditionAction[] }

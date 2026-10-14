@@ -3,13 +3,59 @@
 // imports, so the renderer can import the action names and the validator
 // without dragging the runtime's main-process dependencies along.
 
-import type { HermesRequest } from 'hermes-headless'
+import type { HermesConnectionOperation, HermesRequest } from 'hermes-headless'
 
 import type { HermesClarifyQuestion } from '@shared/types/providerConditions'
 
 /** Action names HermesSession.resolveCondition resolves. */
 export const HERMES_ANSWER = 'hermes.answer'
 export const HERMES_DECLINE = 'hermes.decline'
+/** Answer a connection card (Hermes' connection.respond). */
+export const HERMES_CONNECTION_RESPOND = 'hermes.connection.respond'
+
+export type HermesConnectionAnswer = {
+  targets: Array<{ name: string; status: 'approved' | 'skipped'; env?: Record<string, string> }>
+  settledBy?: 'continue'
+}
+
+/**
+ * The trust boundary for a connection card's answer, like validateAnswer:
+ * the view composes it (which row, typed credentials), and this refuses
+ * anything the OPEN operation did not ask for — an unknown row, a row that
+ * is already resolved, or a credential name its requiredEnv does not list.
+ * A required credential left empty on an approval is refused too: Hermes
+ * would reject it, and the card should say so before the round trip.
+ */
+export function validateConnectionAnswer(operation: HermesConnectionOperation, payload: unknown): HermesConnectionAnswer | null {
+  const record = asRecord(payload)
+  if (!record || operation.settled) return null
+  const settledBy = record.settledBy === 'continue' ? 'continue' as const : undefined
+  if (record.settledBy !== undefined && !settledBy) return null
+  const rawTargets = Array.isArray(record.targets) ? record.targets : []
+  const targets: HermesConnectionAnswer['targets'] = []
+  for (const entry of rawTargets) {
+    const answer = asRecord(entry)
+    if (!answer || typeof answer.name !== 'string') return null
+    const target = operation.targets.find((candidate) => candidate.name === answer.name)
+    if (!target || target.resolved) return null
+    if (answer.status !== 'approved' && answer.status !== 'skipped') return null
+    if (answer.status === 'skipped') {
+      targets.push({ name: target.name, status: 'skipped' })
+      continue
+    }
+    const env = asRecord(answer.env) ?? {}
+    const allowed = new Map(target.requiredEnv.map((field) => [field.name, field]))
+    const out: Record<string, string> = {}
+    for (const [key, value] of Object.entries(env)) {
+      if (!allowed.has(key) || typeof value !== 'string' || value.length > 8000) return null
+      if (value.trim()) out[key] = value
+    }
+    if (target.requiredEnv.some((field) => field.required && !out[field.name])) return null
+    targets.push({ name: target.name, status: 'approved', ...(Object.keys(out).length > 0 ? { env: out } : {}) })
+  }
+  if (targets.length === 0 && !settledBy) return null
+  return { targets, ...(settledBy ? { settledBy } : {}) }
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null

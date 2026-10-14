@@ -13,6 +13,7 @@ export const HERMES_CONDITION_POLICY: ProviderConditionPolicy = {
     'hermes.clarify': 'condition-outlet',
     'hermes.sudo': 'condition-outlet',
     'hermes.secret': 'condition-outlet',
+    'hermes.connection': 'condition-outlet',
     // Held prompts sit above the composer like a request card, but are not
     // in attentionKinds: the pane is waiting on Telegram, not on the user.
     'hermes.held': 'condition-outlet',
@@ -24,5 +25,6 @@ export const HERMES_CONDITION_POLICY: ProviderConditionPolicy = {
     { kind: 'hermes.clarify', label: 'QUESTION' },
     { kind: 'hermes.sudo', label: 'ACTION' },
     { kind: 'hermes.secret', label: 'ACTION' },
+    { kind: 'hermes.connection', label: 'ACTION' },
   ],
 }
