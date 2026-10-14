@@ -2,7 +2,7 @@
 
 Refs #1482.
 Branch `feat/hermes-agent-pane` · Worktree `.worktrees/hermes-agent-pane` · Base `origin/main` @ `1bcba637` (2026-09-27 tip, fetched 2026-10-13)
-Status: draft for review (plan-only run; no implementation until approved)
+Status: approved 2026-10-13 (owner: "Yes good, lets build this whole thing … do not stop until we have the full thing built out in agent code and validated"); full build running as a goal loop with parallel orchestration reviewers. Decisions 3-11 ship at their defaults under that go-ahead (not individually confirmed — still listed as UNCONFIRMED product calls in the PR).
 Decomposition: `docs/decomposition/hermes-remote-chat.md`. The decomposition
 wins where they differ; Tasks 1-9 are its stages, plus cross-repo ordering.
 
@@ -569,6 +569,21 @@ Each item goes to a follow-up issue filed at PR time:
   - Plan vs built; one `pr-review` round; open the app PR (`Fixes #1482`);
     file the Out of scope follow-ups.
   - Stop. No merge without explicit approval.
+
+## Loop (ledger)
+
+This plan IS the loop ledger. Every pass: re-read this file and `git log`, continue from the first unticked task, append an Execution notes line, commit, push.
+
+- Builder: this session (Claude). It implements every task itself; coupled code is never delegated (memory: delegated implementation is risky).
+- Reviewers: at each stage boundary (tasks 3-6 package, 8, 9, 10 app), two read-only reviewers through the orchestration MCP, run IN PARALLEL with the next task. Providers: Codex + Pi or OpenCode, never Claude (the builder's provider). Briefs at `temp/hermes-loop/review-<stage>/{a,b}.md` (git-ignored), reports beside them. One round per boundary; findings are triaged against the code and fixed or declined with a reason in the notes below.
+- Merge authority: NONE. PRs are opened; nothing is merged without the owner.
+- Stop rule: `goal_loop_complete` only when tasks 1-10 are ticked, both PRs are open with green CI, the review dispositions are recorded, and Plan vs built is filled. `blocked` only if a [gate] hypothesis is disproven or something needs the owner.
+
+## Rulings
+
+- Ruling (2026-10-13): Stage 0 records against the REAL `hermes serve` from `vendor/hermes-agent-src` (v0.21.7), run locally in an isolated `HERMES_HOME` with the auth gate ON (password provider), talking to a scripted OpenAI-compatible model server (`hermes-headless/testing/scripted-model/`). Why: no VPS URL was given, and the wire between Agent Code and Hermes is what we must record; a scripted model makes every turn (tools, approvals, clarify, sudo, secret, errors) deterministic and repeatable, so the same harness doubles as the live integration suite. Cost if wrong: VPS-only behaviour (TLS, reverse-proxy path prefixes, network latency) and the Nous OAuth branch (S2) stay unrecorded. They are reported as UNVERIFIED and re-recorded when the owner provides a VPS.
+- Ruling (2026-10-13): "heavy integration tests" means three tiers. (1) Recorded-corpus system tests that run in CI with no Python. (2) A live tier (`npm run test:live` in the package and an app live test) that boots the real `hermes serve` plus the scripted model and drives `HermesHeadless` / `HermesSession` end to end. (3) Differential tests: a live fold compared with a resume fold of the same conversation. Tier 2 is not in CI: it needs a Python and Hermes install.
+- Ruling (2026-10-13): the Hermes source is a reference checkout under `vendor/` (not `third_party/`). The owner asked for "a third party vendor"; repo CLAUDE.md reserves `third_party/` for shipped runtime artifacts with manifests, and nothing of Hermes ships in Agent Code. It is a shallow submodule at the release commit `71d34bad` (1.25 GB full history).
 
 ## Execution notes
 
