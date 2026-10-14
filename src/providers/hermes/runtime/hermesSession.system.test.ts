@@ -6,6 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { setHermesConnectionService } from '@main/hermes/registry.js'
+import { HermesSignedOutError } from '@main/hermes/tokenBroker.js'
 import type { HermesConnectionService } from '@main/hermes/service.js'
 import { HermesSession, type HermesEntryPayload } from '@providers/hermes/runtime/hermesSession.js'
 import { HERMES_ANSWER } from '@providers/hermes/runtime/requestAnswers.js'
@@ -31,14 +32,18 @@ function recorded(scenario: string) {
 }
 
 let sockets: FakeSocket[] = []
+// A dial that throws instead of opening a socket (set per test).
+let dialFailure: Error | null = null
 const reports = { backend: [] as unknown[], reachability: [] as boolean[] }
 
 beforeEach(() => {
   sockets = []
+  dialFailure = null
   reports.backend = []
   reports.reachability = []
   setHermesConnectionService({
     dialFor: () => async () => {
+      if (dialFailure) throw dialFailure
       const socket = new FakeSocket()
       sockets.push(socket)
       return socket
@@ -150,5 +155,39 @@ describe('HermesSession (AgentSession contract on recorded frames)', () => {
     await session.stop()
     expect(of('exit')).toEqual([{ exitCode: 0 }])
     expect(socket.sent.some((frame) => frame.method === 'session.close')).toBe(false)
+  })
+
+  it('/new rebinds the pane to the new conversation before its rows arrive', async () => {
+    // Two REAL conversations: the pane starts on S3's, `/new` is answered
+    // with S4's create result, so the stored ids genuinely differ.
+    const { of, socket, session, created } = await startedSession('S3')
+    const next = recorded('S4').created
+    const delivering = session.deliverPromptText('/new')
+    await socket.answerCall('session.close', { closed: true })
+    await socket.answerCall('session.create', next)
+    await socket.answerCall('session.events.since', ring())
+    await delivering
+    expect(of('provider-session-changed')).toEqual([
+      expect.objectContaining({ providerSessionId: created.stored_session_id, reason: 'hermes-created' }),
+      expect.objectContaining({ providerSessionId: next.stored_session_id, reason: 'hermes-new-conversation' }),
+    ])
+    expect(session.getProviderSessionId()).toBe(next.stored_session_id)
+  })
+
+  it('stops redialling once the connection is signed out, and says what to do', async () => {
+    const { of, socket, captured } = await startedSession('S3')
+    // Jitter 0: the first retry fires on the next tick instead of up to 300 ms later.
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    dialFailure = new HermesSignedOutError('conn-1')
+    socket.close(1006, 'network')
+    for (let attempt = 0; attempt < 50 && !of('jsonl-entry').length; attempt += 1) await flush()
+    const notice = (of('jsonl-entry') as HermesEntryPayload[]).at(-1)!
+    expect(String(notice.row.text)).toMatch(/Signed out of this Hermes connection/)
+    expect(of('process-state').at(-1)).toEqual({ active: false, status: 'Signed out of Hermes' })
+    // No further attempt is scheduled: a dead sign-in must not spin.
+    const before = captured.length
+    for (let tick = 0; tick < 20; tick += 1) await flush()
+    expect(captured.length).toBe(before)
+    expect(sockets).toHaveLength(1)
   })
 })
