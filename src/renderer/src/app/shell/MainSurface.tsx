@@ -9,6 +9,7 @@ import { NewAgentPlacementOverlay } from '@renderer/features/workspace/ui/NewAge
 import { usePlacementOverlay } from '@renderer/features/workspace/surfaces/usePlacementOverlay'
 import { RetainedWorkspaceSurface } from './RetainedWorkspaceSurface'
 import { WelcomeEmpty } from './WelcomeEmpty'
+import { useSidekickSpotlightActive } from '@renderer/features/sidekick/state/sidekickSpotlight'
 
 // The main-area mode routing, extracted verbatim from App.tsx (#494).
 //
@@ -26,6 +27,7 @@ export function MainSurface({ onNewTabRequest }: { onNewTabRequest: () => void }
   const settingsPageOpen = useAppStore(state => state.settingsPageOpen)
   const closeSettingsPage = useAppStore(state => state.closeSettingsPage)
   const placement = usePlacementOverlay()
+  const sidekickSpotlight = useSidekickSpotlightActive(workspace.state)
   const { state, activeTab } = workspace
   const readerModeTabId = workspace.readerMode?.tabId ?? null
   const spotlightTabId = workspace.spotlight?.tabId ?? null
@@ -38,9 +40,18 @@ export function MainSurface({ onNewTabRequest }: { onNewTabRequest: () => void }
 
   // Exactly one takeover surface at a time, in the priority order the old
   // if/else ladder had. Settings wins over Reader wins over Spotlight.
+  //
+  // 'sidekick' (Sidekick Spotlight) renders NOTHING here: the takeover is the
+  // Sidekick column itself, a sibling of <main> that grows to fill the row
+  // (see sidekickSpotlight.ts). This branch exists to retain the lanes hidden
+  // under it, exactly as under Reader or Spotlight (#752). It sits above
+  // Reader/Spotlight because it is the newer, explicit gesture and both cannot
+  // be on screen at once; Settings still wins (sidekickSpotlightActive).
   const takeover = settingsPageOpen
     ? 'settings'
-    : workspace.readerMode && readerModeTabExists
+    : sidekickSpotlight
+      ? 'sidekick'
+      : workspace.readerMode && readerModeTabExists
       ? 'reader'
       : workspace.spotlight && spotlightTabExists
         ? 'spotlight'

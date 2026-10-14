@@ -158,6 +158,27 @@ describe('focus-mode keyboard ownership', () => {
     view.unmount()
   })
 
+  it('Spotlight reaches the Sidekick: ⌥S is routed from its region and Esc leaves Sidekick Spotlight', () => {
+    // The region gate above passes only listed commands, so before this the
+    // Spotlight chord died there and Sidekick Spotlight had no keyboard exit.
+    const setSidekickSpotlight = vi.fn()
+    harness.appState = { ...harness.appState, keyboardRegion: 'sidekick', sidekickSpotlight: true, setSidekickSpotlight }
+    const { workspace } = makeWorkspace('spotlight' as const)
+    const view = render(<KeyboardHarness workspace={workspace} />)
+
+    fireEvent.keyDown(document, { altKey: true, code: 'KeyS', key: 'ß' })
+    const escape = new KeyboardEvent('keydown', { code: 'Escape', key: 'Escape', bubbles: true, cancelable: true })
+    document.body.dispatchEvent(escape)
+
+    const invoked = (harness.appState.requestCommandInvocation as ReturnType<typeof vi.fn>).mock.calls.map(call => call[0])
+    expect(invoked).toEqual(['toggle-spotlight'])
+    expect(setSidekickSpotlight).toHaveBeenCalledWith(false)
+    expect(escape.defaultPrevented).toBe(true)
+    // The lane Spotlight is never what Esc closes from the Sidekick.
+    expect(workspace.toggleSpotlight).not.toHaveBeenCalled()
+    view.unmount()
+  })
+
   it('routes the bare lane arrows to the registered commands on the plain stage', () => {
     // #992 stage 5: the ⌥ grammar became commands. This is the end-to-end
     // proof the router (not a resurrected inline branch) delivers them.

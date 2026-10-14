@@ -10,6 +10,8 @@ import type { SidekickIndexView, SidekickSummary } from '@shared/sidekicks/types
 import { SidekickPanel } from './SidekickPanel'
 import { scrubbedPanelPointer, SidekickPanelSurface } from './SidekickPanelSurface'
 import { useKeyboardRegionFollowsPointer } from './KeyboardRegionContext'
+import { spotlightCommands } from '@renderer/features/spotlight/commands/spotlightCommands'
+import { sidekickSpotlightActive } from '@renderer/features/sidekick/state/sidekickSpotlight'
 
 // The mounted Sidekick panel (#1493, review round 1 F2/F3/F6). The leaf is the
 // one stand-in: renderWorkspaceLeaf draws a whole TileLeaf, whose own focus
@@ -200,5 +202,55 @@ describe('Sidekick column is a native lane (#1493 follow-up)', () => {
     act(() => { useAppStore.getState().setKeyboardRegion('workspace') })
     fireEvent.pointerDown(screen.getByRole('separator', { name: 'Resize Sidekick' }))
     expect(useAppStore.getState().keyboardRegion).toBe('workspace')
+  })
+})
+
+describe('Sidekick Spotlight (#1493 follow-up)', () => {
+  it('fills the window with the SAME leaf (no remount) and drops the resize boundary', () => {
+    useSidekickIndexStore.getState().accept(view([summary('this-window')]))
+    const workspace = workspaceWith({ sk: { kind: 'claude', cwd: HOME, sidekickId: ID } })
+    render(<SidekickPanel workspace={workspace} actions={actionsWith(vi.fn())} />)
+    const leaf = screen.getByLabelText('leaf sk')
+    act(() => { useAppStore.getState().setSidekickSpotlight(true) })
+    const region = screen.getByRole('region', { name: 'Sidekick' })
+    expect(region.className).toContain('flex-1')
+    expect(region.getAttribute('style')).toBeNull()
+    expect(screen.queryByRole('separator', { name: 'Resize Sidekick' })).toBeNull()
+    // An xterm in the sidekick would be disposed and replayed on a remount.
+    expect(screen.getByLabelText('leaf sk')).toBe(leaf)
+    act(() => { useAppStore.getState().setSidekickSpotlight(false) })
+    expect(screen.getByRole('separator', { name: 'Resize Sidekick' })).toBeTruthy()
+    expect(screen.getByLabelText('leaf sk')).toBe(leaf)
+  })
+
+  it('the Spotlight command spotlights the sidekick from its region, exits it from anywhere, and leaves lane Spotlight alone otherwise', () => {
+    const command = spotlightCommands.find(entry => entry.id === 'toggle-spotlight')!
+    const workspace = { ...workspaceWith({}), toggleSpotlight: vi.fn() } as unknown as Workspace
+    act(() => { useAppStore.getState().setKeyboardRegion('sidekick') })
+    command.run({ workspace } as never)
+    expect(useAppStore.getState().sidekickSpotlight).toBe(true)
+    act(() => { useAppStore.getState().setKeyboardRegion('workspace') })
+    command.run({ workspace } as never)
+    expect(useAppStore.getState().sidekickSpotlight).toBe(false)
+    command.run({ workspace } as never)
+    expect(workspace.toggleSpotlight).toHaveBeenCalledTimes(1)
+    expect(useAppStore.getState().sidekickSpotlight).toBe(false)
+  })
+
+  it('is only on screen while the panel is open and Settings is not covering it', () => {
+    const open = { sidekickPanel: { open: true, width: 420, sidekickId: ID } }
+    expect(sidekickSpotlightActive({ sidekickSpotlight: true, settingsPageOpen: false }, open)).toBe(true)
+    expect(sidekickSpotlightActive({ sidekickSpotlight: true, settingsPageOpen: true }, open)).toBe(false)
+    expect(sidekickSpotlightActive({ sidekickSpotlight: true, settingsPageOpen: false }, { sidekickPanel: { ...open.sidekickPanel, open: false } })).toBe(false)
+  })
+
+  it('hiding the Sidekick clears its Spotlight, so the next ⌘J does not reopen it full-window', () => {
+    useSidekickIndexStore.getState().accept(view([summary('this-window')]))
+    const ws = workspaceWith({ sk: { kind: 'claude', cwd: HOME, sidekickId: ID } })
+    surfaceDeps.workspace = { ...ws, state: { ...ws.state, sidekickPanel: { open: false, width: 420, sidekickId: ID } } }
+    surfaceDeps.actions = actionsWith(vi.fn())
+    act(() => { useAppStore.getState().setSidekickSpotlight(true) })
+    render(<SidekickPanelSurface />)
+    expect(useAppStore.getState().sidekickSpotlight).toBe(false)
   })
 })

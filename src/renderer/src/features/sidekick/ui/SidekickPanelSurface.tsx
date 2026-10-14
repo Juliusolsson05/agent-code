@@ -67,6 +67,16 @@ export function SidekickPanelSurface() {
     if (!open || settingsPageOpen) setRegion('workspace')
   }, [open, settingsPageOpen, setRegion])
 
+  // A hidden panel cannot be spotlit either. Without this, hiding the
+  // Sidekick (⌘J, the Hide menu item) while it filled the window would leave
+  // the flag up, and the next ⌘J would reopen it full-window. Settings does
+  // not clear it: Settings covers both, and Esc out of Settings should return
+  // to the sidekick spotlight the user was in.
+  const setSidekickSpotlight = useAppStore(state => state.setSidekickSpotlight)
+  useEffect(() => {
+    if (!open) setSidekickSpotlight(false)
+  }, [open, setSidekickSpotlight])
+
   // WHY the panel hides while Settings is open (#1493 follow-up): Settings is
   // a takeover of the WORKSPACE — MainSurface retains the lanes under
   // display:none — and the Sidekick is a lane-shaped column beside them. It

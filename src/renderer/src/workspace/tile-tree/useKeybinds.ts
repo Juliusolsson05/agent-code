@@ -291,6 +291,9 @@ export const SIDEKICK_REGION_COMMAND_IDS: ReadonlySet<string> = new Set([
   'sidekick-picker',
   'new-sidekick',
   'open-command-palette',
+  // Spotlight works on the sidekick too (#1493 follow-up): the command itself
+  // decides which Spotlight the chord means (spotlightCommands.ts).
+  'toggle-spotlight',
 ])
 
 /** Chord -> candidate commands, built once per override change. */
@@ -901,6 +904,13 @@ export function useKeybinds(
       // Checked before the Escape takeovers on purpose, after the app-modal
       // and in-pane picker owners above (those are explicit, visible owners).
       if (useAppStore.getState().keyboardRegion === 'sidekick') {
+        // Esc leaves Sidekick Spotlight, the same one-key dismiss as lane
+        // Spotlight below — which this gate would otherwise never reach.
+        if (k === 'Escape' && useAppStore.getState().sidekickSpotlight && !fullscreenEditorOwnsWorkspace) {
+          e.preventDefault()
+          useAppStore.getState().setSidekickSpotlight(false)
+          return
+        }
         const sidekickCommandId = routedCommandForEvent(e, bindingIndex, GLOBAL_CONTEXT_ONLY)
         if (sidekickCommandId && SIDEKICK_REGION_COMMAND_IDS.has(sidekickCommandId)) {
           e.preventDefault()
