@@ -6,6 +6,8 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 const newLaneCommand = layoutCommands.find(command => command.id === 'new-tiled-lane')
 if (!newLaneCommand) throw new Error('New Lane command is missing')
+const newLaneBeforeCommand = layoutCommands.find(command => command.id === 'new-tiled-lane-before')
+if (!newLaneBeforeCommand) throw new Error('New Lane Before command is missing')
 
 function commandContext(options: {
   laneIds?: Array<string | undefined>
@@ -14,13 +16,13 @@ function commandContext(options: {
   inserted?: boolean
 } = {}): {
   context: CommandContext
-  insertTiledLaneRight: ReturnType<typeof vi.fn>
+  insertTiledLane: ReturnType<typeof vi.fn>
   showPaneToast: ReturnType<typeof vi.fn>
 } {
   const laneIds = options.laneIds ?? ['a', 'b', 'c']
   const focusedLane = options.focusedLane ?? 1
   const liveIds = options.liveIds ?? laneIds.filter((id): id is string => Boolean(id))
-  const insertTiledLaneRight = vi.fn().mockReturnValue(options.inserted ?? true)
+  const insertTiledLane = vi.fn().mockReturnValue(options.inserted ?? true)
   const showPaneToast = vi.fn()
   const tabs = liveIds.map(id => ({ id: `tab-${id}`, title: `project-${id}` }))
   const workspace = {
@@ -36,13 +38,13 @@ function commandContext(options: {
       ),
       pinnedSessionIds: [],
     },
-    insertTiledLaneRight,
+    insertTiledLane,
     showPaneToast,
   } as unknown as Workspace
 
   return {
     context: { workspace, ui: {}, flags: {} } as unknown as CommandContext,
-    insertTiledLaneRight,
+    insertTiledLane,
     showPaneToast,
   }
 }
@@ -78,7 +80,7 @@ describe('New Lane command', () => {
 
     newLaneCommand.run(harness.context)
 
-    expect(harness.insertTiledLaneRight).toHaveBeenCalledWith(1)
+    expect(harness.insertTiledLane).toHaveBeenCalledWith(1, 'after')
     expect(harness.showPaneToast).toHaveBeenCalledWith('b', 'New lane created')
   })
 
@@ -87,7 +89,7 @@ describe('New Lane command', () => {
 
     newLaneCommand.run(harness.context)
 
-    expect(harness.insertTiledLaneRight).toHaveBeenCalledWith(1)
+    expect(harness.insertTiledLane).toHaveBeenCalledWith(1, 'after')
     expect(harness.showPaneToast).not.toHaveBeenCalled()
   })
 
@@ -110,7 +112,7 @@ describe('New Lane command', () => {
 
     newLaneCommand.run(harness.context)
 
-    expect(harness.insertTiledLaneRight).toHaveBeenCalledWith(1)
+    expect(harness.insertTiledLane).toHaveBeenCalledWith(1, 'after')
     expect(harness.showPaneToast).not.toHaveBeenCalled()
   })
 
@@ -119,7 +121,7 @@ describe('New Lane command', () => {
 
     newLaneCommand.run(harness.context)
 
-    expect(harness.insertTiledLaneRight).toHaveBeenCalledWith(1)
+    expect(harness.insertTiledLane).toHaveBeenCalledWith(1, 'after')
     expect(harness.showPaneToast).not.toHaveBeenCalled()
   })
 
@@ -131,7 +133,43 @@ describe('New Lane command', () => {
 
     newLaneCommand.run(harness.context)
 
-    expect(harness.insertTiledLaneRight).not.toHaveBeenCalled()
+    expect(harness.insertTiledLane).not.toHaveBeenCalled()
+    expect(harness.showPaneToast).not.toHaveBeenCalled()
+  })
+})
+
+// New Lane Before shares New Lane's run body (`runInsertLane`), so these cases
+// pin only what is DIFFERENT — the side it asks for — plus the two properties
+// that are easiest to break when the source agent shifts right: the toast
+// still finds the source session, and the shared admission still applies.
+describe('New Lane Before command', () => {
+  it('shares New Lane admission, including the first lane of a row', () => {
+    // Lane 0 is the case this command exists for: New Lane cannot put space
+    // to its left at all.
+    expect(newLaneBeforeCommand.when?.(commandContext({ focusedLane: 0 }).context)).toBe(true)
+
+    const atCeiling = commandContext({
+      laneIds: Array.from({ length: 10 }, (_, index) => `a${index}`),
+      focusedLane: 0,
+    })
+    expect(newLaneBeforeCommand.when?.(atCeiling.context)).toBe(false)
+  })
+
+  it('inserts before the captured focus and toasts the agent that shifted right', () => {
+    const harness = commandContext({ laneIds: ['a', 'b', 'c'], focusedLane: 0 })
+
+    newLaneBeforeCommand.run(harness.context)
+
+    expect(harness.insertTiledLane).toHaveBeenCalledWith(0, 'before')
+    expect(harness.showPaneToast).toHaveBeenCalledWith('a', 'New lane created')
+  })
+
+  it('does not claim success when the reducer refuses', () => {
+    const harness = commandContext({ inserted: false })
+
+    newLaneBeforeCommand.run(harness.context)
+
+    expect(harness.insertTiledLane).toHaveBeenCalledWith(1, 'before')
     expect(harness.showPaneToast).not.toHaveBeenCalled()
   })
 })
