@@ -15,6 +15,7 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 export function useRenderedLeaseHygiene(workspace: Workspace): void {
   const agentViewMode = useAppStore(state => state.settings.agentViewMode)
   const settingsPageOpen = useAppStore(state => state.settingsPageOpen)
+  const sidekickSpotlight = useAppStore(state => state.sidekickSpotlight)
   // The controller no longer renders on every runtime replacement. A picker
   // acquired while its surface is hidden must still be cleared, but ordinary
   // terminal/text/debug changes cannot invalidate this cross-cutting guard.
@@ -49,7 +50,14 @@ export function useRenderedLeaseHygiene(workspace: Workspace): void {
     // Escape/Enter/arrows acting on hidden state. This typo class is the reason
     // the cross-app audit calls for a typecheck gate — `workspace.reader`
     // compiled silently because nothing ran `tsc`.
-    if (!workspace.readerMode && !workspace.spotlight && !settingsPageOpen) return
+    // Sidekick Spotlight hides the lanes too (#1493 follow-up), and their
+    // picker handlers in useKeybinds run BEFORE the Sidekick region gate: a
+    // surviving lane Copy Assistant picker took Enter from the spotlit
+    // Sidekick's composer and copied a hidden message (#1513 review). Only the
+    // LANES are hidden there, so a sidekick row's own picker is left alone —
+    // the Sidekick is what the user is looking at.
+    const sidekickOnly = sidekickSpotlight && !workspace.readerMode && !workspace.spotlight && !settingsPageOpen
+    if (!workspace.readerMode && !workspace.spotlight && !settingsPageOpen && !sidekickSpotlight) return
     // WHY reader/spotlight/settings clear picker leases:
     // these surfaces hide or replace the feed interaction layer while global
     // keybinds are still alive. If a Copy Assistant or Copy Code Block picker
@@ -58,11 +66,12 @@ export function useRenderedLeaseHygiene(workspace: Workspace): void {
     // Draft-driven rendering is intentionally unaffected because composer
     // draft text is real user state; picker leases are transient affordances.
     for (const sessionId of Object.keys(workspace.runtimes)) {
+      if (sidekickOnly && workspace.state.sessions[sessionId]?.sidekickId) continue
       const runtime = workspace.runtimes[sessionId]
       if (runtime?.assistantPicker) workspace.pickerCancel(sessionId)
       if (runtime?.codeBlockPicker) workspace.setCodeBlockPicker(sessionId, null)
       workspace.releaseRenderedViewLease(sessionId, 'copy-assistant-message')
       workspace.releaseRenderedViewLease(sessionId, 'copy-code-block')
     }
-  }, [settingsPageOpen, workspace, leaseSignals])
+  }, [settingsPageOpen, sidekickSpotlight, workspace, leaseSignals])
 }

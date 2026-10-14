@@ -1,5 +1,6 @@
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useWorkspace } from '@renderer/workspace/workspaceStore'
+import { useSidekickSpotlightActive } from '@renderer/features/sidekick/state/sidekickSpotlight'
 import { useControlRegistration } from '@renderer/control/registerRendererHost'
 import { WorkspaceProvider } from '@renderer/workspace/WorkspaceContext'
 import { useKeybinds } from '@renderer/workspace/tile-tree/useKeybinds'
@@ -102,6 +103,7 @@ export default function App() {
     defaultBuiltInMcpDomains,
   )
   useRenderedLeaseHygiene(workspace)
+  const sidekickSpotlight = useSidekickSpotlightActive(workspace.state)
   useControlRegistration(workspace)
   useDebugAutosave(workspace)
 
@@ -133,7 +135,13 @@ export default function App() {
         <SettingsBar />
         <AgentTerminalOwnershipProvider>
           <div className="flex-1 min-h-0 min-w-0 flex overflow-hidden">
-            <main className="flex-1 min-h-0 min-w-0 overflow-hidden">
+            {/* Sidekick Spotlight (#1493 follow-up): the Sidekick column, a
+                side-panel sibling of <main>, grows to fill the row. <main>
+                must give up its flex share or the two split the window; its
+                content is already retained-hidden by MainSurface's 'sidekick'
+                takeover, so collapsing the box (never unmounting it) is all
+                that is left. */}
+            <main className={sidekickSpotlight ? 'w-0 flex-none overflow-hidden' : 'flex-1 min-h-0 min-w-0 overflow-hidden'}>
               <MainSurface onNewTabRequest={onNewTabRequest} />
             </main>
             <SidePanels />
