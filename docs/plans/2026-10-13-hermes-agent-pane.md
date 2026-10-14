@@ -507,14 +507,14 @@ Each item goes to a follow-up issue filed at PR time:
 
 ## Tasks
 
-- [ ] **0. Approval + prerequisites.**
+- [x] **0. Approval + prerequisites.** (approved 2026-10-13; no VPS given, so the Ruling's local real-backend method was used)
   - The owner approves this plan and the decomposition; UNCONFIRMED items
     become answers.
   - The owner provides a VPS backend URL to record (password or OAuth),
     whether it is behind Tailscale, and permission to create the public
     `Juliusolsson05/hermes-headless` repo.
   - Hands to task 1: the backend URL (kept out of git) and the go-ahead.
-- [ ] **1. Package scaffold + recorder.**
+- [x] **1. Package scaffold + recorder.**
   - Create the `hermes-headless` repo mirroring opencode-headless/grok
     (scripts, configs, test contract).
   - `research/record-wire.mts` (a dumb tap with same-length redaction and a
@@ -522,29 +522,29 @@ Each item goes to a follow-up issue filed at PR time:
   - Add the `vendor/hermes-agent-src` submodule at `v0.21.7`.
   - Produces the recorder.
   - Verified by: a dry run against a local loopback `hermes serve`.
-- [ ] **2. Stage 0: record S1-S16, publish results.**
+- [x] **2. Stage 0: record S1-S16, publish results.**
   - Corpus under `research/corpus/`.
   - Counts per scenario and per event type; H1-H14 verdicts written into
     decomposition §7.
   - **STOP and report to the owner**; stop also if any [gate] is DISPROVEN.
   - Hands on: the corpus manifest.
-- [ ] **3. Stage 1: contract subset + catalog.**
+- [x] **3. Stage 1: contract subset + catalog.**
   - `src/contract/*` and `research/catalog.md`.
   - Hands on: the exact TS types (`HermesEvent`, `HermesServerRequest`,
     `LiveSessionSnapshot`, `TranscriptMessage`, `PromptSubmitResult`).
   - Verified by: `subset.test.ts`.
-- [ ] **4. Stage 2: auth client.**
+- [x] **4. Stage 2: auth client.**
   - `src/auth/*`.
   - Hands on: `probe`, `buildAuthorizeUrl`, `exchangeCode`, `refreshTokens`,
     `mintWsTicket`, `buildWsUrl`, and the failure classes.
   - Verified by: the auth tests on S1/S2/S14.
-- [ ] **5. Stage 3: RPC transport.**
+- [x] **5. Stage 3: RPC transport.**
   - `src/transport/RpcConnection.ts`.
   - Hands on: `RpcConnection` (`call`, `onEvent`, `onRequest`, `respond`,
     `replay`, `state`).
   - Verified by: the replay/epoch/unsupported-request tests, with the
     replay-hold mutation going red.
-- [ ] **6. Stage 4: reconciler.**
+- [x] **6. Stage 4: reconciler.**
   - `src/reconcile/*`.
   - Hands on: the channel event stream.
   - Verified by: the differential and requests tests.
@@ -595,3 +595,17 @@ This plan IS the loop ledger. Every pass: re-read this file and `git log`, conti
   - Hermes is not installed on the dev machine.
   - The owner answered Decisions 1-2; the rest are defaults awaiting
     confirmation.
+- **2026-10-13, tasks 1–7:**
+  - **Stage 0.** The recorder ran 3 times. Run 2 fixed over-redaction of `error_surface.code`; run 3 scrubbed personal paths.
+  - **Final corpus.** 16 files; scan clean.
+  - **Package.** hermes-headless commits `f289420..2dfaeba` on `feat/initial-client`, PR Juliusolsson05/hermes-headless#1.
+  - **`npm run check` green.** 38 core/system tests.
+  - **Live tier: 7/7 pass** against a real `hermes serve`.
+  - **Confirm-red observed.**
+    - Removing the replay hold, or the seq duplicate guard, fails the transport tests.
+    - The first cut-point test did NOT catch a removed hold, because its racing frames were gap frames. It was rewritten to race NEWER frames and now does.
+  - **Deviations.**
+    - Test helpers moved under `src/testing/` (rootDir).
+    - The H6 oracle excludes mid-turn snapshots (S10), and S5/S6, which have no oracle.
+    - New auth error kind `access-expired`, from the recorded S1/S14 semantics.
+  - **Review.** Package reviewers started: Codex (a: correctness) and OpenCode (b: tests/mutation), run `review-hh-package`.

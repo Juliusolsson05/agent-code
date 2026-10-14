@@ -437,8 +437,62 @@ with the recording path):
   extra keys we must render, or a missing required key (then the subset is
   widened, which is a stage 1 revision).
 
-**Stage 0 results:** _(not run, to be filled with counts per scenario,
-per-event frequencies across the corpus, H verdicts, and the corpus manifest.)_
+**Stage 0 results (2026-10-13):**
+
+- **Method (plan Ruling 2026-10-13).** Real `hermes serve` v0.21.7 (`71d34bad`) runs from the pinned source in an isolated `HERMES_HOME`. The auth gate is ON (password provider; a loopback bind with a non-loopback `dashboard.public_url`). It talks to a scripted OpenAI-compatible model.
+- **Corpus.** `hermes-headless/research/corpus/`: 15 scenario folders (S1, S3, S3b, S4–S16), about 1.5k WebSocket frames, 3.3 MB. `scan-corpus` is clean: no credential-shaped strings and no personal paths.
+- **Not recorded.** S2 (Nous OAuth) needs a real Nous account. A real VPS (TLS, proxy prefix, latency) is not recorded.
+- **Census (inbound events).**
+
+  | Count | Event |
+  |---|---|
+  | 413 | `message.delta` |
+  | 272 | `thinking.delta` |
+  | 98 | `session.info` |
+  | 80 | `message.start` |
+  | 80 | `message.complete` |
+  | 77 | `reasoning.available` |
+  | 39 | `sessions.changed` |
+  | 25 | `session.title` |
+  | 13 | `tool.generating` |
+  | 13 | `tool.start` |
+  | 13 | `tool.complete` |
+  | 5 | `status.update` |
+  | 5 | `session.usage` |
+  | 2 | `request.cancel` |
+
+  Server requests: 6 `approval`, 2 `secret`, 1 `clarify`, 1 `sudo`.
+
+**Verdicts:**
+
+- **H1 HOLDS (password provider).** Native PKCE with an arbitrary loopback port, no registration (S1). OAuth branch UNVERIFIED (S2 not recorded).
+- **H2 HOLDS.** A ticket opens the socket and `gateway.ready` is the first frame. A reused ticket fails the handshake (S1).
+- **H3 REFINED.** `session.create` returns a stored id at once, but an unprompted session has NO row (`session.list` empty, S3b). It can be resumed only while its runtime lives. Consequence: resume answering 4007 falls back to a new conversation (`session-replaced`).
+- **H4 HOLDS.** Every `tool.start` pairs with one `tool.complete` by `tool_id`, interrupts included (S4, S5, S7). `session.title` / `session.info` can FOLLOW `message.complete` in seq.
+- **H5 REFINED.** A post-tool answer segment starts with `"
+
+"`, and `message.complete.text` is the last segment only (S6, S8). `reasoning.available` repeats the final answer verbatim (S3–S5, all 77 occurrences with this model), so it must not render as reasoning.
+- **H6 HOLDS** (differential test, `reconcile.system.test.ts`, S3/S4/S8/S9/S11/S12/S16). Caveats:
+  - Tool rows in the resume projection have no `row_id` and no result (S4), so they are keyed by `tool_call_id`.
+  - Compression rewrites row ids (S12).
+- **H7 HOLDS** (S8: replay returned exactly seq 10..17, live resumed at 18). Proven for every cut point with newer frames racing the reply. Removing the hold turns the test red.
+- **H8 REFINED.** A detached turn that is still PRODUCING keeps running past the reap grace (S9: 4 s grace, 12 s drop, the turn finished on the new socket). Hermes interrupts only stalled turns (no activity, e.g. waiting on an approval) and reaps idle sessions. No keep-alive socket is needed.
+- **H9 HOLDS.** Approval params carry command, description, choices and pattern keys. A plain response settles a live request; a REPLAYED one is answered with `request.answer` (S5, S10).
+- **H10 HOLDS.** `request.cancel` follows a timeout (S5) and an interrupt (S7).
+- **H11 UNVERIFIED on the wire.** No unsupported request occurred in the corpus. The decline path is contract-probe tested.
+- **H12 HOLDS.** The open socket keeps working past access-token expiry. The expired token gets ticket 401 `session_expired`, then refresh 200, then ticket 200 (S14; the basic provider clamps TTL to ≥ 60 s).
+- **H13 HOLDS.** The client only ever resumes ids it created.
+- **H14 HOLDS.** Every recorded frame classifies. Every event type has an owner or an ignore reason (`subset.test.ts`).
+
+**New facts (no hypothesis predicted them):**
+
+- **F1.** A plain `prompt.submit` to a BUSY session returns `redirected` and kills the running turn (S16). `queued: true` holds it instead (live tier: both turns end `end_turn`).
+- **F2.** `thinking.delta` is spinner text ("(◔_◔) musing...").
+- **F3.** A refused bearer on an API route answers 401 `{"error":"session_expired"}`, which means refresh, not sign in again (S1).
+- **F4.** The basic provider's tokens are stateless: 30-day refresh, no reuse detection (S1 refreshed twice with the same RT). Single-flight refresh stays the design, because Nous OAuth DOES reuse-detect (Hermes Desktop comments).
+- **F5.** Slash: built-ins go through `slash.exec`. A skill returns 4018 ("use command.dispatch"), and `command.dispatch` returns `{type:'skill', message}`. `/stop` via `slash.exec` stops only background processes (S13).
+- **F6.** `/model` before the first prompt prints `(unknown)`: the agent builds lazily (live tier).
+- **F7.** A second client on the same session receives the same events (S16).
 
 ## 8. Stages
 
