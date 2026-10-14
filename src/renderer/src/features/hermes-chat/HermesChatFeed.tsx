@@ -13,7 +13,7 @@
 // ownership between live and committed rows is decided once, upstream
 // (chatProjection.ts header).
 
-import { memo, useEffect, useMemo, useRef } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import type { FeedRenderItem } from '@renderer/features/feed/model/renderModel'
 import { TextProse } from '@renderer/features/feed/ui/markdown'
@@ -201,10 +201,13 @@ const ChatRow = memo(function ChatRow({ item, connectionName, selected }: { item
       )
     case 'reasoning':
       return (
-        <details className="max-w-[88%] text-[12px] text-ink-dim" data-chat-role="reasoning">
-          <summary className="cursor-pointer select-none text-muted">{item.streaming ? 'Thinking…' : 'Reasoning'}</summary>
+        <LazyDetails
+          className="max-w-[88%] text-[12px] text-ink-dim"
+          data-chat-role="reasoning"
+          summary={<span className="cursor-pointer select-none text-muted">{item.streaming ? 'Thinking…' : 'Reasoning'}</span>}
+        >
           <div className="mt-1 whitespace-pre-wrap border-l border-border pl-2">{withVisibleControls(item.text)}</div>
-        </details>
+        </LazyDetails>
       )
     case 'tool':
       return <ToolChip item={item} />
@@ -235,30 +238,61 @@ const ChatRow = memo(function ChatRow({ item, connectionName, selected }: { item
   }
 })
 
+/**
+ * A <details> whose body is only MOUNTED while it is open.
+ *
+ * WHY (the owner's debug bundle 2026-10-14T16-26-49, #1499): a real Hermes
+ * conversation had 206 tool chips and 136 reasoning blocks; their bodies
+ * (181 KB of tool input JSON, 213 KB of reasoning) stayed in the DOM inside
+ * CLOSED <details>, 3,917 elements in total, and every Hermes send froze the
+ * window for 2–5.7 s (performance monitor). A closed body is never seen, so
+ * it is not built; opening one builds just that one.
+ */
+function LazyDetails({ summary, children, className, ...rest }: { summary: ReactNode; children: ReactNode; className: string; 'data-chat-role': string; 'data-tool-status'?: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <details className={className} {...rest} open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary className="flex cursor-pointer select-none items-center gap-1.5">{summary}</summary>
+      {open && children}
+    </details>
+  )
+}
+
 function ToolChip({ item }: { item: Extract<ChatItem, { kind: 'tool' }> }) {
-  // Formatted once per input object, not on every render of the row.
-  const input = useMemo(() => JSON.stringify(item.input, null, 2), [item.input])
   const tone = item.status === 'error' ? 'border-danger/60 text-danger' : item.status === 'running' ? 'border-accent/60' : 'border-border'
   return (
-    <details className={`max-w-[88%] rounded-chip border ${tone} bg-canvas px-2 py-1 text-[12px]`} data-chat-role="tool" data-tool-status={item.status}>
-      <summary className="flex cursor-pointer select-none items-center gap-1.5 text-ink-dim">
-        <span aria-hidden>{item.status === 'running' ? '◌' : item.status === 'error' ? '✕' : '✓'}</span>
-        <span className="font-code text-ink">{item.name}</span>
-        {item.label && <span className="min-w-0 truncate font-code text-muted">{withVisibleControls(item.label)}</span>}
-      </summary>
-      <div className="mt-1 flex flex-col gap-1">
-        <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-control bg-surface px-2 py-1 font-code text-[11px] text-ink-dim">
-          {input}
+    <LazyDetails
+      className={`max-w-[88%] rounded-chip border ${tone} bg-canvas px-2 py-1 text-[12px]`}
+      data-chat-role="tool"
+      data-tool-status={item.status}
+      summary={
+        <span className="flex min-w-0 items-center gap-1.5 text-ink-dim">
+          <span aria-hidden>{item.status === 'running' ? '◌' : item.status === 'error' ? '✕' : '✓'}</span>
+          <span className="font-code text-ink">{item.name}</span>
+          {item.label && <span className="min-w-0 truncate font-code text-muted">{withVisibleControls(item.label)}</span>}
+        </span>
+      }
+    >
+      <ToolBody item={item} />
+    </LazyDetails>
+  )
+}
+
+function ToolBody({ item }: { item: Extract<ChatItem, { kind: 'tool' }> }) {
+  const input = useMemo(() => JSON.stringify(item.input, null, 2), [item.input])
+  return (
+    <div className="mt-1 flex flex-col gap-1">
+      <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-control bg-surface px-2 py-1 font-code text-[11px] text-ink-dim">
+        {input}
+      </pre>
+      {item.result !== null && (
+        <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-control bg-surface px-2 py-1 font-code text-[11px] text-ink">
+          {withVisibleControls(item.result)}
         </pre>
-        {item.result !== null && (
-          <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-control bg-surface px-2 py-1 font-code text-[11px] text-ink">
-            {withVisibleControls(item.result)}
-          </pre>
-        )}
-        {item.result === null && item.status !== 'running' && (
-          <span className="text-[11px] text-muted">Output is kept on your Hermes server.</span>
-        )}
-      </div>
-    </details>
+      )}
+      {item.result === null && item.status !== 'running' && (
+        <span className="text-[11px] text-muted">Output is kept on your Hermes server.</span>
+      )}
+    </div>
   )
 }

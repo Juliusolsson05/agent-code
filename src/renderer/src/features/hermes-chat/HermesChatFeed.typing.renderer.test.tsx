@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render } from '@testing-library/react'
+import { fireEvent, render } from '@testing-library/react'
 
 import { inboundFrames, latestRecording } from 'hermes-headless/testing/corpus'
 import { createHermesTranscriptEntryMapper } from '@providers/hermes/renderer/transcript/mapper'
@@ -34,8 +34,8 @@ vi.mock('react-markdown', async (importOriginal) => {
   return { ...actual, default: CountingMarkdown }
 })
 
-function recordedEntries() {
-  const rows = inboundFrames(latestRecording('S12'))
+function recordedEntries(scenario = 'S12') {
+  const rows = inboundFrames(latestRecording(scenario))
     .map((frame) => (frame.result as { messages?: Record<string, unknown>[] } | undefined)?.messages)
     .filter((list): list is Record<string, unknown>[] => Array.isArray(list))
     .sort((a, b) => b.length - a.length)[0]!
@@ -66,5 +66,22 @@ describe('typing in a Hermes pane', () => {
     for (const draft of ['h', 'he', 'hel', 'hell', 'hello']) view.rerender(<Pane runtime={runtime} draft={draft} />)
 
     expect(markdown.renders - afterMount).toBe(0)
+  })
+})
+
+// The owner's debug bundle (2026-10-14T16-26-49): 206 tool chips + 136
+// reasoning blocks kept 394 KB of bodies mounted inside CLOSED <details>
+// (3,917 elements), and each Hermes send froze the window 2-5.7 s. A closed
+// body is never seen, so it must not be in the DOM. Rows: recorded S4 (a
+// tool turn) through the real mapper and ledger.
+describe('collapsed chat rows', () => {
+  it('builds a tool chip body only when it is opened', () => {
+    const view = render(<Pane runtime={{ ...emptyRuntime(), entries: recordedEntries('S4') }} draft="" />)
+    const chips = view.container.querySelectorAll<HTMLDetailsElement>('[data-chat-role="tool"]')
+    expect(chips.length).toBeGreaterThan(0)
+    expect(view.container.querySelectorAll('[data-chat-role="tool"] pre')).toHaveLength(0)
+    chips[0]!.open = true
+    fireEvent(chips[0]!, new Event('toggle'))
+    expect(chips[0]!.querySelectorAll('pre').length).toBeGreaterThan(0)
   })
 })
