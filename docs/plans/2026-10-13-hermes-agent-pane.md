@@ -627,6 +627,17 @@ Reviewer b: Pi (tests/rendering), report `temp/hermes-loop/review-app/report-b.m
 | Survivor: skill-reconcile guard | valid | test with a pre-start hook; mutation now fails |
 | Survivor: sudo/secret value validation | valid | test on recorded S6 sudo/secret; mutation now fails |
 
+| Finding (review b, Pi, verdict MERGE-READY) | Verdict | Disposition |
+|---|---|---|
+| 1. major: `/` in the Hermes composer enters PTY slash mode; the first Enter runs nothing | valid (driven through `useComposerKeybinds`) | fixed `a927613e`: chat-surface panes skip slash mode and the local `/usage` intercept; composer test on the real submit hook, mutation proven. Same dead-end in structured OpenCode filed as #1492 (pre-existing, out of this PR's scope) |
+| 1b. "/… complete as you type" unimplemented | valid | DRIFT recorded: no completion picker in v1; the empty state no longer promises it. `completeSlash` exists in the package for a follow-up (#1489) |
+| 2. major: a skill command leaves a permanent second user bubble | valid (real ledger on recorded S13) | fixed `a927613e`: slash submits skip the optimistic echo (the pending row is removed when the send settles); test, mutation proven |
+| 3. withdrawal, queued count, ClarifyCard key unpinned | valid | tests `65276d77` (recorded S5 cancel, mechanical id mutations); key and queued mutations now fail. The duplicate-id guard is a backstop: hermes-headless drops repeated ids first (ConversationReconciler:340), so its mutant survives by construction; commented |
+| 4. mapper hidden/reasoning/tool-content and validator guards unpinned (no recordings) | valid | schema-derived tests from TranscriptMessage (`tui_gateway/contracts/common.py`, `display_kind: "hidden"` from Hermes' writers); mutations now fail |
+| 5. pane predicates untested | valid | `hermesPane.renderer.test.ts`; the preferred-connection mutation now fails |
+| Suspicion: chat test folds no replay ring | valid as a fidelity note | the reviewer rebuilt the realistic S8 union and found no duplicate; exactly-once across a drop is pinned in the package's cut-point tests. Not changed |
+| Suspicion: invented `CAPS` frame | valid, benign | kept; it matches the four answerable kinds |
+
 ## Execution notes
 
 - **2026-10-13, plan-only:**
@@ -685,4 +696,4 @@ Reviewer b: Pi (tests/rendering), report `temp/hermes-loop/review-app/report-b.m
   - Full `npm run check` at `fc1ab6f3`: 8271 passed, 1 failed (`nodePtyPtmxLeak`, darwin-only, fails identically on origin/main locally).
   - Merged origin/main (`7cda9612`); `tsc -b` clean and 1249 provider/command/control/Hermes tests pass after the merge.
   - Full-check drift fixed on the way: an unconditional connection await delayed every local spawn (`0867f925`); the Skills, targets, usage and MCP-domain drift tests now name Hermes; the control reference gained a Hermes page.
-
+  - Review b (Pi) dispositions recorded above; fixes `a927613e`, tests `65276d77`; #1492 filed.
