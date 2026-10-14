@@ -52,6 +52,9 @@ export type SessionMoveDependencies = {
   claim: (sessionId: string, windowId: string) => SessionWindowLease | null
   transfer: (sessionId: string, windowId: string) => SessionWindowLease | null
   release: (lease: SessionWindowLease) => boolean
+  /** Tell the session's current owner it missed observations (router gap),
+   *  so it resynchronizes. Used after routing goes back to the source. */
+  markGap: (sessionId: string) => void
   isWindowReady: (windowId: string) => boolean
   /** Null when the window is not registered (closed). */
   rendererGeneration: (windowId: string) => number | null
@@ -227,12 +230,26 @@ export class SessionMoveCoordinator {
   private rollback(move: PendingMove): void {
     const sourceAlive = this.deps.rendererGeneration(move.sourceWindowId) !== null
     for (const claim of move.claims) {
-      // Identity, not "owned by the target": if the user moved the session
-      // again, or the target reloaded and re-claimed it, that newer claim is
-      // not this move's to undo.
-      if (!claim.made || this.deps.ownerOf(claim.sessionId) !== claim.made) continue
-      if (claim.kind === 'transferred' && sourceAlive) this.deps.transfer(claim.sessionId, move.sourceWindowId)
-      else this.deps.release(claim.made)
+      const owner = this.deps.ownerOf(claim.sessionId)
+      // The claim is this move's to undo while it is the lease main made, OR
+      // a newer claim by the TARGET window itself (#1481 review): the target
+      // shows the moved agent in its focused lane, and waking a parked agent
+      // there re-claims it through `session:recover`, rotating the lease. The
+      // target is about to drop those rows (cancel), so leaving routing with
+      // it would strand the agent where no window displays it. A claim by any
+      // OTHER window (the agent moved on again, a third window recovered it)
+      // is newer and not ours, which is what the identity check protects.
+      if (!owner || !(owner === claim.made || owner.windowId === move.targetWindowId)) continue
+      if (claim.kind === 'transferred' && sourceAlive) {
+        this.deps.transfer(claim.sessionId, move.sourceWindowId)
+        // Whatever the target received meanwhile never reached the source, and
+        // `transfer` only replays what was still queued. Mark a gap so the
+        // source's routing-gap repair re-reads readiness, conditions and
+        // history instead of keeping its pre-move view (#1481 review).
+        this.deps.markGap(claim.sessionId)
+      } else {
+        this.deps.release(owner)
+      }
     }
   }
 }

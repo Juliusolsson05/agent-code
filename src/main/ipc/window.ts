@@ -10,6 +10,7 @@ import {
   captureSessionWindowLease,
   isWindowRendererReady,
   listWindowIds,
+  markSessionRoutingGap,
   releaseSession,
   sendToWindow,
   transferSession,
@@ -93,6 +94,7 @@ const sessionMoves = new SessionMoveCoordinator({
   claim: (sessionId, windowId) => claimSessionForWindow(sessionId, windowId),
   transfer: transferSession,
   release: lease => releaseSession(lease),
+  markGap: markSessionRoutingGap,
   isWindowReady: isWindowRendererReady,
   rendererGeneration: windowRendererGeneration,
   windowNumber: windowId => {
@@ -161,7 +163,10 @@ export function registerWindowIpc(
   ipcMain.handle('window:move-targets', (evt): SessionMoveTarget[] => {
     const sourceWindowId = windowIdFor(evt.sender)
     const lastFocused = windowIdsByRecentFocus().find(windowId => windowId !== sourceWindowId)
-    return listWindowIds().flatMap((windowId, index) => windowId === sourceWindowId ? [] : [{
+    // Not-ready windows (closing, or a renderer still loading) are left out
+    // rather than offered and then refused with a failure toast. `number`
+    // still comes from the unfiltered order so it matches app.windows.
+    return listWindowIds().flatMap((windowId, index) => windowId === sourceWindowId || !isWindowRendererReady(windowId) ? [] : [{
       windowId,
       number: index + 1,
       ...store.describeWindow(windowId),

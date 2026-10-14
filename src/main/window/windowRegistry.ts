@@ -654,6 +654,11 @@ export function isWindowRendererReady(id: WindowId): boolean {
   return Boolean(entry && !entry.window.isDestroyed() && entry.rendererReady && !entry.closing)
 }
 
+/** See SessionWindowRouter.markGap (#1481 rollback resync). */
+export function markSessionRoutingGap(sessionId: string): void {
+  sessionRouter.markGap(sessionId, 'owner_replaced')
+}
+
 export function sessionsOwnedBy(id: WindowId): string[] {
   return sessionRouter.sessionsOwnedBy(id)
 }
