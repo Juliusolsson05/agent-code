@@ -15,6 +15,7 @@ import {
 import {
   keepTiledLaneSessions,
   normalizeStage,
+  sanitizeLaneHistory,
   scrubGridRowMetadata,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { normalizeGridShape } from '@renderer/workspace/dispatch/gridShape'
@@ -296,12 +297,16 @@ export function migrateWorkspaceToStage(
     stage = {
       // Explicit field projection: drops legacy `userEmptied` and the
       // reserved-but-unused `scrollAnchorKey` from v2 lanes by simply never
-      // copying them.
-      lanes: durable.lanes.map(lane =>
-        lane.selectedSessionId !== undefined
-          ? { selectedSessionId: lane.selectedSessionId }
-          : {},
-      ),
+      // copying them. A field that must survive a restart has to be copied
+      // here on purpose — Lane History's `history` is, validated entry by
+      // entry and closed over the same pool as the selection.
+      lanes: durable.lanes.map(lane => {
+        const history = sanitizeLaneHistory(lane.history, id => poolIds.has(id))
+        return {
+          ...(lane.selectedSessionId !== undefined ? { selectedSessionId: lane.selectedSessionId } : {}),
+          ...(history ? { history } : {}),
+        }
+      }),
       rows: durable.rows,
       focusedLane: durable.focusedLane,
       ...(durable.laneWeights ? { laneWeights: durable.laneWeights } : {}),

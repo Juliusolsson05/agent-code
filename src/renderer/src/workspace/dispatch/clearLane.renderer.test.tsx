@@ -75,7 +75,13 @@ describe('clearTiledLane', () => {
     act(() => { t.hook.result.current.clearTiledLane(0) })
 
     const state = t.getState()
-    expect(state.stage.lanes).toEqual([{}, { selectedSessionId: 'other' }, {}])
+    // The cleared agent lands in the lane's Lane History: it is alive, and
+    // "where did the agent I just cleared go" is what that list answers.
+    expect(state.stage.lanes).toEqual([
+      { history: [{ sessionId: 'anchor', at: expect.any(Number) }] },
+      { selectedSessionId: 'other' },
+      {},
+    ])
     // The lane SLOT survives: rows still say [2,1].
     expect(state.stage.rows).toEqual([{ length: 2 }, { length: 1 }])
     expect(state.stage.focusedLane).toBe(0)
@@ -98,7 +104,11 @@ describe('clearTiledLane', () => {
     const t = mount()
     act(() => { t.setState(prev => ({ ...prev, stage: { ...prev.stage, lanes: [{ selectedSessionId: 'anchor' }, { selectedSessionId: 'anchor' }, {}], rows: prev.stage.rows, focusedLane: 0 } })) })
     act(() => { t.hook.result.current.clearTiledLane(1) })
-    expect(t.getState().stage.lanes).toEqual([{ selectedSessionId: 'anchor' }, {}, {}])
+    expect(t.getState().stage.lanes).toEqual([
+      { selectedSessionId: 'anchor' },
+      { history: [{ sessionId: 'anchor', at: expect.any(Number) }] },
+      {},
+    ])
   })
 
   it('is a no-op for an already-empty or out-of-range lane, by reference', () => {

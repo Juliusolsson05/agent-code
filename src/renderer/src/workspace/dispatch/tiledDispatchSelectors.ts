@@ -1,5 +1,6 @@
 import type {
   DispatchLane,
+  LaneHistoryEntry,
   SessionId,
   TabId,
   TiledDispatchState,
@@ -41,14 +42,78 @@ export function remapTiledLanes(
   let changed = false
   const lanes = stage.lanes.map(lane => {
     const id = lane.selectedSessionId
-    if (!id) return lane
-    const next = idMap.get(id)
-    if (!next || next === id) return lane
+    const next = id ? idMap.get(id) : undefined
+    const selectionMoved = Boolean(next && next !== id)
+    // History is remapped with the selection for the same reason the
+    // selection is: a reload or provider switch swaps the id of the SAME
+    // agent, and an entry still naming the old id would be filtered out as
+    // dead — the agent would silently fall out of this lane's history.
+    const history = remapLaneHistory(lane.history, idMap)
+    if (!selectionMoved && history === lane.history) return lane
     changed = true
-    return { ...lane, selectedSessionId: next }
+    return {
+      ...lane,
+      ...(selectionMoved ? { selectedSessionId: next } : {}),
+      ...(history ? { history } : {}),
+    }
   })
   if (!changed) return stage
   return { ...stage, lanes }
+}
+
+function remapLaneHistory(
+  history: LaneHistoryEntry[] | undefined,
+  idMap: ReadonlyMap<SessionId, SessionId>,
+): LaneHistoryEntry[] | undefined {
+  if (!history) return history
+  let changed = false
+  const mapped = history.map(entry => {
+    const next = idMap.get(entry.sessionId)
+    if (!next || next === entry.sessionId) return entry
+    changed = true
+    return { ...entry, sessionId: next }
+  })
+  // Two ids can map onto one successor; keep the newest so the one-entry-
+  // per-agent rule survives the remap.
+  return changed ? dedupeLaneHistory(mapped) : history
+}
+
+/**
+ * How many past agents one lane remembers.
+ *
+ * WHY a cap at all: this list rides autosave inside the workspace file, once
+ * per lane, for the life of the workspace. Entries are already one per agent,
+ * so the cap only bites for a lane that has cycled through 50 DIFFERENT live
+ * agents — far past what anyone scrolls back through in a "which agent was
+ * here" list — and dead agents are pruned at every autosave anyway.
+ */
+export const LANE_HISTORY_LIMIT = 50
+
+function dedupeLaneHistory(history: LaneHistoryEntry[]): LaneHistoryEntry[] {
+  const seen = new Set<SessionId>()
+  return history.filter(entry => {
+    if (seen.has(entry.sessionId)) return false
+    seen.add(entry.sessionId)
+    return true
+  })
+}
+
+/**
+ * Record that `departed` left this lane at `at`, newest first.
+ *
+ * An agent that comes back and leaves again moves to the top with the new time
+ * rather than gaining a second row: the list answers "which agents were here
+ * and when did I last see each one", and repeated rows for the same agent
+ * would push the others out of view for no new information.
+ */
+function withDeparture(
+  history: LaneHistoryEntry[] | undefined,
+  departed: SessionId | undefined,
+  at: number,
+): LaneHistoryEntry[] | undefined {
+  if (!departed) return history
+  const rest = (history ?? []).filter(entry => entry.sessionId !== departed)
+  return [{ sessionId: departed, at }, ...rest].slice(0, LANE_HISTORY_LIMIT)
 }
 
 /**
@@ -62,13 +127,77 @@ export function remapTiledLanes(
  * hole that survived restarts. That flag is gone with the healer it existed to
  * hide from (#681), and the rule went with it.
  */
-export function withLaneSession(lane: DispatchLane, sessionId: SessionId): DispatchLane {
-  return { ...lane, selectedSessionId: sessionId }
+//
+// Lane History made this the field-with-a-rule it was kept free for: the agent
+// being replaced is recorded as a departure HERE, so every selection path
+// (index click, lane strip, ⌘N spawn focus, label navigation, control-plane
+// show, extension views, new tab) feeds the history without each one having
+// to remember. The incoming agent is dropped from the list because it is now
+// the occupant, not the past.
+//
+// `now` is a parameter only so tests can pin the clock; callers use the
+// default.
+export function withLaneSession(
+  lane: DispatchLane,
+  sessionId: SessionId,
+  now: number = Date.now(),
+): DispatchLane {
+  if (lane.selectedSessionId === sessionId) return { ...lane, selectedSessionId: sessionId }
+  const history = withDeparture(lane.history, lane.selectedSessionId, now)
+    ?.filter(entry => entry.sessionId !== sessionId)
+  const { history: _previous, ...rest } = lane
+  return {
+    ...rest,
+    selectedSessionId: sessionId,
+    ...(history && history.length > 0 ? { history } : {}),
+  }
+}
+
+/**
+ * Empty a lane because the USER asked to (Clear Lane), recording the agent
+ * that was in it.
+ *
+ * WHY separate from `withLaneCleared`: that one runs when a session is
+ * destroyed (kill, close, bury) or failed the durability prune. Recording a
+ * departure there would list an agent that no longer exists. Clear Lane is the
+ * opposite case — the agent is alive and in the index, and finding it again is
+ * precisely what Lane History is for.
+ */
+export function withLaneClearedByUser(lane: DispatchLane, now: number = Date.now()): DispatchLane {
+  const history = withDeparture(lane.history, lane.selectedSessionId, now)
+  // Omit the key rather than writing `selectedSessionId: undefined`, so an
+  // empty lane has one shape whether it was never filled or was cleared.
+  const { selectedSessionId: _cleared, history: _previous, ...rest } = lane
+  return history ? { ...rest, history } : rest
 }
 
 /** Blank a lane's selection. Nothing refills it; that is the point (#681). */
 function withLaneCleared(lane: DispatchLane): DispatchLane {
   return { ...lane, selectedSessionId: undefined }
+}
+
+/**
+ * The lane's history restricted to sessions that still exist, or undefined
+ * when nothing survives. Same reference when nothing was dropped, so callers
+ * can detect "unchanged" by identity.
+ */
+export function liveLaneHistory(
+  history: LaneHistoryEntry[] | undefined,
+  isLive: (id: SessionId) => boolean,
+): LaneHistoryEntry[] | undefined {
+  if (!history) return history
+  // A workspace file is untrusted input and this runs on it before the load
+  // projection sanitizes lanes (keepTiledLaneSessions in the migration), so a
+  // hand-edited or corrupt non-array must degrade to "no history" rather than
+  // throw and lock bootstrap out of the whole workspace.
+  if (!Array.isArray(history)) return undefined
+  // Entries are checked for shape too, for the same reason: a null row in the
+  // file reached `.sessionId` here and threw before sanitizeLaneHistory ever
+  // saw it (caught by laneHistory.test.ts's corrupt-file case).
+  const kept = history.filter(entry =>
+    typeof entry === 'object' && entry !== null && isLive(entry.sessionId))
+  if (kept.length === history.length) return history
+  return kept.length > 0 ? kept : undefined
 }
 
 /**
@@ -112,11 +241,15 @@ export function keepTiledLaneSessions(
 ): TiledDispatchState {
   let changed = false
   const lanes = stage.lanes.map(lane => {
-    if (lane.selectedSessionId && !keep.has(lane.selectedSessionId)) {
-      changed = true
-      return withLaneCleared(lane)
-    }
-    return lane
+    // History entries are durable session pointers too, so they close over
+    // the same surviving set. Without this a dead agent's id would ride every
+    // autosave forever, invisible (the dialog filters it) but never freed.
+    const history = liveLaneHistory(lane.history, id => keep.has(id))
+    const dropSelection = Boolean(lane.selectedSessionId && !keep.has(lane.selectedSessionId))
+    if (!dropSelection && history === lane.history) return lane
+    changed = true
+    const { history: _previous, ...rest } = dropSelection ? withLaneCleared(lane) : lane
+    return history ? { ...rest, history } : rest
   })
   if (!changed) return stage
   return { ...stage, lanes }
@@ -352,3 +485,28 @@ export function clampTileCount(n: number): number {
 // which is exactly the "updates lanes without updating rows in the same
 // expression" failure gridShape.ts exists to prevent. Every shape mutation now
 // lives in gridShape and returns lanes and rows together.
+
+/**
+ * Read a lane's history from a persisted workspace file.
+ *
+ * WHY its own validator: the load projection rebuilds every lane field by
+ * hand (it exists to drop legacy fields), so anything not copied there is lost
+ * on restart. Each entry is checked individually so one malformed row costs
+ * that row, not the lane's whole history; order is preserved (newest first is
+ * how it was written) and the one-per-agent rule and cap are re-applied in
+ * case the file was edited.
+ */
+export function sanitizeLaneHistory(
+  raw: unknown,
+  isLive: (id: SessionId) => boolean,
+): LaneHistoryEntry[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const entries = raw.filter((entry): entry is LaneHistoryEntry =>
+    typeof entry === 'object' && entry !== null &&
+    typeof (entry as LaneHistoryEntry).sessionId === 'string' &&
+    Number.isFinite((entry as LaneHistoryEntry).at) &&
+    isLive((entry as LaneHistoryEntry).sessionId),
+  ).map(entry => ({ sessionId: entry.sessionId, at: entry.at }))
+  const kept = dedupeLaneHistory(entries).slice(0, LANE_HISTORY_LIMIT)
+  return kept.length > 0 ? kept : undefined
+}

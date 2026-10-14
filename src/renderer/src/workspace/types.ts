@@ -411,6 +411,31 @@ export type DispatchLane = {
    * view may not stream; agents are unaffected.
    */
   selectedSessionId?: SessionId
+  /**
+   * Agents that were in this lane before, newest first, one entry per agent
+   * (Lane History). `at` is when the agent LEFT the lane — that is the moment
+   * "how long ago was it here" is about; the time it arrived says nothing
+   * about whether you looked at it a minute ago or a day ago.
+   *
+   * WHY on the lane, when SessionMeta's browser pocket note below warns that
+   * lane fields "slide": sliding WITH the lane object is exactly right here.
+   * This is the lane's own past, not an agent's property, and every grid
+   * mutation splices lane objects intact, so New Lane / Remove Lane / New Row
+   * carry each lane's history to wherever that lane now sits.
+   *
+   * Written ONLY by the helpers in tiledDispatchSelectors (`withLaneSession`,
+   * `withLaneClearedByUser`), remapped with the selection, and pruned to the
+   * surviving session set at the same durability boundaries as the selection.
+   * The current occupant is never listed here.
+   */
+  history?: LaneHistoryEntry[]
+}
+
+/** One past occupant of a lane. See `DispatchLane.history`. */
+export type LaneHistoryEntry = {
+  sessionId: SessionId
+  /** Epoch ms when this agent left the lane. */
+  at: number
 }
 
 /**

@@ -117,6 +117,9 @@ describe('newTab places the first agent of a new project', () => {
     // occupied, unlike applyDispatchSpawnFocus (#1013 review B).
     const { hook, getState } = mount(workspace({ lanes: [{ selectedSessionId: 'closed' }], rows: [{ length: 1 }], focusedLane: 0 }))
     await act(async () => { await hook.result.current.newTab('/work/second') })
-    expect(getState().stage.lanes).toEqual([{ selectedSessionId: 'new-session' }])
+    // Selection only: the replaced id lands in the lane's Lane History like
+    // any departure (the dialog hides dead agents and autosave prunes them),
+    // which is laneHistory.test.ts's concern, not this placement rule's.
+    expect(getState().stage.lanes.map(lane => lane.selectedSessionId)).toEqual(['new-session'])
   })
 })

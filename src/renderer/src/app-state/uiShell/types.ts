@@ -198,6 +198,11 @@ export type UiShellState = {
    * field rather than a flag per kind: the TLDR and Goal histories are the
    * same dialog over different stores, and only one can be open at a time. */
   reportHistory: { sessionId: SessionId; kind: ReportHistoryKind } | null
+  /** Which lane's Lane History dialog is open, by flat lane index, or null.
+   * The index is captured when the command runs (like the row project
+   * picker's row) so the dialog shows the lane the user was focused on even
+   * if focus moves while it is open. */
+  laneHistoryLane: number | null
   newAgentPlacementOpen: boolean
   /**
    * Non-null when the placement overlay is open in "Linked Agent"
