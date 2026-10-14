@@ -37,6 +37,18 @@ export function registerBrowserPocketIpc(deps: BrowserPocketIpcDeps): void {
     return partition
   })
 
+  // Which renderer registered each pocket's CURRENT guest.
+  //
+  // WHY (#1481 review): a pocket id travels with its session when the agent
+  // is sent to another window, so for a moment two renderers know the same
+  // id. The target mounts and registers a new guest; then the source, having
+  // dropped the row, retires its old guest and calls unregister with that same
+  // id, which used to delete the TARGET's live registration, leaving its pocket
+  // on screen while every browser tool answered no_pocket. Registering the new
+  // guest already detached the old one (the controller resets a replaced
+  // entry), so an unregister from a renderer that no longer holds the
+  // registration has nothing left to release and is ignored.
+  const registeredBy = new Map<string, number>()
   ipcMain.handle('browser-pocket:register-guest', (event, p: { pocketId: string; sessionId: string; webContentsId: number }) => {
     const guest = webContents.fromId(p.webContentsId)
     if (!mayRegisterGuest(guest, event.sender.id)) return { ok: false }
@@ -56,10 +68,16 @@ export function registerBrowserPocketIpc(deps: BrowserPocketIpcDeps): void {
       })
     }
     deps.register(p.pocketId, p.sessionId, guest!)
+    registeredBy.set(p.pocketId, sender.id)
     return { ok: true }
   })
 
-  ipcMain.handle('browser-pocket:unregister-guest', (_event, p: { pocketId: string }) => deps.unregister(p.pocketId))
+  ipcMain.handle('browser-pocket:unregister-guest', (event, p: { pocketId: string }) => {
+    const owner = registeredBy.get(p.pocketId)
+    if (owner !== undefined && owner !== event.sender.id) return
+    registeredBy.delete(p.pocketId)
+    return deps.unregister(p.pocketId)
+  })
   ipcMain.handle('browser-pocket:set-flags', (_event, flags: PocketFlags) => deps.setFlags({ enabled: flags.enabled === true, allowEvaluate: flags.allowEvaluate === true }))
   ipcMain.handle('browser-pocket:take-over', (_event, p: { pocketId: string }) => deps.takeOver(p.pocketId))
   ipcMain.handle('browser-pocket:resume', (_event, p: { pocketId: string }) => deps.resume(p.pocketId))
