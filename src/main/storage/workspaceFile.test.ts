@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   collectSessionIds,
+  describeWindowWorkspace,
   parseWorkspaceFile,
   readWindowWorkspaceJson,
   serializeWorkspaceFile,
@@ -202,5 +203,31 @@ describe('refusing to destroy a file we cannot represent', () => {
       windows: [{ windowId: 'ghost' }, { windowId: 'real', workspace: { sessions: {} } }],
     }))
     expect(file.windows.map(w => w.windowId)).toEqual(['real'])
+  })
+})
+
+// The Send to Window picker's labels (#1481). Every Agent Code window has the
+// same OS title, so these two facts are what lets a person pick the right one.
+// Read defensively: the payload is another renderer's opaque document.
+describe('describeWindowWorkspace', () => {
+  const file = {
+    version: 3,
+    windows: [
+      { windowId: 'w1', bounds: null, displayId: null, fullScreen: false,
+        workspace: { projects: [{ id: 'p1', title: 'agent-code' }, { id: 'p2', title: 'site' }, { id: 'bad' }],
+          sessions: { a: {}, b: {}, c: {} } } },
+      { windowId: 'legacy', bounds: null, displayId: null, fullScreen: false, workspace: { tabs: [], sessions: { x: {} } } },
+      { windowId: 'unsaved', bounds: null, displayId: null, fullScreen: false, workspace: null },
+    ],
+  } as unknown as WorkspaceFile
+
+  it('names a window by its project titles and session count', () => {
+    expect(describeWindowWorkspace(file, 'w1')).toEqual({ projectTitles: ['agent-code', 'site'], sessionCount: 3 })
+  })
+
+  it('degrades to an empty label for an older, unsaved or unknown window instead of throwing', () => {
+    expect(describeWindowWorkspace(file, 'legacy')).toEqual({ projectTitles: [], sessionCount: 1 })
+    expect(describeWindowWorkspace(file, 'unsaved')).toEqual({ projectTitles: [], sessionCount: 0 })
+    expect(describeWindowWorkspace(file, 'nope')).toEqual({ projectTitles: [], sessionCount: 0 })
   })
 })
