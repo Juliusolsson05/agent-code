@@ -94,6 +94,7 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'new-tiled-lane-before',
   'remove-tiled-lane',
   'clear-focused-lane',
+  'lane-history',
   'dispatch-select-previous-agent',
   'dispatch-select-next-agent',
   'dispatch-focus-lane-left',
@@ -308,11 +309,12 @@ describe('built-in command catalog — baseline characterization', () => {
     // right-click menu offers → 134 with View Goal History (#1190) → 137 with
     // the two generated Hermes splits `hermes-vertical` / `hermes-horizontal`
     // (#1482; main was already at 135) → 138 with New Lane Before
-    // (`new-tiled-lane-before`), the left-hand twin of New Lane.
+    // (`new-tiled-lane-before`), the left-hand twin of New Lane → 139 with
+    // Lane History (`lane-history`).
     // Each step of that arithmetic was a deliberate edit to this line, which is the entire point of pinning it. (The two test
     // titles above had drifted to "115" while this line said 116; they now
     // track it again.)
-    expect(builtInCommandCatalog).toHaveLength(138)
+    expect(builtInCommandCatalog).toHaveLength(139)
   })
 
   it('reports no structural defects', () => {
@@ -357,9 +359,9 @@ describe('generated per-provider split commands', () => {
     // three skills commands (#1161), then up by Close Completed Agents…
     // (#1182), then up by Pin Session (#1180), then up by View Goal History
     // (#1190), then up by Reply to Reader Message (#1221, K2-4), then up by
-    // New Lane Before.
+    // New Lane Before, then up by Lane History.
     // Grok (#844) grew only the GENERATED term, 4 → 6, and Pi (#1132) 6 → 8.
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(128)
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(129)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -514,9 +516,10 @@ describe('governance targets', () => {
     // `close-completed-agents` (#1182). Then `pin-agent` (#1180). Then
     // `view-goal-history` (#1190). Then `reply-to-reader-message` (#1221, K2-4).
     // Then `hermes-vertical` and `hermes-horizontal` (#1482, generated from
-    // AGENT_PROVIDER_KINDS like Grok's and Pi's). Then `new-tiled-lane-before`.
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 64).toBe(104)
-    expect(builtInCommandCatalog).toHaveLength(138)
+    // AGENT_PROVIDER_KINDS like Grok's and Pi's). Then `new-tiled-lane-before`,
+    // then `lane-history`.
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 64).toBe(105)
+    expect(builtInCommandCatalog).toHaveLength(139)
   })
 })
 

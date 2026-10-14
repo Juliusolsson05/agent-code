@@ -189,6 +189,29 @@ export const layoutCommands: CommandDef[] = [
     },
   },
   clearFocusedLaneCommand,
+  {
+    id: 'lane-history',
+    category: 'layout-dispatch',
+    // `app` like New Lane: every surface has a focused lane, and "what was in
+    // this lane a minute ago" is asked from wherever you are.
+    //
+    // WHY a palette command opening a dialog, and no button on the lane:
+    // lanes have no header of their own (the pane header belongs to the
+    // AGENT), and a per-lane chip would sit on every lane for a question
+    // asked occasionally. The dialog is bound to the lane focused when the
+    // command ran, captured here, so moving focus while it is open cannot
+    // retarget a pick into another lane.
+    surface: 'app',
+    title: 'Lane History',
+    description: '**What it does:** Lists every agent that has been in the **focused lane**, newest first, with how long ago it left.\n\n**Use when:** You switched a lane to another agent (or cleared it) and want the previous one back.\n\n**Notes:** Click an agent, or press Enter on it, to put it back in this lane. Closed agents are not listed.',
+    keywords: ['lane history', 'history', 'previous agent', 'recent', 'back', 'last agent', 'lane', 'switch back'],
+    when: ({ workspace }) => workspace.state.stage.lanes[workspace.state.stage.focusedLane] !== undefined,
+    run: ({ workspace }) => {
+      const laneIndex = workspace.state.stage.focusedLane
+      if (workspace.state.stage.lanes[laneIndex] === undefined) return
+      useAppStore.getState().openLaneHistory(laneIndex)
+    },
+  },
   ...laneKeyboardCommands,
   {
     id: 'close-agent-remove-lane',
