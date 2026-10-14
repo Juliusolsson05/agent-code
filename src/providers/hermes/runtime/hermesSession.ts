@@ -23,13 +23,14 @@
 import { EventEmitter } from 'node:events'
 
 import {
-  HermesAuthError,
   HermesHeadless,
   HermesPromptError,
   type CommittedRow,
   type HermesConnectionState,
   type HermesRequest,
+  type HermesNotice,
   type HermesSessionState,
+  type HermesSideAnswer,
   type HistoryBoundary,
   type ScreenActivityEvent,
   type SemanticEvent,
@@ -45,7 +46,8 @@ import type {
   ProviderConditionRecord,
   ProviderConditionSnapshot,
 } from '@shared/types/providerConditions.js'
-import { HERMES_NOT_CONNECTED_MESSAGE, HERMES_SIGNED_OUT_MESSAGE, HERMES_UNREACHABLE_MESSAGE, type AgentSession, type SessionOptions } from '@shared/types/session.js'
+import { HERMES_SIGNED_OUT_MESSAGE, type AgentSession, type SessionOptions } from '@shared/types/session.js'
+import { classifyHermesStartFailure } from '@providers/hermes/runtime/startFailure.js'
 import {
   HERMES_ANSWER,
   HERMES_DECLINE,
@@ -205,6 +207,14 @@ export class HermesSession extends EventEmitter implements AgentSession {
       // emitted now never reached the screen (round-2 review x1 #2).
       this.pendingNotice = `The previous Hermes conversation (${previousStoredSessionId}) is gone from the server, so this pane started a new one.`
     })
+    headless.on('notice', (notice: HermesNotice) => this.onHermesNotice(notice))
+    headless.on('side-answer', (answer: HermesSideAnswer) => this.onSideAnswer(answer))
+    headless.on('turn-lost', () => {
+      // The backend restarted mid-turn (new epoch): the reply in progress is
+      // gone from the server, and the resume silently resets the bubble.
+      // Without this line the answer just vanished (r4 F7, #1495).
+      this.pendingNotice = 'Hermes restarted while it was replying, so that reply was lost. Send your message again if you still need it.'
+    })
     headless.on('request', (request: HermesRequest) => this.onRequest(request))
     headless.on('request-closed', ({ id }: { id: string }) => this.onRequestClosed(id))
     headless.on('connection', (state: HermesConnectionState) => this.onConnection(state))
@@ -217,16 +227,12 @@ export class HermesSession extends EventEmitter implements AgentSession {
       service.reportReachability(this.connectionId, false, error)
       this.exited = true
       // A failed start is a failed spawn: SessionManager rejects session:spawn
-      // and the renderer launders the text (sessionSpawnErrorMessage). Only
-      // the shared curated sentences survive that, so the two failures a
-      // user can fix are mapped onto them; anything else keeps its detail
-      // for main's journal and reaches the user as the generic failure.
-      if (error instanceof HermesSignedOutError) throw new Error(HERMES_SIGNED_OUT_MESSAGE)
-      if (error instanceof HermesConnectionMissingError) throw new Error(HERMES_NOT_CONNECTED_MESSAGE)
-      if (error instanceof HermesAuthError && (error.kind === 'transport' || error.kind === 'unavailable')) {
-        throw new Error(HERMES_UNREACHABLE_MESSAGE)
-      }
-      throw new Error(`Could not open the Hermes conversation: ${describeError(error)}`)
+      // and both sides of IPC launder the text, so only the curated sentences
+      // survive. classifyHermesStartFailure picks the one that names the
+      // real cause (#1495) and carries the stage + codes for the journal;
+      // the raw error stays in main's log only.
+      console.warn('[hermes] start failed:', describeError(error))
+      throw classifyHermesStartFailure(error)
     }
     service.reportReachability(this.connectionId, true)
     this.openInput()
@@ -439,6 +445,31 @@ export class HermesSession extends EventEmitter implements AgentSession {
       this.reconnecting = false
     }
     if (retry) this.scheduleReconnect()
+  }
+
+  /**
+   * Hermes' out-of-band notices (#1497 Stage B). `ttl` ones are transient by
+   * Hermes' own definition ("still starting the agent…") and go to the
+   * activity line; everything else (provider warnings, model-switch
+   * refusals, memory updates, risky tool output) becomes a readable line in
+   * the chat, because before this they were dropped and the pane looked
+   * fine while Hermes was telling the user something was wrong.
+   */
+  private onHermesNotice(notice: HermesNotice): void {
+    if (this.stopped || this.signedOut) return
+    if (notice.kind === 'ttl') {
+      this.emit('process-state', { active: true, status: notice.text })
+      return
+    }
+    const prefix = notice.level === 'error' ? 'Hermes error: ' : notice.level === 'warn' ? 'Hermes: ' : ''
+    this.emitNotice(`${prefix}${notice.text}`)
+  }
+
+  /** `/bg` and `/btw` answers: beside the conversation, never an assistant turn. */
+  private onSideAnswer(answer: HermesSideAnswer): void {
+    if (this.stopped || this.signedOut) return
+    const label = answer.kind === 'btw' ? `By the way${answer.question ? ` (${answer.question})` : ''}` : 'Background task finished'
+    this.emitNotice(`${label}:\n${answer.text}`)
   }
 
   private onRequest(request: HermesRequest): void {

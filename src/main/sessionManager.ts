@@ -1,4 +1,5 @@
 import { mainOperations } from '@main/performance/operations.js'
+import { RemoteProviderStartError } from '@shared/errors/remoteProviderStartError.js'
 import { ResponseTracker } from '@shared/performance/responseTracker.js'
 import { randomUUID } from 'crypto'
 import { REPORTING_DOMAINS, type ReportingDomain } from '@shared/types/tldr.js'
@@ -3616,6 +3617,13 @@ export class SessionManager extends EventEmitter {
           kind,
           ok: false,
           durationMs: performance.now() - startStartedAt,
+          // A remote provider says WHERE it failed (#1495): before this, the
+          // journal of the owner's first Hermes connection held only
+          // `ok:false`, and the cause (-32601 from a v0.20.4 server) was in
+          // main's stdout alone. Fixed enum + integers only, never text.
+          ...(err instanceof RemoteProviderStartError
+            ? { stage: err.stage, ...(err.detail.rpcCode !== undefined ? { rpcCode: err.detail.rpcCode } : {}), ...(err.detail.httpStatus !== undefined ? { httpStatus: err.detail.httpStatus } : {}), ...(err.detail.method ? { method: err.detail.method } : {}) }
+            : {}),
         })
         performanceService.error('session.spawn.providerStart.error', err, {
           sessionId,

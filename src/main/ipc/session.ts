@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 
 import { ProviderCliNotFoundError, type SessionManager } from '@main/sessionManager.js'
 import { MissingWorkspaceDirectoryError } from '@main/workspaceDirectory.js'
-import { CLAUDE_PROXY_STARTUP_FAILED_MESSAGE, isClaudeProxyStartupFailure, SESSION_START_FAILED_MESSAGE } from '@shared/types/session.js'
+import { CLAUDE_PROXY_STARTUP_FAILED_MESSAGE, curatedRemoteProviderMessage, curatedRemoteProviderStage, isClaudeProxyStartupFailure, SESSION_START_FAILED_MESSAGE } from '@shared/types/session.js'
 import { mainOperations } from '@main/performance/operations.js'
 import type { PasteDebugJournalRegistry } from '@main/pasteDebugJournal.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
@@ -687,6 +687,13 @@ export function classifySpawnFailure(error: unknown, proxyApplies: boolean): Spa
   if (error instanceof MissingWorkspaceDirectoryError) return { signature: 'missing-workspace', message: raw }
   if (error instanceof ProviderCliNotFoundError) return { signature: 'cli-not-found', message: raw }
   if (raw === WINDOW_CANNOT_OWN_SESSION) return { signature: 'window-refused', message: WINDOW_CANNOT_OWN_SESSION }
+  // A remote provider's curated start sentences (#1495). They were built for
+  // exactly this boundary (session.ts: "curated exactly like
+  // PROVIDER_CLI_NOT_FOUND_SUFFIX") but this branch was missing, so EVERY
+  // Hermes failure, signed-out and too-old-server included, reached the pane
+  // as the generic sentence. Re-emitted from the constant, never from `raw`.
+  const remote = curatedRemoteProviderMessage(raw)
+  if (remote) return { signature: `remote-start:${curatedRemoteProviderStage(raw) ?? 'unknown'}`, message: remote }
   if (raw.includes('posix_spawnp failed')) return generic('posix-spawnp')
   // The proxy code only where the guidance applies (round 2 B3): a Codex
   // `spawn /repo/mitmdump: ENOENT` is an ENOENT, and signing it claude-proxy

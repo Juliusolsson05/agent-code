@@ -9,12 +9,11 @@
 import { EventEmitter } from 'node:events'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import WebSocket from 'ws'
-
 import {
   HermesAuthError,
   backendCompatibility,
   buildWsUrl,
+  wsTicketProtocols,
   normalizeBaseUrl,
   probe,
   type FetchLike,
@@ -27,6 +26,7 @@ import { loadHermesConnections, saveHermesConnections, type StoredHermesConnecti
 import { HermesTokenStore } from '@main/hermes/tokenStore.js'
 import { HermesSignedOutError, HermesTokenBroker } from '@main/hermes/tokenBroker.js'
 import { runNativeSignIn, SignInCancelledError } from '@main/hermes/nativeSignIn.js'
+import { openWs } from '@main/hermes/openWs.js'
 import {
   validateHermesConnectionName,
   type HermesConnectionDraft,
@@ -35,12 +35,6 @@ import {
   type HermesTestResult,
 } from '@shared/hermes/types.js'
 
-// Hermes' own client allows 15 s for the socket to open (json-rpc-gateway.ts
-// DEFAULT_CONNECT_TIMEOUT_MS); a VPS over a VPN can be slow, never longer.
-const OPEN_TIMEOUT_MS = 15_000
-// A resume of a long conversation is one frame (S12: 120 rows); Hermes caps
-// transcripts it will send far below this.
-const MAX_PAYLOAD_BYTES = 64 * 1024 * 1024
 
 export type HermesServiceDeps = {
   stateDir: string
@@ -48,7 +42,7 @@ export type HermesServiceDeps = {
   openExternal: (url: string) => Promise<void> | void
   fetchImpl?: FetchLike
   /** Socket factory; tests inject a fake. */
-  openSocket?: (url: string) => Promise<WebSocketLike>
+  openSocket?: (url: string, protocols: string[]) => Promise<WebSocketLike>
 }
 
 type RuntimeState = {
@@ -282,8 +276,9 @@ export class HermesConnectionService extends EventEmitter {
       const ticket = await broker.ticket()
       // Signed out (or URL edited) while the ticket was being minted.
       broker.assertLive()
-      const url = buildWsUrl(connection.baseUrl, ticket)
-      return this.deps.openSocket ? this.deps.openSocket(url) : openWs(url)
+      const url = buildWsUrl(connection.baseUrl)
+      const protocols = wsTicketProtocols(ticket)
+      return this.deps.openSocket ? this.deps.openSocket(url, protocols) : openWs(url, protocols)
     }
   }
 
@@ -384,30 +379,4 @@ export function describeError(error: unknown): string {
     return error.message
   }
   return error instanceof Error ? error.message : String(error)
-}
-
-function openWs(url: string): Promise<WebSocketLike> {
-  return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url, { maxPayload: MAX_PAYLOAD_BYTES, handshakeTimeout: OPEN_TIMEOUT_MS })
-    const fail = (error: Error) => {
-      socket.removeAllListeners('open')
-      reject(error)
-    }
-    socket.once('open', () => {
-      socket.removeAllListeners('error')
-      // `ws` emits 'error' before 'close'; a listener must exist or Node
-      // treats it as unhandled. RpcConnection reacts to the close event.
-      socket.on('error', () => undefined)
-      resolve(socket as unknown as WebSocketLike)
-    })
-    socket.once('error', fail)
-    // 4401/4403 arrive as an HTTP refusal of the upgrade; surface it in words.
-    socket.once('unexpected-response', (request, response) => {
-      // With this listener attached `ws` leaves the refused request open.
-      request.destroy()
-      fail(new Error(response.statusCode === 401 || response.statusCode === 403
-        ? 'Hermes refused the connection ticket. Sign in again.'
-        : `Hermes refused the WebSocket (HTTP ${response.statusCode}).`))
-    })
-  })
 }
