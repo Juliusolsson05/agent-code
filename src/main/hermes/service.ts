@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import {
   HermesAuthError,
+  HermesStartError,
   backendCompatibility,
   buildWsUrl,
   wsTicketProtocols,
@@ -27,6 +28,7 @@ import { HermesTokenStore } from '@main/hermes/tokenStore.js'
 import { HermesSignedOutError, HermesTokenBroker } from '@main/hermes/tokenBroker.js'
 import { runNativeSignIn, SignInCancelledError } from '@main/hermes/nativeSignIn.js'
 import { openWs } from '@main/hermes/openWs.js'
+import { tailnetKindOfUrl } from '@shared/hermes/tailnet.js'
 import {
   validateHermesConnectionName,
   type HermesConnectionDraft,
@@ -183,7 +185,7 @@ export class HermesConnectionService extends EventEmitter {
       this.patchRuntime(id, { backend: { version: result.version, desktopContract: this.runtime.get(id)?.backend?.desktopContract ?? null, compatibility: this.runtime.get(id)?.backend?.compatibility ?? null } })
       return { ok: true, version: result.version, authRequired: result.authRequired, providers: result.providers.map((provider) => provider.displayName) }
     } catch (error) {
-      return { ok: false, error: describeError(error) }
+      return { ok: false, error: describeError(error, connection.baseUrl) }
     }
   }
 
@@ -219,7 +221,7 @@ export class HermesConnectionService extends EventEmitter {
       const tokens = await this.tokens.get(id, connection.baseUrl).catch(() => null)
       this.patchRuntime(id, {
         state: tokens ? 'ready' : 'signed-out',
-        lastError: error instanceof SignInCancelledError && !controller.signal.aborted ? error.message : error instanceof SignInCancelledError ? null : describeError(error),
+        lastError: error instanceof SignInCancelledError && !controller.signal.aborted ? error.message : error instanceof SignInCancelledError ? null : describeError(error, connection.baseUrl),
       })
       if (!(error instanceof SignInCancelledError)) throw error
     } finally {
@@ -262,7 +264,7 @@ export class HermesConnectionService extends EventEmitter {
   reportReachability(id: string, reachable: boolean, error?: unknown): void {
     const state = this.runtime.get(id)?.state
     if (!state || state === 'signed-out' || state === 'signing-in') return
-    this.patchRuntime(id, reachable ? { state: 'ready', lastError: null } : { state: 'unreachable', lastError: describeError(error) })
+    this.patchRuntime(id, reachable ? { state: 'ready', lastError: null } : { state: 'unreachable', lastError: describeError(error, this.connections.find((entry) => entry.id === id)?.baseUrl) })
   }
 
   /**
@@ -366,8 +368,19 @@ export class HermesConnectionService extends EventEmitter {
   }
 }
 
-export function describeError(error: unknown): string {
+export function describeError(error: unknown, baseUrl?: string): string {
+  // A start() failure arrives wrapped with its stage; the words are about the cause.
+  if (error instanceof HermesStartError) return describeError(error.cause, baseUrl)
   if (error instanceof HermesSignedOutError) return error.message
+  const code = error instanceof HermesAuthError && error.kind === 'transport'
+    ? error.causeCode
+    : (error as { code?: unknown } | null)?.code
+  // A tailnet address that cannot be reached is almost always Tailscale
+  // itself (not connected on this Mac, or the ACL does not allow this
+  // device), not `hermes serve` (#1498). Say that first.
+  if (baseUrl && tailnetKindOfUrl(baseUrl) && typeof code === 'string' && TAILNET_NETWORK_CODES.has(code)) {
+    return `This is a Tailscale address. Check that Tailscale is connected on this Mac and that this device is allowed to reach ${hostOf(baseUrl)}.`
+  }
   if (error instanceof HermesAuthError) {
     if (error.kind === 'transport') {
       if (error.causeCode === 'ECONNREFUSED') return 'Hermes refused the connection. Is `hermes serve` running on the server?'
@@ -379,4 +392,14 @@ export function describeError(error: unknown): string {
     return error.message
   }
   return error instanceof Error ? error.message : String(error)
+}
+
+const TAILNET_NETWORK_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH'])
+
+function hostOf(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).host
+  } catch {
+    return baseUrl
+  }
 }
