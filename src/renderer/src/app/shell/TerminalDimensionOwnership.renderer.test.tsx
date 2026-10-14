@@ -234,6 +234,37 @@ describe('terminal dimension ownership across main-surface takeovers', () => {
     })
   })
 
+  it('retains the lanes hidden under Sidekick Spotlight, and lets Settings win over it (#1493 follow-up)', () => {
+    // The 'sidekick' takeover renders nothing in <main>: the Sidekick column
+    // fills the row. What MainSurface owes it is the same retention every
+    // takeover gets, so a lane terminal is neither unmounted nor replayed.
+    const tree = () => (
+      <AgentTerminalOwnershipProvider>
+        <MainSurface onNewTabRequest={vi.fn()} />
+      </AgentTerminalOwnershipProvider>
+    )
+    const view = render(tree())
+    harness.workspace = {
+      ...harness.workspace,
+      state: { ...(harness.workspace.state as Record<string, unknown>), sidekickPanel: { open: true, width: 420, sidekickId: 'side' } },
+    }
+    harness.appState = { ...harness.appState, sidekickSpotlight: true }
+    view.rerender(tree())
+    expect(screen.getByTestId('retained-workspace-surface').style.display).toBe('none')
+    expect(screen.queryByTestId('settings-page')).toBeNull()
+    expect(screen.getByTestId('pane-agent-terminal-session-1')).toBeTruthy()
+
+    harness.appState = { ...harness.appState, settingsPageOpen: true }
+    view.rerender(tree())
+    expect(screen.getByTestId('settings-page')).toBeTruthy()
+
+    harness.appState = { ...harness.appState, settingsPageOpen: false, sidekickSpotlight: false }
+    view.rerender(tree())
+    expect(screen.getByTestId('retained-workspace-surface').style.display).toBe('contents')
+    expect(harness.paneMounts['session-1']).toBe(1)
+    expect(harness.paneUnmounts['session-1'] ?? 0).toBe(0)
+  })
+
   it('keeps every pane terminal mounted across entering and leaving Reader Mode', () => {
     const tree = () => (
       <AgentTerminalOwnershipProvider>

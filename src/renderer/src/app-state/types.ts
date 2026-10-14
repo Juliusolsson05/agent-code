@@ -120,6 +120,7 @@ export type UiShellSlice = UiShellState & {
   closeAgentStatusPanel: () => void
   toggleAgentStatusPanel: () => void
   setKeyboardRegion: (region: 'workspace' | 'sidekick') => void
+  setSidekickSpotlight: (open: boolean) => void
   openSidekickPicker: (mode?: 'switch' | 'create') => void
   closeSidekickPicker: () => void
   togglePerformancePanel: () => void

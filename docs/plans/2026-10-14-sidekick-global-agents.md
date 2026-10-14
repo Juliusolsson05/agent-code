@@ -626,3 +626,25 @@ Owner feedback after #1494 merged: the Sidekick showed over Settings, could not 
 - **Settings.** The panel is wrapped in `RetainedWorkspaceSurface` and hidden while `settingsPageOpen`, like the lanes under a takeover (mounted, so no xterm dispose or PTY replay, #752). The keyboard region drops to `workspace` while hidden. The Sidekick commands do NOT leave Settings: Settings owns the interaction (`hasAppInteractionOwner`), so no chord, palette or menu command reaches them there; a branch for it was written and removed in review as unreachable. Escape leaves Settings and the column reappears. Ruling: Reader Mode and Spotlight do NOT hide it, because they are ways of looking at agents, and the sidekick is the agent kept beside them. Cost if wrong: a one-line condition in `SidekickPanelSurface`.
 - **Resize.** Root cause, from the code (the app was not launched): the 10px handle sat at `left-0 -translate-x-1/2` inside the `overflow-hidden` aside. Half of it was clipped, and its 4px bar sat on the 1px border. It is now an in-flow `SplitHandle` (10/4px), the lane boundary's exact parameters. The stored width stays the agent area; the column adds its 56px of chrome, so existing saved widths keep their agent size. `[role="separator"]` is region-neutral, so dragging never moves the keyboard.
 - **Native shape.** The `SidePanel` and `PanelHeader` chrome is gone. The column is boundary → 46px chip strip (`SidekickStrip`: S1, S2…, the `dispatchActivityClasses` palette, `+` for new) → leaf on the canvas with its own PaneHeader as the only header, dimmed like an unfocused lane. Switch is now a chip click. Reload, Remove and Hide moved to the chip's native right-click menu (`menu:popup`), and the strip's own right-click menu has New and Hide, so Hide stays reachable with no sidekick. Ruling: a chip click never takes a sidekick from another window; "Open here" stays the explicit move. `confirmRemoveSidekick` is now shared with the picker.
+
+## Follow-up: Sidekick Spotlight (2026-10-14)
+
+Owner: "make sure spotlight works for the sidekick".
+
+- **Shape.** `uiShell.sidekickSpotlight` (window-local, never persisted). While it is on screen (`sidekickSpotlightActive`: flag set, panel open, Settings not open), three things happen:
+  - MainSurface takes over as `'sidekick'`, so the lanes are retained-hidden (#752);
+  - App collapses `<main>` to `w-0 flex-none`;
+  - the Sidekick column, the same element with the same leaf, turns `flex-1` and drops its boundary.
+  The agent never remounts.
+- **Ruling: not the workspace `SpotlightState`.** Lane Spotlight is keyed to a project tab, and it makes the spotlighted session the palette's command target. A sidekick has no tab, and v1 never lets palette commands target a sidekick. Cost if wrong: palette commands stay lane-targeted while the Sidekick is spotlit, which is the v1 contract anyway.
+- **Entry points.**
+  - ⌥S (`toggle-spotlight`) is now on the Sidekick region allowlist. Its `run` exits Sidekick Spotlight first; it enters it when the keyboard is in an open Sidekick; otherwise it does lane Spotlight.
+  - Esc leaves Sidekick Spotlight from inside the region gate.
+  - The chip menu has a Spotlight item.
+  - Hiding the panel clears the flag. Settings does not clear it, so Esc out of Settings returns to the spotlit Sidekick.
+- **Known gaps (accepted).**
+  - The `<main>` collapse in App.tsx has no dedicated test; the predicate it reads does.
+- **Review round (#1513), all fixed.**
+  - Lane picker leases ARE now cleared under Sidekick Spotlight (useRenderedLeaseHygiene; sidekick rows skipped). The earlier claim that the region gate protected them was wrong: picker handlers run before that gate.
+  - While spotlit, the Sidekick owns the keyboard whatever `keyboardRegion` says. The useKeybinds gate keys on the flag too, and pointer/focus outside the panel no longer flips the region. The Surface re-pins the region when Settings closes.
+  - Esc leaves Sidekick Spotlight even with a retained fullscreen Global Editor underneath.

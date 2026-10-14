@@ -291,6 +291,9 @@ export const SIDEKICK_REGION_COMMAND_IDS: ReadonlySet<string> = new Set([
   'sidekick-picker',
   'new-sidekick',
   'open-command-palette',
+  // Spotlight works on the sidekick too (#1493 follow-up): the command itself
+  // decides which Spotlight the chord means (spotlightCommands.ts).
+  'toggle-spotlight',
 ])
 
 /** Chord -> candidate commands, built once per override change. */
@@ -900,7 +903,28 @@ export function useKeybinds(
       // terminal still receives the key (Escape interrupts the agent there).
       // Checked before the Escape takeovers on purpose, after the app-modal
       // and in-pane picker owners above (those are explicit, visible owners).
-      if (useAppStore.getState().keyboardRegion === 'sidekick') {
+      // Sidekick Spotlight (#1493 follow-up) counts as the Sidekick owning the
+      // keyboard whatever `keyboardRegion` says. The lanes are hidden under it,
+      // so a lane chord must never run: review of #1513 found that clicking
+      // app chrome, or leaving Settings, could leave the region at
+      // 'workspace' while the Sidekick still filled the window, and then ⌘W
+      // closed a lane agent nobody could see and Esc closed a hidden lane
+      // Spotlight instead of this one. Settings covering it is the exception:
+      // Settings owns the interaction then (the app-owner gate above).
+      const appState = useAppStore.getState()
+      const sidekickSpotlightOn = appState.sidekickSpotlight && !appState.settingsPageOpen
+      if (appState.keyboardRegion === 'sidekick' || sidekickSpotlightOn) {
+        // Esc leaves Sidekick Spotlight, the same one-key dismiss as lane
+        // Spotlight below — which this gate would otherwise never reach.
+        // NOT conditioned on a fullscreen Global Editor (unlike lane
+        // Spotlight's Esc): the editor is retained-hidden under this takeover,
+        // its own Esc handler declines while hidden, and the flag would have
+        // left Esc with no owner at all (#1513 review).
+        if (k === 'Escape' && sidekickSpotlightOn) {
+          e.preventDefault()
+          appState.setSidekickSpotlight(false)
+          return
+        }
         const sidekickCommandId = routedCommandForEvent(e, bindingIndex, GLOBAL_CONTEXT_ONLY)
         if (sidekickCommandId && SIDEKICK_REGION_COMMAND_IDS.has(sidekickCommandId)) {
           e.preventDefault()
