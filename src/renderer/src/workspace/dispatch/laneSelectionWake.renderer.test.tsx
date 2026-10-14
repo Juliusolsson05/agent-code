@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { useDispatchActions } from '@renderer/workspace/hook/actions/dispatch'
 import {
-  insertLaneRightIntoGrid,
+  insertLaneIntoGrid,
   insertRowBelowInGrid,
   removeRowFromGrid,
 } from '@renderer/workspace/dispatch/gridShape'
@@ -245,7 +245,7 @@ describe('selecting an agent into a lane', () => {
  */
 function reshapeWith(
   mutate: (tiled: WorkspaceState['stage']) =>
-    ReturnType<typeof insertLaneRightIntoGrid>,
+    ReturnType<typeof insertLaneIntoGrid>,
 ) {
   return (ref: { current: WorkspaceState }) => {
     const tiled = ref.current.stage
@@ -268,7 +268,7 @@ describe('a reshape while the wake is in flight', () => {
   it('follows the target lane when an earlier row grows under it', async () => {
     // Real New Lane in row 0: [1,2] -> [2,2]. Target slides from flat 2 to 3.
     const { hook, written } = harness({
-      duringWake: reshapeWith(tiled => insertLaneRightIntoGrid(tiled, 0)),
+      duringWake: reshapeWith(tiled => insertLaneIntoGrid(tiled, 0, 'after')),
     })
 
     // Aim at row 1, column 1 of a [1, 2] grid — flat index 2.

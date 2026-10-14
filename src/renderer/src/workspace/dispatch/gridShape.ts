@@ -345,7 +345,20 @@ function usableLaneWeights(
 }
 
 /**
- * Insert one EMPTY lane immediately right of `laneIndex`, in that lane's row.
+ * Which side of the anchor lane an insertion lands on. `after` is New Lane,
+ * `before` is New Lane Before.
+ *
+ * WHY one function with a side flag rather than two exports: the two paths
+ * differ by exactly `+1` on the insertion coordinate. Everything that can go
+ * wrong — the per-row and total caps, the weight splice, the focus shift — is
+ * shared, and two copies of it is exactly the drift this pure reducer exists to
+ * prevent.
+ */
+export type LaneInsertSide = 'before' | 'after'
+
+/**
+ * Insert one EMPTY lane immediately beside `laneIndex` (right for `after`,
+ * left for `before`), in that lane's row.
  *
  * Only the owning row lengthens. That is the ragged-shape contract: asking for
  * space beside one agent must not widen a row the user was not editing, which
@@ -356,9 +369,10 @@ function usableLaneWeights(
  * which in the common case silently duplicates the top of the index into the
  * slot beside you.
  */
-export function insertLaneRightIntoGrid(
+export function insertLaneIntoGrid(
   tiled: TiledDispatchState,
   laneIndex: number,
+  side: LaneInsertSide,
 ): TiledDispatchState | null {
   const grid = normalizeGridShape(tiled)
   const rowIndex = rowIndexForLane(grid.rows, laneIndex)
@@ -370,16 +384,21 @@ export function insertLaneRightIntoGrid(
   if (row.length >= MAX_DISPATCH_TILES) return null
   if (grid.lanes.length >= MAX_DISPATCH_LANES) return null
 
-  const insertAt = laneIndex + 1
+  // `before` inserts AT the anchor's own coordinate, which is still inside the
+  // anchor's row (at worst it is the row's start index). That is what keeps
+  // the row-length bump and the weight splice below pointed at the right row
+  // without any extra row arithmetic for the left-hand case.
+  const insertAt = side === 'after' ? laneIndex + 1 : laneIndex
   return {
     lanes: [...grid.lanes.slice(0, insertAt), {}, ...grid.lanes.slice(insertAt)],
     rows: grid.rows.map((candidate, i) =>
       i === rowIndex ? { ...candidate, length: candidate.length + 1 } : candidate,
     ),
-    // The command inserts after focus, so its normal path keeps this index. The
-    // helper is deliberately more general: an insertion BEFORE the focused
-    // coordinate shifts the focused session right, and leaving the ordinal
-    // unchanged would silently retarget every keyboard command.
+    // New Lane inserts after focus, so its path keeps this index. New Lane
+    // Before inserts AT focus, which shifts the focused session one place
+    // right — and so does any insertion in an earlier row. Leaving the ordinal
+    // unchanged would silently move focus onto the empty newcomer and retarget
+    // every keyboard command, so focus follows the session instead.
     focusedLane:
       insertAt <= grid.focusedLane ? grid.focusedLane + 1 : grid.focusedLane,
     laneWeights: insertLaneWeight(grid, rowIndex, insertAt),

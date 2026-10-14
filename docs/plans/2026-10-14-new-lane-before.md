@@ -1,5 +1,8 @@
 # New Lane Before
 
+**Status:** implemented on this branch. Owner accepted the defaults below
+("build it out", 2026-10-14).
+
 ## Problem
 
 **New Lane** (`new-tiled-lane`) can only insert an empty lane to the
