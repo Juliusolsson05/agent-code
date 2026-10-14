@@ -181,6 +181,30 @@ describe('receiving a moved agent (target window)', () => {
   })
 })
 
+describe('a cancel that arrives while the target is still preparing', () => {
+  it('stops the merge before any row is published', async () => {
+    // Snapshots are the one await between receiving an offer and publishing
+    // its rows. Main's deadline can fire inside it; routing has then already
+    // gone back to the source, so publishing would paint dead panes here.
+    // One pending snapshot per moved session; all are released together.
+    const pending: Array<() => void> = []
+    const release = () => { for (const resolve of pending.splice(0)) resolve() }
+    api.getBackendSnapshot.mockImplementation(() => new Promise(resolve => { pending.push(() => resolve(null)) }))
+    const h = harness(targetState())
+    await h.fire('offer', offerFromSource())
+    await h.fire('cancelled', { moveId: 'move-1', sessionIds: ['mover', 'child'] } satisfies SessionMoveCancelled)
+
+    await waitFor(() => expect(pending).toHaveLength(2))
+    await act(async () => { release() })
+    // Let the merge continuation run to completion before asserting absence.
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+    expect(h.runtimes().mover).toBeUndefined()
+    expect(Object.keys(h.state().sessions)).toEqual(['resident'])
+    expect(h.refs.pendingSessionMoveIdsRef.current).toEqual([])
+    expect(h.selectTiledLaneSession).not.toHaveBeenCalled()
+  })
+})
+
 describe('sending an agent (source window)', () => {
   it('keeps the rows until main reports the commit, then drops them without killing and resolves the caller', async () => {
     const h = harness(sourceState())

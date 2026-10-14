@@ -83,12 +83,20 @@ export function useSessionMoves(params: {
   showToast: (message: string, durationMs?: number) => void
 }): { sendSessionToWindow: (sessionId: SessionId, targetWindowId: string) => Promise<SendSessionToWindowResult> } {
   const { refs, setState, setRuntimes, bootstrapComplete, selectTiledLaneSession, showToast } = params
+  // WHY there is no "verdict arrived before the invoke reply" buffer: main
+  // returns the start result synchronously from its handler, and Electron
+  // delivers that reply and every later message to this renderer over one
+  // ordered channel. A verdict needs the TARGET's confirmation (or main's 20 s
+  // deadline) first, so it cannot overtake the reply. A verdict for an unknown
+  // move therefore means this renderer reloaded mid-move, and it settles
+  // nothing.
   const outgoingRef = useRef(new Map<string, OutgoingMove>())
-  /** Main's verdict can, in principle, overtake the invoke reply that names
-   *  the move. A verdict for a move this renderer has not registered yet is
-   *  parked here and settles the registration the moment it happens. */
-  const earlyVerdictsRef = useRef(new Map<string, SendSessionToWindowResult>())
   const incomingRef = useRef(new Map<string, IncomingMove>())
+  /** Moves main cancelled while this window was still preparing the merge
+   *  (awaiting backend snapshots). The cancel finds nothing in `incomingRef`
+   *  yet, so it is remembered here and the merge stops before publishing a
+   *  row, rather than painting panes routing has already left. */
+  const cancelledBeforeMergeRef = useRef(new Set<string>())
   /**
    * Events that arrived before this window finished restoring itself.
    *
@@ -124,10 +132,7 @@ export function useSessionMoves(params: {
 
   const settleOutgoing = useCallback((moveId: string, result: SendSessionToWindowResult) => {
     const outgoing = outgoingRef.current.get(moveId)
-    if (!outgoing) {
-      earlyVerdictsRef.current.set(moveId, result)
-      return
-    }
+    if (!outgoing) return
     outgoingRef.current.delete(moveId)
     clearTimeout(outgoing.timer)
     outgoing.resolve(result)
@@ -163,6 +168,19 @@ export function useSessionMoves(params: {
       drafts: packet.drafts,
       setRuntimes,
     })
+    const discardSeeded = () => setRuntimes(prev => {
+      const next = { ...prev }
+      for (const id of dryRun.movedSessionIds) delete next[id]
+      return next
+    })
+    if (cancelledBeforeMergeRef.current.delete(offer.moveId)) {
+      // Main gave up on this move during the await and has already routed the
+      // sessions back to the source. Nothing was published, so nothing to give
+      // back except the runtimes just seeded; no refusal either, since the
+      // move is already settled.
+      discardSeeded()
+      return
+    }
     // Holder object: TypeScript keeps a `let` narrowed across the updater.
     // Sound only because setState is the synchronous zustand setter.
     const merged: { value: ReceiveMovedSessionsResult | null } = { value: null }
@@ -175,11 +193,7 @@ export function useSessionMoves(params: {
     if (!result?.ok) {
       // Something claimed one of these ids during the snapshot await. The
       // seeded runtimes belong to rows that will not exist here.
-      setRuntimes(prev => {
-        const next = { ...prev }
-        for (const id of dryRun.movedSessionIds) delete next[id]
-        return next
-      })
+      discardSeeded()
       await refuse(result?.reason ?? 'The move could not be applied.')
       return
     }
@@ -219,7 +233,12 @@ export function useSessionMoves(params: {
       refs.pendingSessionMoveIdsRef.current = refs.pendingSessionMoveIdsRef.current.filter(id => id !== event.moveId)
       const incoming = incomingRef.current.get(event.moveId)
       incomingRef.current.delete(event.moveId)
-      if (!incoming) return
+      if (!incoming) {
+        // Still preparing (or never received): stop that merge before it
+        // publishes. See cancelledBeforeMergeRef.
+        cancelledBeforeMergeRef.current.add(event.moveId)
+        return
+      }
       // Rows only. Routing already went back to the source, which never
       // stopped showing them. Projects this move created go only if empty.
       dropRows(incoming.sessionIds, incoming.addedTabIds)
@@ -307,12 +326,6 @@ export function useSessionMoves(params: {
     })
     if (!started.ok) return { ok: false, message: started.message }
     return await new Promise<SendSessionToWindowResult>(resolve => {
-      const early = earlyVerdictsRef.current.get(started.moveId)
-      if (early) {
-        earlyVerdictsRef.current.delete(started.moveId)
-        resolve(early)
-        return
-      }
       const timer = setTimeout(() => {
         outgoingRef.current.delete(started.moveId)
         resolve({ ok: false, message: `No answer from Window ${started.targetWindowNumber}.`, uncertain: true })
