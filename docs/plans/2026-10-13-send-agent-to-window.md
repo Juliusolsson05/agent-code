@@ -204,3 +204,19 @@ drop rows (no kill), clear lanes
 
 - `npx tsc -b`, the relevant vitest files, then the full suite once at the end.
 - Manual app QA is owed: per house rule, the app is not launched by the agent.
+
+## Review dispositions (one round: Codex on correctness, Claude on integration)
+
+| Finding | Verdict | Disposition |
+|---|---|---|
+| Codex 1 / Claude 1: an in-flight save could confirm a move (or an adoption) whose rows it did not contain, so the source dropped rows that were not durable anywhere | valid (the adoption half predates this PR) | fixed in `856eb5e0`: confirmations are captured at serialization; a regression test fails on the old code |
+| Codex 2: waking a parked agent in the target rotated the lease, so a deadline rollback skipped it while the target dropped its rows | valid | fixed in `d883ef63`: rollback also takes back a newer claim by the target window; any other window's claim is still left alone |
+| Codex 3: after a rollback the source kept stale readiness and conditions that had been delivered only to the target | valid | fixed in `d883ef63`: rollback marks a router gap, so the source's existing routing-gap repair resyncs |
+| Codex 4: the source retiring its Browser Pocket guest unregistered the target's new guest under the same pocket id | valid | fixed in `2d13863d`: only the renderer holding the current registration may unregister it |
+| Claude 2: `agents.moveToWindow` accepted extension views | valid | fixed in `45d00581`: the rule now lives in the packet builder and is shared by every entry point |
+| Claude 3: moving a child alone silently cuts it off from its parent's orchestration tools | valid (UX) | `45d00581`: the picker and the capability description warn. Redirecting the move to the root owner is a product call, left UNCONFIRMED |
+| Claude 4: the picker offered windows that were closing or not ready | valid, low | fixed in `d883ef63` |
+| Mutation survivors: failed offer delivery, autosave confirm drain, `moving` map never cleared, outcome split, append ordering | valid gaps | tests added (failed delivery, two moves in a row, in-flight save, `not_started`/`unknown`, clock behind the target's rows) |
+| Remaining survivors (pin dedupe, self-link guard, packet version, fresh-id retry, empty drafts, unmount settle, H6/H8/H11/H17/H19) | nits | declined: each guard has a WHY comment, and none has a user-visible failure without another bug first |
+| Suspicion: `session:input` and `deliver-prompt` do not check display-window ownership | pre-existing, unproven | not taken up here; no failure sequence was shown for this branch |
+| Suspicion: replacement or provider switch during a pending move, and leftover history refs after a move-out | unproven | recorded as residuals in the plan |
