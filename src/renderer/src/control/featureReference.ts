@@ -42,6 +42,7 @@ import { controlReference as mcpReference } from '@renderer/features/mcp/control
 import { controlReference as skillsReference } from '@renderer/features/skills/controlReference'
 import { controlReference as sessionContextMenuReference } from '@renderer/features/session-context-menu/controlReference'
 import { controlReference as hermesReference } from '@renderer/features/hermes-chat/controlReference'
+import { controlReference as sidekickReference } from '@renderer/features/sidekick/controlReference'
 
 export const featureReferences = [
   ...reference0,
@@ -86,6 +87,7 @@ export const featureReferences = [
   ...skillsReference,
   ...sessionContextMenuReference,
   ...hermesReference,
+  ...sidekickReference,
 ]
 
 // These directories implement shared infrastructure rather than separate UI
@@ -134,6 +136,7 @@ export const referenceOwnership = {
   "session-text-delivery": "prompt-templates",
   "reply-to-selection": "reply-to-selection",
   "agent-status": "agent-status",
+  "sidekick": "sidekick",
   "ai-workspace": "ai-workspace",
   "editor": "read-only-documents",
   "git": "git",

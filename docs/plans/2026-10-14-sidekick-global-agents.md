@@ -570,3 +570,24 @@ Each task names what it hands to the next. Every commit gets thick WHY comments;
   - **Ruling: no Control `ui.surfaceSet` route for the panel in v1.** Control exposure of sidekicks is out of scope (§5).
   - **The catalog went from 137 to 140 commands:** `sidekick-panel` (⌘J), `sidekick-picker` (⌘⇧J) and `new-sidekick`. `check:keybindings` is OK.
   - **Mutants:** the region gate is killed by 2 tests; the panel and picker states and Hermes ordering are pinned.
+- **2026-10-14, Task 7: full `npm run check`.** 8,359 passed and 12 skipped; 3 tests and 1 file failed. Each is classified against `origin/main` `d0c3df99` in the main checkout:
+  - **`control/featureReference.test.ts`: real, and this branch's.** Every feature folder needs a control reference page. Fixed by adding `features/sidekick/controlReference.ts`.
+  - **`testing/system/nodePtyPtmxLeak.test.ts`: fails identically on `origin/main`** ("expected 20 to be less than or equal to 0"). It is a local node-pty/ptmx environment failure, and nothing in this branch touches node-pty.
+  - **`app-state/store.test.ts` and `store.performance.test.ts`: time out only under the full parallel run** (the test at 5 s, the `beforeAll` import at 10 s). They pass alone on both `origin/main` and this branch. This is the known local load failure in memory; CI is the gate.
+  - Typecheck, `check:keybindings`, `test:contract`, the fixture checks and `test:package` all passed (the check reached the test run, which comes after them).
+
+## Plan vs built (2026-10-14)
+
+| Section | Status | Note |
+|---|---|---|
+| §1 Data model and invariants I1–I5 | MATCH | Each invariant is pinned by a test (I1 autosave, I2/I3 service, I4 ownership, I5 guards). |
+| §2 Shared types | MATCH | |
+| §3 File section, store queue | MATCH | Observers take sidekicks as a second argument (ruling, Task 2). |
+| §4 SidekickService, IPC, preload, projections, window close | MATCH, one DRIFT | `attach` claims the lease (ruling). `excludeFromBequest` shipped as `partitionClosedWindowSessions` + `releaseForClosedWindow`: same behaviour, testable as a pure function. |
+| §5 Renderer model | MATCH, one DRIFT | The row writers are in `hook/actions/sidekick.ts`, not `pane.ts` (ruling). Undo Close needed no change (ruling). `sidekickPanel` is optional (ruling). |
+| §6 Feature state and actions | MATCH | "Live here" is derived from the window's own rows, and persistence is throttled (rulings, Task 4). |
+| §7 Panel UI, picker, commands | DRIFT | There is no `remove-sidekick` palette command: Remove is in the panel header and the picker (⌘⌫). There is no Control `ui.surfaceSet` route (ruling). |
+| §8 Hermes | MATCH | Hermes is first when a connection is ready, and disabled with the fix when none is signed in. Hermes code is unchanged. |
+| §9 Consumer audit | MATCH, one DRIFT | Palette commands never target a sidekick in v1 (ruling, Tasks 5 and 6). The catalog-walk guard is therefore unnecessary and was not built. |
+| Tests 1–11 | MATCH, with three DRIFTs | Test 8's catalog walk was dropped (above). Test 9 drives the real `useInteractiveOwnership`, type-to-focus and paste hooks in two composers, not two full TileLeafs. Test 10 covers the panel body states and picker ordering rather than a full-workspace panel mount. |
+| Verification | See Task 7 | The app was not launched; the manual QA list goes in the PR. |
