@@ -20,7 +20,11 @@ import type { ScriptResult, ScriptStep, ScriptStepsModel } from '@providers/code
 //     says so, and its error is the script's, not the last step's;
 //   - every recorded byte stays one click away ("View exact output").
 
-const GLYPH: Record<ScriptStep['kind'], string> = { command: '$', mcp: '◆', stdin: '⌨', image: '▣', web: '◎', patch: '±', other: '•' }
+// No glyph here may carry the Unicode Emoji property (⌨ did): the phone
+// renders these rows, and iOS draws an emoji-property symbol its faces lack
+// as Apple Color Emoji (#1194, phoneSymbolFont.test.ts). `›` reads as "typed
+// into" without needing a font subset entry.
+const GLYPH: Record<ScriptStep['kind'], string> = { command: '$', mcp: '◆', stdin: '›', image: '▣', web: '◎', patch: '±', other: '•' }
 const PREVIEW_LINES = 4
 // Lines alone are not enough: minified JSON or one long log line wraps into
 // a wall. Fold by characters too.
@@ -206,7 +210,7 @@ export function CodexScriptStepsRow({ model }: { model: ScriptStepsModel }) {
             </>
           )}
         {model.truncatedTokens !== null && (
-          <div className="pl-5 text-[11px] text-muted">⚠ Codex cut this output short ({model.truncatedTokens.toLocaleString()} tokens); the agent saw the same cut.</div>
+          <div className="pl-5 text-[11px] text-muted">Codex cut this output short ({model.truncatedTokens.toLocaleString()} tokens); the agent saw the same cut.</div>
         )}
         <details className="ml-5 text-[11px] text-muted" onToggle={(event) => setExactOpen(event.currentTarget.open)}>
           <summary className="cursor-pointer hover:text-ink">view exact output · {model.exactOutput.length.toLocaleString()} characters</summary>
