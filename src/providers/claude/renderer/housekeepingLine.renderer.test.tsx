@@ -68,19 +68,66 @@ describe('a housekeeping tool call is one line', () => {
     expect(screen.getByText('failed')).toBeTruthy()
   })
 
-  it('keeps the result row for a result it does not recognise', () => {
-    // Mechanical mutation of the recorded Monitor ack: a wording this line
-    // was never shown must stay visible in full, not be swallowed.
-    const { toolUse, result } = pair(sample('ack', 'Monitor'))
-    const decision = decide(toolUse, { ...result, content: 'Monitor could not start: the command exited immediately.' })
+  it('absorbs SendUserFile\'s path-list form (recorded, the more common one)', () => {
+    const { toolUse, result } = pair(sample('ack-paths', 'SendUserFile'))
+    const decision = decide(toolUse, result)
+    expect(decision.toolResult).toMatchObject({ action: 'absorb' })
+    expect(screen.getByText('✓')).toBeTruthy()
+  })
+
+  // Mechanical mutations of each tool's recorded acknowledgement: a wording
+  // the line was never shown must stay visible in full, not be swallowed.
+  // One per tool, so loosening any single ack rule turns a case red (review).
+  it.each([
+    ['Monitor', 'Monitor could not start: the command exited immediately.'],
+    ['TaskStop', '{"message":"Failed to stop task: byk8lrbq9","task_id":"byk8lrbq9"}'],
+    ['SendUserFile', '0 files delivered to user. The path was outside the sandbox.'],
+  ])('%s: an unrecognised result keeps its row', (tool, content) => {
+    const { toolUse, result } = pair(sample('ack', tool))
+    const decision = decide(toolUse, { ...result, content })
     expect(decision.toolResult).toMatchObject({ action: 'fallback' })
-    expect(screen.getByText('Monitor')).toBeTruthy()
+    expect(screen.getByText(tool)).toBeTruthy()
     expect(screen.queryByText('✓')).toBeNull()
   })
 
-  it('waits while live, and never claims success for a call with no result', () => {
+  it('keeps the row for a result that is not one text (an image part)', () => {
+    const { toolUse, result } = pair(sample('ack', 'SendUserFile'))
+    const decision = decide(toolUse, { ...result, content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } }] as never })
+    expect(decision.toolResult).toMatchObject({ action: 'fallback' })
+  })
+
+  it('keeps the row when the text is longer than the disclosure holds (review of #1523)', () => {
+    // Mechanical mutation: the recorded TaskStop ack and error, padded past
+    // 16 KiB. The disclosure would cut the tail; the shared row pages it.
+    const ack = pair(sample('ack', 'TaskStop'))
+    const longAck = JSON.stringify({ message: `Successfully stopped task: byk8lrbq9 (${'x'.repeat(17_000)})`, task_id: 'byk8lrbq9' })
+    expect(decide(ack.toolUse, { ...ack.result, content: longAck }).toolResult).toMatchObject({ action: 'fallback' })
+    cleanup()
+    const error = pair(sample('error', 'TaskStop'))
+    const longError = `<tool_use_error>${'y'.repeat(17_000)} END-OF-DIAGNOSTIC</tool_use_error>`
+    expect(decide(error.toolUse, { ...error.result, content: longError }).toolResult).toMatchObject({ action: 'fallback' })
+  })
+
+  it('says "declined" when the user refused the call, like the MCP line', () => {
+    // Mechanical mutation of the recorded TaskStop error into Claude Code's
+    // own decline sentence (the MCP line's recorded decline wording).
+    const { toolUse, result } = pair(sample('error', 'TaskStop'))
+    decide(toolUse, { ...result, content: "The user doesn't want to proceed with this tool use. The tool use was rejected." })
+    expect(screen.getByText('declined by the user')).toBeTruthy()
+    expect(screen.queryByText('failed')).toBeNull()
+  })
+
+  it('waits while live', () => {
     const { toolUse } = pair(sample('ack', 'Monitor'))
     decide(toolUse, null)
     expect(screen.getByText('running')).toBeTruthy()
+  })
+
+  it('never claims success or "running" for a committed call with no result', () => {
+    const { toolUse } = pair(sample('ack', 'Monitor'))
+    const decision = renderClaudeOperation({ toolUse, result: null, live: false, streaming: false })
+    if (decision.toolUse.action === 'render') render(<>{decision.toolUse.node}</>)
+    expect(screen.queryByText('✓')).toBeNull()
+    expect(screen.queryByText('running')).toBeNull()
   })
 })

@@ -146,6 +146,14 @@ describe('states (review round)', () => {
     expect(screen.queryByText('✕ error')).toBeNull()
   })
 
+  it('keeps the result row for an error longer than the disclosure holds (review of #1523)', () => {
+    // Mechanical mutation of the recorded goal_set error, padded past 16 KiB:
+    // the line's disclosure would cut the tail, the shared row pages it all.
+    const { use, res } = mutated('error', 'goal_set', { content: `MCP error -32602: ${'z'.repeat(17_000)} END-OF-DIAGNOSTIC` })
+    const decision = renderClaudeOperation({ toolUse: use, result: res, live: false, streaming: false })
+    expect(decision.toolResult).toMatchObject({ action: 'fallback' })
+  })
+
   it('a drifted Agent Code orchestration call keeps the visible generic fallback (A2)', () => {
     const { use, res } = mutated('ack', 'goal_set', { name: 'mcp__agent_code__orchestration_read_agent', input: {} })
     const decision = renderClaudeOperation({ toolUse: use, result: res, live: false, streaming: false })

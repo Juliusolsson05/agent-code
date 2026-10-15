@@ -291,7 +291,7 @@ function renderClaudeToolUse(
       // An Agent Code tool whose OWN card declined (drifted input) keeps the
       // visible generic fallback those adapters promise (review A2).
       if (OWNED_AGENT_CODE_TOOL.test(block.name)) return undefined
-      // Claude Code's own housekeeping tools (Skill, Monitor, TaskStop, …;
+      // Claude Code's own housekeeping tools (Monitor, SendUserFile, TaskStop;
       // #1522) speak the same one-line language; their names never start
       // with mcp__, so the two never compete.
       const housekeeping = fromClaudeHousekeepingLine(block, context.result ?? null, { live: context.live })

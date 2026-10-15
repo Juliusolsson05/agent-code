@@ -1,7 +1,14 @@
-import { stripAnsi } from '@shared/parsers/ansi'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 
-import type { McpCallModel } from '@providers/shared/renderer/protocols/mcp-call/model'
+import {
+  bounded,
+  DISCLOSURE_MAX,
+  forDisclosure,
+  isUserDecline,
+  oneLine,
+  singleText,
+  type McpCallModel,
+} from '@providers/shared/renderer/protocols/mcp-call/model'
 
 // Claude Code's built-in HOUSEKEEPING tools as one line (#1522), in the same
 // language as the MCP line (#1519): `◆ TaskStop  byk8lrbq9  ✓`.
@@ -38,7 +45,14 @@ const HOUSEKEEPING: Record<string, Entry> = {
   },
   SendUserFile: {
     subject: (input) => str(input.caption) ?? (Array.isArray(input.files) ? input.files.map((file) => String(file).split('/').pop()).join(', ') : null),
-    ack: (text) => /^\d+ files? delivered to user\.?$/.test(text.trim()),
+    // Two recorded forms (owner corpus 2026-10-15: 91 bare, 108 with paths):
+    // the bare sentence, and the sentence followed by exactly one indented
+    // `<path> → file_uuid: …` line per delivered file (review of #1523).
+    ack: (text) => {
+      const [head, ...paths] = text.trimEnd().split('\n')
+      const count = /^(\d+) files? delivered to user\.?$/.exec(head ?? '')
+      return Boolean(count) && (paths.length === 0 || (paths.length === Number(count![1]) && paths.every((line) => /^ {2}\S/.test(line))))
+    },
   },
   TaskStop: {
     subject: (input) => str(input.task_id),
@@ -54,9 +68,6 @@ const HOUSEKEEPING: Record<string, Entry> = {
     },
   },
 }
-
-const MESSAGE_MAX = 400
-const DISCLOSURE_MAX = 16 * 1024
 
 export function isClaudeHousekeepingTool(name: string): boolean {
   return Object.prototype.hasOwnProperty.call(HOUSEKEEPING, name)
@@ -86,7 +97,14 @@ export function fromClaudeHousekeepingLine(
     return { ...base, outcome: options.live ? 'pending' : 'no-result', absorbsResult: false }
   }
   const text = singleText(result.content)
+  // Absorb only what the disclosure holds in full (see model.ts `fits`).
+  const fits = text !== null && text.length <= DISCLOSURE_MAX
   if (result.is_error === true) {
+    if (text !== null && isUserDecline(text)) {
+      // The user declined or interrupted it: a choice, said the same way the
+      // MCP line says it (review of #1523), not "✕ error".
+      return { ...base, outcome: 'declined', message: bounded(text), resultText: forDisclosure(text), absorbsResult: fits }
+    }
     // Claude Code wraps its own refusals in <tool_use_error>; the sentence
     // inside is what the user needs (recorded TaskStop on a finished task).
     const sentence = text?.replace(/^<tool_use_error>([\s\S]*)<\/tool_use_error>$/, '$1') ?? null
@@ -95,37 +113,12 @@ export function fromClaudeHousekeepingLine(
       outcome: 'error',
       message: sentence !== null ? bounded(sentence) : null,
       resultText: text !== null ? forDisclosure(text) : null,
-      absorbsResult: text !== null,
+      absorbsResult: fits,
     }
   }
   if (text !== null && entry.ack(text)) {
-    return { ...base, outcome: 'ok', resultText: forDisclosure(text), absorbsResult: true }
+    return { ...base, outcome: 'ok', resultText: forDisclosure(text), absorbsResult: fits }
   }
   // Unrecognised: the line still names the call, the shared row keeps the result.
   return { ...base, outcome: 'content', absorbsResult: false }
-}
-
-/** The one text of a string or a single `{type:'text'}` part; null for anything else (an image, several parts). */
-function singleText(content: unknown): string | null {
-  if (typeof content === 'string') return content
-  if (Array.isArray(content) && content.length === 1) {
-    const part = content[0] as { type?: unknown; text?: unknown } | null
-    if (part && part.type === 'text' && typeof part.text === 'string') return part.text
-  }
-  return null
-}
-
-function oneLine(text: string): string {
-  const line = text.slice(0, 400).replace(/\s+/g, ' ').trim()
-  return line.length > 160 ? `${line.slice(0, 159)}…` : line
-}
-
-function bounded(text: string): string {
-  const clean = stripAnsi(text.slice(0, MESSAGE_MAX * 4)).trim()
-  return clean.length > MESSAGE_MAX ? `${clean.slice(0, MESSAGE_MAX - 1)}…` : clean
-}
-
-function forDisclosure(text: string): string {
-  const clean = stripAnsi(text.length > DISCLOSURE_MAX ? text.slice(0, DISCLOSURE_MAX) : text)
-  return text.length > DISCLOSURE_MAX ? `${clean}\n… (truncated, ${text.length.toLocaleString()} characters)` : clean
 }

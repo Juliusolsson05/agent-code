@@ -1,5 +1,5 @@
 {
- "provenance": "Recorded: the owner's own Claude Code transcripts (~/.claude/projects, 2026-09/10). tool_use and tool_result blocks unmodified, wrapped in a minimal assistant/user line for the mapper, EXCEPT the samples marked mutated:true: the Monitor result is cut after their first clause (mechanical mutation) because the rest is Claude Code harness instruction text, which this public repo does not carry. Read in full before committing: no credentials, no private messages.",
+ "provenance": "Recorded: the owner's own Claude Code transcripts (~/.claude/projects, 2026-09/10). tool_use and tool_result blocks unmodified, wrapped in a minimal assistant/user line for the mapper, EXCEPT the samples marked mutated:true: the Monitor result is cut after their first clause (mechanical mutation) because the rest is Claude Code harness instruction text, which this public repo does not carry. Read in full before committing: no credentials, no private messages. The 'ack-paths' SendUserFile sample is the newer result form that lists each delivered path (108 of 199 SendUserFile results in the owner's corpus, 2026-10-15).",
  "samples": [
   {
    "kind": "ack",
@@ -163,6 +163,51 @@
         "type": "tool_result",
         "tool_use_id": "toolu_017Rg4MtVQqv4h6qhar3kRx2",
         "content": "Monitor started (task bwpyrp399, expires in 30m unless the source ends first)."
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "kind": "ack-paths",
+   "tool": "SendUserFile",
+   "mutated": false,
+   "lines": [
+    {
+     "type": "assistant",
+     "uuid": "a-7",
+     "timestamp": "2026-10-15T00:00:00.000Z",
+     "message": {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "tool_use",
+        "id": "toolu_01P5WniW5Y6USR2PYGupnGm1",
+        "name": "SendUserFile",
+        "input": {
+         "files": [
+          "/var/folders/tv/yfsy4sfx1qnbs39hbtzgl0xc0000gn/T/claude-chrome-screenshots-xwVbFU/screenshot-1788030467769-0.jpg"
+         ],
+         "caption": "Quest Hero running at localhost:5173 \u2014 you can make out Bran (the capsule) and the buildings behind the title overlay. Lighting needs a pass, it's too dark.",
+         "status": "normal",
+         "display": "render"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "uuid": "u-7",
+     "timestamp": "2026-10-15T00:00:00.000Z",
+     "message": {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01P5WniW5Y6USR2PYGupnGm1",
+        "content": "1 file delivered to user.\n  /var/folders/tv/yfsy4sfx1qnbs39hbtzgl0xc0000gn/T/claude-chrome-screenshots-xwVbFU/screenshot-1788030467769-0.jpg \u2192 file_uuid: f88b7712-43b8-4c4e-a761-c53672c5f724"
        }
       ]
      }

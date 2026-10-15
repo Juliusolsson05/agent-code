@@ -11,7 +11,7 @@ Monitor, SendUserFile and TaskStop render as `◆ <tool>  <subject>  <verdict>`.
 - Claude dispatch: the default branch tries the housekeeping line before the MCP line. The result branch absorbs only when `absorbsResult`.
 
 ## Tests
-`housekeepingLine.renderer.test.tsx` runs on `testing/fixtures/claude-housekeeping/samples.json`: recorded, with the Monitor and ScheduleWakeup results mechanically cut (labelled in the fixture). It checks that every ack is absorbed with the right subject, that the TaskStop error is shown, and that an unrecognised result (a mutation of the Skill ack) keeps its row.
+`housekeepingLine.renderer.test.tsx` runs on `testing/fixtures/claude-housekeeping/samples.json`: recorded, with the Monitor result mechanically cut (labelled in the fixture). It checks that every ack is absorbed with the right subject, including SendUserFile's path-list form; that the TaskStop error is shown; and that for each tool an unrecognised result, a non-text result, or one longer than the disclosure keeps its row.
 
 ## Verification boundary
 No app launch. tsc on both projects, plus the scoped renderer tests.
