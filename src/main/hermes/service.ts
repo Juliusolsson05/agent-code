@@ -37,6 +37,7 @@ import {
   decideHermesLocation,
   describeSshFailure,
   parseHermesProbe,
+  sameSshRoute,
   sshArgs,
   sshCommandLine,
   validateSshDraft,
@@ -65,7 +66,7 @@ export type HermesServiceDeps = {
   runSsh?: SshRunner
 }
 
-export type SshRunner = (args: string[], stdin: string) => Promise<{ code: number | null; stdout: string; stderr: string }>
+export type SshRunner = (args: string[], stdin: string) => Promise<{ code: number | null; stdout: string; stderr: string; timedOut?: boolean }>
 
 type RuntimeState = {
   state: HermesConnectionState
@@ -168,16 +169,15 @@ export class HermesConnectionService extends EventEmitter {
         const checked = validateSshDraft(draft)
         if (checked.error !== undefined) throw new Error(checked.error)
         ssh = checked.access
-        // An empty container field keeps a DETECTED host install, but only
-        // for the same server: a new destination is a new machine, and the
-        // old answer about where Hermes lives says nothing about it.
+        // The draft states where Hermes runs (host, a container, or not
+        // decided); the form pre-fills it from the saved record, so nothing
+        // is carried over implicitly. One exception: re-saving the SAME
+        // container on the SAME route keeps the shell Detect found (`sh` in
+        // an image without bash), which validateSshDraft cannot know. Same
+        // ROUTE, not same destination: a different port or key can be a
+        // different machine (review of #1530).
         const previous = existing.ssh
-        if (!ssh.hermes && previous?.hermes?.kind === 'host' && previous.destination === ssh.destination) {
-          ssh = { ...ssh, hermes: previous.hermes }
-        }
-        // A typed container on the same server keeps the shell Detect found
-        // (`sh` in an image without bash); validateSshDraft can only assume bash.
-        if (ssh.hermes?.kind === 'docker' && previous?.hermes?.kind === 'docker' && previous.hermes.container === ssh.hermes.container && previous.destination === ssh.destination) {
+        if (ssh.hermes?.kind === 'docker' && previous?.hermes?.kind === 'docker' && previous.hermes.container === ssh.hermes.container && sameSshRoute(previous, ssh)) {
           ssh = { ...ssh, hermes: { ...ssh.hermes, shell: previous.hermes.shell } }
         }
       }
@@ -197,18 +197,27 @@ export class HermesConnectionService extends EventEmitter {
    * method…").
    */
   async detectHermes(id: string): Promise<HermesDetection> {
-    const access = this.require(id).ssh
+    // find, not require: "never throws" includes a connection removed from
+    // another window while this card was still on screen.
+    const connection = this.connections.find((entry) => entry.id === id)
+    if (!connection) return { ok: false, message: 'This Hermes connection no longer exists.' }
+    const access = connection.ssh
     if (!access) return { ok: false, message: 'Save SSH access for this connection first.' }
     // BatchMode: a probe must never sit on an invisible prompt (host key,
     // passphrase, password). It fails, and describeSshFailure says which
     // step fixes it. ConnectTimeout bounds a dead host; the runner's own
     // timeout bounds a hung remote command.
-    const args = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', ...sshArgs(access), access.destination, 'sh', '-s']
+    // ServerAlive*: a server that accepts the connection and then stops
+    // answering is noticed in ~10 s instead of waiting for the hard timeout.
+    const args = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=5', '-o', 'ServerAliveCountMax=2', ...sshArgs(access), access.destination, 'sh', '-s']
     let run: Awaited<ReturnType<SshRunner>>
     try {
       run = await (this.deps.runSsh ?? runSystemSsh)(args, HERMES_PROBE_SCRIPT)
     } catch (error) {
       return { ok: false, message: `Could not run ssh: ${error instanceof Error ? error.message : String(error)}` }
+    }
+    if (run.timedOut) {
+      return { ok: false, message: 'The server did not finish answering within 30 seconds (a busy or stuck Docker can do this). Try again, or type the container by hand.' }
     }
     const probe = run.code === 0 ? parseHermesProbe(run.stdout) : null
     if (!probe) {
@@ -216,12 +225,15 @@ export class HermesConnectionService extends EventEmitter {
     }
     const decision = decideHermesLocation(probe)
     if (decision.ok) {
-      // Saved under the serialized queue, against the record as it is NOW:
-      // the user may have edited SSH access while the probe ran, and an
-      // answer about the OLD destination must not land on the new one.
+      // Saved under the serialized queue, and ONLY if the SSH record is the
+      // very object the probe started from (setSshAccess always replaces
+      // it). Comparing the destination alone let a probe that started
+      // before an edit in another window overwrite a newer port (possibly
+      // another machine) or a container the user had just typed (review of
+      // #1530). Any edit in between wins; the user can detect again.
       await this.serialized(async () => {
         const current = this.connections.find((entry) => entry.id === id)
-        if (!current?.ssh || current.ssh.destination !== access.destination) return
+        if (!current?.ssh || current.ssh !== access) return
         const next = { ...current, ssh: { ...current.ssh, hermes: decision.location } }
         await this.persist(this.connections.map((entry) => (entry.id === id ? next : entry)))
         this.changed()
@@ -607,13 +619,26 @@ const runSystemSsh: SshRunner = (args, stdin) =>
     const child = spawn('ssh', args, { stdio: ['pipe', 'pipe', 'pipe'] })
     let stdout = ''
     let stderr = ''
+    let timedOut = false
+    let killer: ReturnType<typeof setTimeout> | null = null
     // 30 s covers ConnectTimeout (10 s) plus a `docker exec` per container
     // on a slow server; past that the server is not answering usefully.
-    const timer = setTimeout(() => child.kill('SIGTERM'), 30_000)
+    // SIGKILL after a grace period: an ssh blocked in a ProxyCommand child
+    // can outlive SIGTERM, and then `close` never fires and the Settings
+    // card's Detect never settles.
+    const timer = setTimeout(() => {
+      timedOut = true
+      child.kill('SIGTERM')
+      killer = setTimeout(() => child.kill('SIGKILL'), 5_000)
+    }, 30_000)
+    const done = () => {
+      clearTimeout(timer)
+      if (killer) clearTimeout(killer)
+    }
     child.stdout.setEncoding('utf8').on('data', (chunk: string) => { stdout += chunk })
     child.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr += chunk })
-    child.on('error', (error) => { clearTimeout(timer); reject(error) })
-    child.on('close', (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }) })
+    child.on('error', (error) => { done(); reject(error) })
+    child.on('close', (code) => { done(); resolve({ code, stdout, stderr, timedOut }) })
     child.stdin.on('error', () => undefined)
     child.stdin.end(stdin)
   })

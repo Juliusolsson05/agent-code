@@ -37,6 +37,7 @@ export function HermesSshAccessSection({ connection }: { connection: HermesConne
   const [identityFile, setIdentityFile] = useState(ssh?.identityFile ?? '')
   const [container, setContainer] = useState(ssh?.hermes?.kind === 'docker' ? ssh.hermes.container : '')
   const [sudo, setSudo] = useState(ssh?.hermes?.kind === 'docker' ? ssh.hermes.sudo : false)
+  const [onHost, setOnHost] = useState(ssh?.hermes?.kind === 'host')
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   const [detection, setDetection] = useState<HermesDetection | null>(null)
@@ -59,6 +60,7 @@ export function HermesSshAccessSection({ connection }: { connection: HermesConne
     setIdentityFile(ssh?.identityFile ?? '')
     setContainer(ssh?.hermes?.kind === 'docker' ? ssh.hermes.container : '')
     setSudo(ssh?.hermes?.kind === 'docker' ? ssh.hermes.sudo : false)
+    setOnHost(ssh?.hermes?.kind === 'host')
   }
 
   if (editing) {
@@ -69,7 +71,7 @@ export function HermesSshAccessSection({ connection }: { connection: HermesConne
         onSubmit={(event) => {
           event.preventDefault()
           void run(async () => {
-            await window.api.hermesSetSsh(connection.id, { destination, port, identityFile, container, sudo })
+            await window.api.hermesSetSsh(connection.id, { destination, port, identityFile, container, sudo, onHost })
             setEditing(false)
             setDetection(null)
           })
@@ -80,10 +82,17 @@ export function HermesSshAccessSection({ connection }: { connection: HermesConne
           <Input className="w-24" aria-label="SSH port" placeholder="Port (22)" value={port} onChange={(event) => setPort(event.target.value)} />
           <Input className="min-w-0 flex-1" aria-label="SSH identity file" placeholder="Key file, e.g. ~/.ssh/id_ed25519 (optional)" value={identityFile} onChange={(event) => setIdentityFile(event.target.value)} />
         </div>
+        {/* Where Hermes runs is an explicit choice (review of #1530): an
+            empty container field cannot also mean "the server itself", or
+            a user Detect could not decide for has no way to pick the host. */}
+        <label className="flex items-center gap-1 text-[11px] text-muted">
+          <input type="checkbox" aria-label="Hermes runs on the server itself" checked={onHost} onChange={(event) => setOnHost(event.target.checked)} />
+          Hermes runs on the server itself (not in a container)
+        </label>
         <div className="flex items-center gap-1.5">
-          <Input className="min-w-0 flex-1" aria-label="Hermes container" placeholder="Hermes container (empty: detect, or Hermes is on the server itself)" value={container} onChange={(event) => setContainer(event.target.value)} />
+          <Input className="min-w-0 flex-1" aria-label="Hermes container" placeholder="Hermes container (empty: use Detect)" disabled={onHost} value={onHost ? '' : container} onChange={(event) => setContainer(event.target.value)} />
           <label className="flex shrink-0 items-center gap-1 text-[11px] text-muted">
-            <input type="checkbox" checked={sudo} onChange={(event) => setSudo(event.target.checked)} />
+            <input type="checkbox" disabled={onHost} checked={sudo && !onHost} onChange={(event) => setSudo(event.target.checked)} />
             Docker needs sudo
           </label>
         </div>
@@ -109,7 +118,10 @@ export function HermesSshAccessSection({ connection }: { connection: HermesConne
       {detection && <p className={`mt-1 text-[11px] ${detection.ok ? 'text-ink-dim' : 'text-danger'}`}>{detection.message}</p>}
       {problem && <p className="mt-1 text-danger">{problem}</p>}
       <div className="mt-1.5 flex flex-wrap gap-1.5">
-        <Button size="sm" variant="outline" onClick={() => { resetFields(); setEditing(true) }}>{ssh ? 'Edit SSH access' : 'Add SSH access'}</Button>
+        {/* Disabled while Detect runs: a form opened now would snapshot the
+            fields BEFORE the detected location lands, and saving it later
+            erased that result (review of #1530). */}
+        <Button size="sm" variant="outline" disabled={busy} onClick={() => { resetFields(); setEditing(true) }}>{ssh ? 'Edit SSH access' : 'Add SSH access'}</Button>
         {ssh && (
           <>
             <Button size="sm" variant="outline" disabled={busy} onClick={() => void run(async () => setDetection(await window.api.hermesDetect(connection.id)))}>

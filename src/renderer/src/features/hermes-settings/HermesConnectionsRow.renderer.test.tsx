@@ -21,7 +21,9 @@ function connection(overrides: Partial<HermesConnectionInfo>): HermesConnectionI
   return { id: 'c1', name: 'Homelab', baseUrl: 'https://hermes.example', createdAt: 0, state: 'signed-out', identity: null, backend: null, lastError: null, ...overrides }
 }
 
-function api(overrides: Record<string, unknown>) {
+// Generic so a test's own mocks keep their types (`bridge.hermesSetSsh`):
+// with a Record<string, unknown> return the web tsc gate failed on them.
+function api<T extends Record<string, unknown>>(overrides: T) {
   const value = { hermesSignIn: vi.fn(async () => undefined), hermesCancelSignIn: vi.fn(async () => undefined), hermesUpdate: vi.fn(async () => undefined), ...overrides }
   Object.defineProperty(window, 'api', { configurable: true, value })
   return value
@@ -123,7 +125,7 @@ describe('SSH access block (#1528)', () => {
     fireEvent.change(screen.getByLabelText('SSH identity file'), { target: { value: '~/.ssh/hermes' } })
     fireEvent.change(screen.getByLabelText('Hermes container'), { target: { value: 'hermes' } })
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save SSH access' })) })
-    expect(bridge.hermesSetSsh).toHaveBeenLastCalledWith('c1', { destination: 'root@203.0.113.7', port: '', identityFile: '~/.ssh/hermes', container: 'hermes', sudo: false })
+    expect(bridge.hermesSetSsh).toHaveBeenLastCalledWith('c1', { destination: 'root@203.0.113.7', port: '', identityFile: '~/.ssh/hermes', container: 'hermes', sudo: false, onHost: false })
     expect(screen.queryByLabelText('SSH destination')).toBeNull()
   })
 
@@ -135,5 +137,25 @@ describe('SSH access block (#1528)', () => {
     expect(screen.getByText(/Hermes was found in 2 places/)).toBeTruthy()
     rerender(<ConnectionCard connection={connection({ ssh: { destination: 'vps', hermes: { kind: 'docker', container: 'hermes-1', shell: 'bash', sudo: true } } })} />)
     expect(screen.getByText(/Hermes runs in container hermes-1 \(Docker through sudo\)/)).toBeTruthy()
+  })
+
+  it('Hermes on the server itself is a choice of its own (review of #1530)', async () => {
+    const bridge = api({ hermesSetSsh: vi.fn(async () => undefined) })
+    render(<ConnectionCard connection={connection({ ssh: { destination: 'vps' } })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit SSH access' }))
+    fireEvent.click(screen.getByLabelText('Hermes runs on the server itself'))
+    expect((screen.getByLabelText('Hermes container') as HTMLInputElement).disabled).toBe(true)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save SSH access' })) })
+    expect(bridge.hermesSetSsh).toHaveBeenCalledWith('c1', expect.objectContaining({ destination: 'vps', onHost: true }))
+  })
+
+  it('Edit waits while Detect runs, so a form never snapshots the fields from before the result (review of #1530)', async () => {
+    let finish!: (value: unknown) => void
+    api({ hermesDetect: vi.fn(() => new Promise((resolve) => { finish = resolve })) })
+    render(<ConnectionCard connection={connection({ ssh: { destination: 'vps' } })} />)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Detect where Hermes runs' })) })
+    expect((screen.getByRole('button', { name: 'Edit SSH access' }) as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => { finish({ ok: true, location: { kind: 'host' }, message: 'Hermes runs in the server itself (/usr/bin/hermes).' }) })
+    expect((screen.getByRole('button', { name: 'Edit SSH access' }) as HTMLButtonElement).disabled).toBe(false)
   })
 })

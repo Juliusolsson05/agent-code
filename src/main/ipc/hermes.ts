@@ -98,7 +98,8 @@ function isSshDraft(value: unknown): value is HermesSshDraft {
   const optionalText = (field: unknown) => field === undefined || (typeof field === 'string' && field.length <= 1024)
   return typeof draft.destination === 'string' && draft.destination.length <= 512 &&
     optionalText(draft.port) && optionalText(draft.identityFile) && optionalText(draft.container) &&
-    (draft.sudo === undefined || typeof draft.sudo === 'boolean')
+    (draft.sudo === undefined || typeof draft.sudo === 'boolean') &&
+    (draft.onHost === undefined || typeof draft.onHost === 'boolean')
 }
 
 function isId(value: unknown): value is string {

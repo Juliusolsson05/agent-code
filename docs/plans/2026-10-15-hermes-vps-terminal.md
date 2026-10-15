@@ -145,7 +145,9 @@ HermesLocation = { kind: 'host' } | { kind: 'docker'; container: string; shell: 
 ### Ruling 2: which connection a command uses
 
 - **Ruling:** the focused Hermes pane's connection, else the first connection
-  with SSH access. The command's toast names the connection used.
+  with SSH access. (The toast naming the connection that this plan first
+  promised was dropped: commands have no toast channel, and a failed run only
+  toasts "Command failed". The typed ssh line names the server.)
 - **Why:** palette commands take no arguments. A connection picker is not
   justified while the common case is one Hermes server.
 - **Cost if wrong:** a multi-server user has to focus a pane of that server
@@ -186,6 +188,24 @@ HermesLocation = { kind: 'host' } | { kind: 'docker'; container: string; shell: 
   typed command are covered by the code path and tests, not by a visual
   check. The owner verifies "Open Hermes Terminal" lands in
   `/opt/hermes` with `hermes` on PATH.
+
+## Review round (one Claude and one Codex reviewer)
+Fixed, each with a test that fails when the fix is reverted:
+- **The web tsc failed** on the renderer test's `api()` helper type (this was CI's red). The helper is now generic.
+- **"On the server itself" could not be chosen** (both reviewers). An empty container meant "undecided" in the code and "host" in the help text, so after an ambiguous detection the Hermes command looped back to Settings. The draft now has an explicit `onHost`, and the form has a checkbox for it.
+- **The probe missed user-level host installs:** sshd's non-login shell has no `~/.local/bin` on Debian/Ubuntu. The host check now also asks `bash -lc` / `sh -lc` and `$HOME/.local/bin/hermes`. Re-run live against the owner's VPS: identical output. A host install was still never recorded live; the host fixtures are mechanical.
+- **A stale probe could overwrite newer settings** made in another window (a new port, which can be a different machine, or a typed container). Detection now commits only if the SSH record is the very object it started from. The "keep the detected shell" carry needs the same route: destination, port and key.
+- **Edit opened during Detect** snapshotted the fields before the result landed, so a later save erased it. Edit is disabled while Detect runs.
+- **Key paths are limited to printable ASCII.** The line is typed as keystrokes, and a C-locale bash binds bytes ≥ 0x80 to Meta keys that move the cursor.
+- **Smaller fixes:**
+  - a removed connection gets a sentence instead of a throw;
+  - a hung probe gets its own sentence and a SIGKILL after a 5 s grace;
+  - `ServerAliveInterval=5`.
+- **Pinned:** `splitFocused` returns the filed id, in the existing placement test.
+
+Not adopted:
+- **Bring a pooled terminal on screen.** When the focused lane is occupied, the terminal goes to the pool with a "new" badge. That is the app-wide rule from #992 (an occupied lane is never displaced), the same as New Terminal. Overriding it for one command would make placement inconsistent.
+- **Toast when `sendInput` returns false.** `splitFocused` resolved only after the backend was registered, so false means the pane was closed in between, and there is nothing to type into.
 
 ## Out of scope
 

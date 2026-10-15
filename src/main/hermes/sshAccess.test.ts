@@ -46,7 +46,7 @@ describe('Hermes SSH access (#1528)', () => {
 
     expect(detection).toMatchObject({ ok: true, message: 'Hermes runs in container hermes-agent-pjlj-hermes-agent-1.' })
     expect(runSsh).toHaveBeenCalledWith(
-      ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-p', '2222', '-i', '~/.ssh/hermes', 'root@203.0.113.7', 'sh', '-s'],
+      ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=5', '-o', 'ServerAliveCountMax=2', '-p', '2222', '-i', '~/.ssh/hermes', 'root@203.0.113.7', 'sh', '-s'],
       HERMES_PROBE_SCRIPT,
     )
     expect((await onDisk()).ssh).toEqual({
@@ -79,15 +79,46 @@ describe('Hermes SSH access (#1528)', () => {
     expect((await onDisk()).ssh).toEqual({ destination: 'new-vps' })
   })
 
-  it('saving keeps a detected host install for the same server, and forgets it for a new one', async () => {
-    const { instance, id, onDisk } = await service(async () => ({ code: 0, stdout: 'agent-code-hermes-probe 1\nhost /usr/local/bin/hermes\ndocker absent\nend\n', stderr: '' }))
+  it('after an ambiguous detection the user can choose the server itself (review of #1530)', async () => {
+    const both = 'agent-code-hermes-probe 1\nhost /usr/bin/hermes\ndocker direct\ncontainer hermes-agent-pjlj-hermes-agent-1 bash /opt/hermes/bin/hermes\nend\n'
+    const { instance, id } = await service(async () => ({ code: 0, stdout: both, stderr: '' }))
+    await instance.setSshAccess(id, { destination: 'vps' })
+    expect(await instance.detectHermes(id)).toMatchObject({ ok: false, candidates: ['hermes-agent-pjlj-hermes-agent-1'] })
+    expect(instance.shellCommand(id, 'hermes')).toMatchObject({ ok: false })
+    await instance.setSshAccess(id, { destination: 'vps', container: '', onHost: true })
+    expect(instance.shellCommand(id, 'hermes')).toEqual({ ok: true, name: 'VPS', command: 'ssh -t vps' })
+  })
+
+  it('a probe that started before ANY edit of the route never lands, even on the same destination (review of #1530)', async () => {
+    let finish!: () => void
+    const { instance, id, onDisk } = await service(() => new Promise((resolve) => { finish = () => resolve({ code: 0, stdout: RECORDED, stderr: '' }) }))
+    await instance.setSshAccess(id, { destination: 'vps', port: '22' })
+    const detecting = instance.detectHermes(id)
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    // Another window: same name, another port (possibly another machine), and a container typed by hand.
+    await instance.setSshAccess(id, { destination: 'vps', port: '2222', container: 'manually-selected' })
+    finish()
+    await detecting
+    expect((await onDisk()).ssh).toEqual({ destination: 'vps', port: 2222, hermes: { kind: 'docker', container: 'manually-selected', shell: 'bash', sudo: false } })
+  })
+
+  it('a detected shell survives re-saving the same container only on the same route', async () => {
+    const shOnly = 'agent-code-hermes-probe 1\ndocker direct\ncontainer hermes sh /usr/local/bin/hermes\nend\n'
+    const { instance, id, onDisk } = await service(async () => ({ code: 0, stdout: shOnly, stderr: '' }))
     await instance.setSshAccess(id, { destination: 'vps' })
     await instance.detectHermes(id)
-    await instance.setSshAccess(id, { destination: 'vps', port: '2200' })
-    expect((await onDisk()).ssh).toEqual({ destination: 'vps', port: 2200, hermes: { kind: 'host' } })
-    await instance.setSshAccess(id, { destination: 'other-vps' })
-    expect((await onDisk()).ssh).toEqual({ destination: 'other-vps' })
-    expect(instance.shellCommand(id, 'hermes')).toMatchObject({ ok: false })
+    await instance.setSshAccess(id, { destination: 'vps', container: 'hermes' })
+    expect((await onDisk()).ssh.hermes).toEqual({ kind: 'docker', container: 'hermes', shell: 'sh', sudo: false })
+    await instance.setSshAccess(id, { destination: 'vps', port: '2200', container: 'hermes' })
+    expect((await onDisk()).ssh.hermes.shell).toBe('bash')
+  })
+
+  it('a hung server gets its own sentence, and a removed connection is an answer, not a throw', async () => {
+    const { instance, id } = await service(async () => ({ code: null, stdout: '', stderr: '', timedOut: true }))
+    await instance.setSshAccess(id, { destination: 'vps' })
+    expect((await instance.detectHermes(id)).message).toMatch(/did not finish answering within 30 seconds/)
+    await instance.remove(id)
+    expect(await instance.detectHermes(id)).toEqual({ ok: false, message: 'This Hermes connection no longer exists.' })
   })
 
   it('refuses an unsafe draft and removes SSH access on null', async () => {

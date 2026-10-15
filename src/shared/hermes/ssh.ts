@@ -26,13 +26,20 @@ export type HermesSshAccess = {
   hermes?: HermesLocation
 }
 
-/** What the Settings form sends; `container` empty = Hermes is on the host. */
+/**
+ * What the Settings form sends. Where Hermes runs is an explicit choice:
+ * `onHost` (Hermes is installed on the server itself), a `container`, or
+ * neither (not decided; Detect fills it in). An empty container used to mean
+ * "the host" in the help text and "undecided" in the code, which left no way
+ * to choose the host at all (review of #1530).
+ */
 export type HermesSshDraft = {
   destination: string
   port?: string
   identityFile?: string
   container?: string
   sudo?: boolean
+  onHost?: boolean
 }
 
 // WHY validation this strict instead of shell quoting: the command line is
@@ -53,9 +60,12 @@ export type HermesSshDraft = {
 const DESTINATION = /^(?:[A-Za-z0-9._%+~-]+@)?[A-Za-z0-9._:-]+$/
 // Docker's own container-name grammar (`[a-zA-Z0-9][a-zA-Z0-9_.-]+`).
 const CONTAINER = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/
-// Anything but quotes, backslashes and control characters. Spaces are fine
-// (macOS paths have them); the path is single-quoted.
-const IDENTITY = /^[^'"\\\u0000-\u001f\u007f]+$/
+// Printable ASCII except quotes and backslash. Spaces are fine (macOS paths
+// have them; the path is single-quoted). NOT non-ASCII (review of #1530):
+// the line reaches the shell as KEYSTROKES, and a bash in a C locale binds
+// bytes >= 0x80 to Meta keys (0xC2 = M-B, backward-word) that move the
+// cursor out of the quotes. A path outside this set goes in ~/.ssh/config.
+const IDENTITY = /^[\x20-\x21\x23-\x26\x28-\x5b\x5d-\x7e]+$/
 
 export function validateSshDraft(draft: HermesSshDraft): { access: Omit<HermesSshAccess, 'hermes'> & { hermes?: HermesLocation }; error?: never } | { error: string; access?: never } {
   const destination = draft.destination.trim()
@@ -70,8 +80,8 @@ export function validateSshDraft(draft: HermesSshDraft): { access: Omit<HermesSs
     if (!Number.isInteger(port) || port < 1 || port > 65535) return { error: 'The SSH port must be a number from 1 to 65535.' }
   }
   const identityFile = draft.identityFile?.trim() || undefined
-  if (identityFile && !IDENTITY.test(identityFile)) return { error: 'The identity file path cannot contain quotes or backslashes.' }
-  const container = draft.container?.trim() ?? ''
+  if (identityFile && !IDENTITY.test(identityFile)) return { error: 'The identity file path can only hold plain ASCII characters, without quotes or backslashes. Put other paths in ~/.ssh/config and use its Host alias.' }
+  const container = draft.onHost ? '' : draft.container?.trim() ?? ''
   if (container && !CONTAINER.test(container)) return { error: 'That is not a Docker container name (letters, digits, _ . -).' }
   return {
     access: {
@@ -80,10 +90,7 @@ export function validateSshDraft(draft: HermesSshDraft): { access: Omit<HermesSs
       ...(identityFile ? { identityFile } : {}),
       // A typed container gets bash: every Hermes image seen so far has it
       // (the recorded one does), and Detect records `sh` when it does not.
-      // Leaving the container empty does NOT mean "host": it means "not
-      // decided" unless the user ran Detect, so the caller keeps any
-      // detected location (see service.setSshAccess).
-      ...(container ? { hermes: { kind: 'docker', container, shell: 'bash', sudo: draft.sudo === true } as const } : {}),
+      ...(draft.onHost ? { hermes: { kind: 'host' } as const } : container ? { hermes: { kind: 'docker', container, shell: 'bash', sudo: draft.sudo === true } as const } : {}),
     },
   }
 }
@@ -95,6 +102,15 @@ export function isValidSshAccess(access: HermesSshAccess): boolean {
   if (access.identityFile !== undefined && !IDENTITY.test(access.identityFile)) return false
   if (access.hermes?.kind === 'docker' && !CONTAINER.test(access.hermes.container)) return false
   return true
+}
+
+/**
+ * Same machine, same login: destination, port and key. Anything Detect or a
+ * typed choice learned about one route says nothing about another (a
+ * different port can be a different machine behind the same name).
+ */
+export function sameSshRoute(a: HermesSshAccess | undefined, b: HermesSshAccess | undefined): boolean {
+  return Boolean(a && b) && a!.destination === b!.destination && a!.port === b!.port && a!.identityFile === b!.identityFile
 }
 
 /** `ssh` options shared by the probe and the terminals. */
@@ -141,9 +157,18 @@ export function sshCommandLine(access: HermesSshAccess, target: 'vps' | 'hermes'
  *
  * The first line is a version stamp so a changed script and an old parser
  * can never silently disagree; `end` proves the output was not cut short.
+ *
+ * WHY the host check also asks LOGIN shells (review of #1530): sshd runs
+ * this through a non-login, non-interactive shell, and on Debian/Ubuntu
+ * `~/.local/bin` (pipx, the per-user install script) joins PATH only in
+ * `~/.profile`. Asked plainly, a user-level install looked absent while the
+ * login shell the terminal opens found it. `tail -n 1` drops anything a
+ * profile prints; the `/*` match keeps only a real path.
  */
 export const HERMES_PROBE_SCRIPT = `echo "agent-code-hermes-probe 1"
-p=$(command -v hermes 2>/dev/null) && echo "host $p"
+p=$(command -v hermes 2>/dev/null) || p=$(bash -lc 'command -v hermes' 2>/dev/null | tail -n 1) || p=$(sh -lc 'command -v hermes' 2>/dev/null | tail -n 1) || p=""
+if [ -z "$p" ] && [ -x "$HOME/.local/bin/hermes" ]; then p="$HOME/.local/bin/hermes"; fi
+case "$p" in /*) echo "host $p" ;; esac
 if command -v docker >/dev/null 2>&1; then
   if docker ps -q >/dev/null 2>&1; then d="docker"; echo "docker direct"
   elif sudo -n docker ps -q >/dev/null 2>&1; then d="sudo -n docker"; echo "docker sudo"
@@ -213,7 +238,7 @@ export function decideHermesLocation(probe: HermesProbeResult): HermesDetection 
   if (places.length > 1) {
     return {
       ok: false,
-      message: `Hermes was found in ${places.length} places: ${places.map((place) => place.label).join(', ')}. Type the container to use (leave it empty for the server itself).`,
+      message: `Hermes was found in ${places.length} places: ${places.map((place) => place.label).join(', ')}. Choose one: type the container, or tick "on the server itself".`,
       candidates: probe.containers.map((container) => container.name),
     }
   }

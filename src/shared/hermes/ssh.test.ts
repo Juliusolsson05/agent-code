@@ -99,6 +99,10 @@ describe('validating what the user types', () => {
     expect(validateSshDraft({ destination: 'me@2001:db8::1' }).access?.destination).toBe('me@2001:db8::1')
   })
 
+  it('"on the server itself" is a location of its own, and wins over a stale container field', () => {
+    expect(validateSshDraft({ destination: 'vps', container: 'old', onHost: true }).access?.hermes).toEqual({ kind: 'host' })
+  })
+
   it('a typed container becomes the Hermes location', () => {
     expect(validateSshDraft({ destination: 'vps', container: 'hermes', sudo: true }).access?.hermes).toEqual({ kind: 'docker', container: 'hermes', shell: 'bash', sudo: true })
   })
@@ -112,6 +116,9 @@ describe('validating what the user types', () => {
     ['whitespace (a second argument)', { destination: 'root@host extra' }],
     ['a shell separator', { destination: 'host;reboot' }],
     ['a quote in the key path', { destination: 'host', identityFile: "~/.ssh/a'b" }],
+    // Typed as keystrokes, a byte >= 0x80 can be a Meta key in a C-locale
+    // bash (0xC2 = M-B, backward-word) and walk the cursor out of the quotes.
+    ['a non-ASCII key path', { destination: 'host', identityFile: '~/.ssh/n\u00c2;touch x' }],
     ['a port out of range', { destination: 'host', port: '70000' }],
     ['a container with a space', { destination: 'host', container: 'a b' }],
     ['a container with a shell separator', { destination: 'host', container: 'a;b' }],
