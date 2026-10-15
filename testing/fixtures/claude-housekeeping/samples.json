@@ -1,87 +1,6 @@
 {
- "provenance": "Recorded: the owner's own Claude Code transcripts (~/.claude/projects, 2026-09/10). tool_use and tool_result blocks unmodified, wrapped in a minimal assistant/user line for the mapper, EXCEPT the samples marked mutated:true: Monitor and ScheduleWakeup results are cut after their first clause (mechanical mutation) because the rest is Claude Code harness instruction text, which this public repo does not carry. Read in full before committing: no credentials, no private messages.",
+ "provenance": "Recorded: the owner's own Claude Code transcripts (~/.claude/projects, 2026-09/10). tool_use and tool_result blocks unmodified, wrapped in a minimal assistant/user line for the mapper, EXCEPT the samples marked mutated:true: the Monitor result is cut after their first clause (mechanical mutation) because the rest is Claude Code harness instruction text, which this public repo does not carry. Read in full before committing: no credentials, no private messages.",
  "samples": [
-  {
-   "kind": "ack",
-   "tool": "Skill",
-   "mutated": false,
-   "lines": [
-    {
-     "type": "assistant",
-     "uuid": "a-0",
-     "timestamp": "2026-10-15T00:00:00.000Z",
-     "message": {
-      "role": "assistant",
-      "content": [
-       {
-        "type": "tool_use",
-        "id": "toolu_019XNetTbTvQ2WZmQ36Z3DiY",
-        "name": "Skill",
-        "input": {
-         "skill": "workflow-authoring"
-        }
-       }
-      ]
-     }
-    },
-    {
-     "type": "user",
-     "uuid": "u-0",
-     "timestamp": "2026-10-15T00:00:00.000Z",
-     "message": {
-      "role": "user",
-      "content": [
-       {
-        "type": "tool_result",
-        "tool_use_id": "toolu_019XNetTbTvQ2WZmQ36Z3DiY",
-        "content": "Launching skill: workflow-authoring"
-       }
-      ]
-     }
-    }
-   ]
-  },
-  {
-   "kind": "ack",
-   "tool": "Skill",
-   "mutated": false,
-   "lines": [
-    {
-     "type": "assistant",
-     "uuid": "a-1",
-     "timestamp": "2026-10-15T00:00:00.000Z",
-     "message": {
-      "role": "assistant",
-      "content": [
-       {
-        "type": "tool_use",
-        "id": "toolu_01SmQ6srx9N5CipjAY6VwWRE",
-        "name": "Skill",
-        "input": {
-         "skill": "writing-plans",
-         "args": "Plan a long-horizon autonomous bug-hunt-and-fix loop for Agent Code with an autonomous merge pipeline (2 Codex + 1 Pi reviewers, max 2 rounds)."
-        }
-       }
-      ]
-     }
-    },
-    {
-     "type": "user",
-     "uuid": "u-1",
-     "timestamp": "2026-10-15T00:00:00.000Z",
-     "message": {
-      "role": "user",
-      "content": [
-       {
-        "type": "tool_result",
-        "tool_use_id": "toolu_01SmQ6srx9N5CipjAY6VwWRE",
-        "content": "Launching skill: writing-plans"
-       }
-      ]
-     }
-    }
-   ]
-  },
   {
    "kind": "ack",
    "tool": "TaskStop",
@@ -244,49 +163,6 @@
         "type": "tool_result",
         "tool_use_id": "toolu_017Rg4MtVQqv4h6qhar3kRx2",
         "content": "Monitor started (task bwpyrp399, expires in 30m unless the source ends first)."
-       }
-      ]
-     }
-    }
-   ]
-  },
-  {
-   "kind": "ack",
-   "tool": "ScheduleWakeup",
-   "mutated": true,
-   "lines": [
-    {
-     "type": "assistant",
-     "uuid": "a-6",
-     "timestamp": "2026-10-15T00:00:00.000Z",
-     "message": {
-      "role": "assistant",
-      "content": [
-       {
-        "type": "tool_use",
-        "id": "toolu_013JD4aqTveiMriB71Lpi5cN",
-        "name": "ScheduleWakeup",
-        "input": {
-         "delaySeconds": 1800,
-         "prompt": "Check CI for PR #1504 (Lane History). If green and mergeable, merge with gh pr merge 1504 --merge, then report to the user briefly. If failing, investigate and fix.",
-         "reason": "Fallback in case the CI-watch background task never notifies.",
-         "noop": false
-        }
-       }
-      ]
-     }
-    },
-    {
-     "type": "user",
-     "uuid": "u-6",
-     "timestamp": "2026-10-15T00:00:00.000Z",
-     "message": {
-      "role": "user",
-      "content": [
-       {
-        "type": "tool_result",
-        "tool_use_id": "toolu_013JD4aqTveiMriB71Lpi5cN",
-        "content": "Next wakeup scheduled for 11:32:00 (in 1810s)."
        }
       ]
      }

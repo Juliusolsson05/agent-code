@@ -1,4 +1,5 @@
 import { fromMcpCall } from '@providers/shared/renderer/protocols/mcp-call/model'
+import { fromClaudeHousekeepingLine, isClaudeHousekeepingTool } from '@providers/claude/renderer/adapters/housekeepingLine'
 import { McpCallRow } from '@providers/shared/renderer/protocols/mcp-call/McpCallRow'
 import type { ReactNode } from 'react'
 
@@ -290,6 +291,11 @@ function renderClaudeToolUse(
       // An Agent Code tool whose OWN card declined (drifted input) keeps the
       // visible generic fallback those adapters promise (review A2).
       if (OWNED_AGENT_CODE_TOOL.test(block.name)) return undefined
+      // Claude Code's own housekeeping tools (Skill, Monitor, TaskStop, …;
+      // #1522) speak the same one-line language; their names never start
+      // with mcp__, so the two never compete.
+      const housekeeping = fromClaudeHousekeepingLine(block, context.result ?? null, { live: context.live })
+      if (housekeeping) return <McpCallRow model={housekeeping} block={block} />
       const mcp = fromMcpCall(block, context.result ?? null, { live: context.live })
       return mcp ? <McpCallRow model={mcp} block={block} /> : undefined
     }
@@ -419,6 +425,11 @@ function renderClaudeToolResult(
   if (source?.name === 'WebSearch') {
     const model = fromClaudeWebSearchResult(block, source)
     return model ? <ClaudeWebSearchResultRow model={model} /> : undefined
+  }
+  if (source && isClaudeHousekeepingTool(source.name)) {
+    // Same rule as the MCP line: absorbed only when the line recognised the
+    // acknowledgement (or the error) and its disclosure holds the full text.
+    return fromClaudeHousekeepingLine(source, block)?.absorbsResult ? null : undefined
   }
   if (source && !OWNED_AGENT_CODE_TOOL.test(source.name)) {
     // Absorbed only when the MCP line fully carries the result: an

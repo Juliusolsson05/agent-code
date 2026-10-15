@@ -3,7 +3,7 @@
 Short plan, stacked on #1520 (the MCP line). The shape is known: it is the same line model.
 
 ## Outcome
-Skill, Monitor, SendUserFile, ScheduleWakeup and TaskStop render as `◆ <tool>  <subject>  <verdict>`. A recognised acknowledgement absorbs its result row; the full text stays one click away. An error shows its sentence. Any result the line does not recognise keeps the shared result row.
+Monitor, SendUserFile and TaskStop render as `◆ <tool>  <subject>  <verdict>`. A recognised acknowledgement absorbs its result row; the full text stays one click away. An error shows its sentence. Any result the line does not recognise keeps the shared result row.
 
 ## Change
 - `src/providers/claude/renderer/adapters/housekeepingLine.ts`: `fromClaudeHousekeepingLine(toolUse, result, {live})` → the shared `McpCallModel` (server '', ownServer true). It uses a per-tool table: which input field is the subject, and which result text is the acknowledgement.
@@ -15,3 +15,6 @@ Skill, Monitor, SendUserFile, ScheduleWakeup and TaskStop render as `◆ <tool> 
 
 ## Verification boundary
 No app launch. tsc on both projects, plus the scoped renderer tests.
+
+## Ruling
+Skill and ScheduleWakeup are dropped from scope: the task-activity card (adapters/tasks.ts) already owns them and runs first in dispatch. This was found by the first test run. Cost if wrong: none; they keep their existing card.

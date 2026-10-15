@@ -30,7 +30,9 @@ export function McpCallRow({ model, block }: { model: McpCallModel; block: ToolU
           aria-controls={detailsId}
           onClick={() => setOpen((value) => !value)}
           className="flex min-w-0 items-baseline gap-2 text-left text-[12.5px]"
-          title={`${model.server} · ${model.tool}`}
+          // An empty server is a provider's own built-in tool (Claude's
+          // housekeeping line, #1522): there is no server to name.
+          title={model.server ? `${model.server} · ${model.tool}` : model.tool}
         >
           <span aria-hidden className="w-3 shrink-0 text-center font-code text-muted">◆</span>
           <span className="min-w-0 max-w-[45%] shrink-0 truncate font-code text-ink">{model.tool}</span>
@@ -53,7 +55,7 @@ export function McpCallRow({ model, block }: { model: McpCallModel; block: ToolU
         {open && (
           <div id={detailsId} className="ml-5 flex flex-col gap-1">
             <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-control bg-surface px-2 py-1 font-code text-[11px] text-ink-dim">
-              {`${model.server} · ${model.tool}\n${argumentsText}`}
+              {`${model.server ? `${model.server} · ` : ''}${model.tool}\n${argumentsText}`}
             </pre>
             {model.resultText !== null && (
               <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-control bg-surface px-2 py-1 font-code text-[11px] text-ink-dim">{model.resultText}</pre>
