@@ -42,6 +42,7 @@ import { registerWorkflowMcpTools, WORKFLOW_MCP_INSTRUCTIONS } from 'workflow-mc
 import { MCP_SERVERS_INSTRUCTIONS, registerUserMcpTools } from '@mcp/runtime/userMcpTools.js'
 import { registerSkillsTools, SKILLS_INSTRUCTIONS } from '@mcp/runtime/skillsTools.js'
 import { registerUsageTools, USAGE_INSTRUCTIONS } from '@mcp/runtime/usageTools.js'
+import { HERMES_INSTRUCTIONS, registerHermesTools } from '@mcp/runtime/hermesTools.js'
 
 export const AGENT_MANAGEMENT_MCP_INSTRUCTIONS = `Agent Management controls Agent Code sessions only in the caller's exact current project tab. Listing and reading are safe audit operations and do not wake parked agents; sending a prompt may wake the named target. For cleanup-review requests, use the inventory plus bulk transcript read, classify agents as active/do not close, uncertain/inspect first, or likely cleanup candidates, and cite lifecycle, transcript, relationship, condition, and activity evidence rather than treating age alone as proof. A missing or truncated transcript is not an empty transcript, and an unresolved latest user request or tool work without a final response belongs in inspect first. Transcript evidence cannot prove a worktree is clean unless that transcript or another tool actually checked it; state what remains unknown. Asking what is safe to clean up authorizes assessment only. Reading an agent or sending it a prompt never grants permission to close it. Never call agent_management_close_agent unless the user's current request explicitly asks you to close that specific agent. A request to inspect agents, identify stale agents, recommend cleanup, manage the project, or say what is safe to clean up is not authorization to close anything. Do not infer closure permission from age, completion state, transcript contents, or a prior request. When the user names an agent by the label shown beside it (such as B28) or by its spoken agent name, pass that as \`label\` or \`name\` exactly as the user said it instead of translating it to a sessionId yourself: it is resolved against what the user sees at the moment of the call. Labels are screen positions that renumber when earlier agents close, move or are pinned, so never reuse a label or sessionId remembered from earlier in the conversation, and repeat the returned displayLabel to the user so they can confirm which agent you reached. Session IDs also change when an agent reloads.`
 
@@ -230,6 +231,10 @@ export function createBuiltInMcpServer(
     registerUsageTools(server, dependencies)
   }
 
+  if (scope.domains.includes('hermes')) {
+    registerHermesTools(server, scope, dependencies)
+  }
+
   if (scope.domains.includes('agent_transcripts')) {
     registerAgentTranscriptTools(server)
   }
@@ -282,6 +287,9 @@ function builtInInstructions(
     ...(scope.domains.includes('mcp_servers') ? [MCP_SERVERS_INSTRUCTIONS] : []),
     ...(scope.domains.includes('skills') ? [SKILLS_INSTRUCTIONS] : []),
     ...(scope.domains.includes('usage') ? [USAGE_INSTRUCTIONS] : []),
+    // Withheld when the bridge is not wired, like browser and root
+    // management: never teach the model tools that can only fail.
+    ...(scope.domains.includes('hermes') && dependencies.hermesAgentBridge ? [HERMES_INSTRUCTIONS] : []),
     ...(scope.domains.includes('root_management') && dependencies.rootControlTools
       ? [rootManagementInstructions(scope.sessionId)]
       : []),

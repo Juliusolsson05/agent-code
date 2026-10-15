@@ -11,6 +11,7 @@ import {
   fromCodexExecCommand,
   fromCodexExecScript,
 } from '@providers/codex/renderer/adapters/command'
+import { fromCodexScriptSteps } from '@providers/codex/renderer/adapters/scriptSteps'
 import { renderCodexOperation } from '@providers/codex/renderer/rows/dispatch'
 import { CODEX_RENDER_SHAPES } from '@providers/codex/renderer/shapes'
 import {
@@ -125,8 +126,21 @@ results.forEach((r,i)=>{text(\`--- \${i+1} ---\`);text(r.output)});`,
     } as ToolResultBlock & { codex: { kind: string } }
 
     expect(fromCodexCommandGroupOperation({ toolUse, result })).toBeNull()
-    expect(renderCodexOperation({ toolUse, result, live: false, streaming: false }).toolResult)
-      .not.toMatchObject({ action: 'absorb' })
+    // #1510 changed WHERE the unattributed bytes stay visible, not WHETHER:
+    // the group adapter still declines, the script-steps card (the floor
+    // under every exact adapter) admits it, and its exact output is the
+    // complete recorded result, one click away. The invariant this test
+    // guarded — no byte of an unattributable fan-out disappears — is pinned
+    // on that exact output instead of on a separate result row.
+    const decision = renderCodexOperation({ toolUse, result, live: false, streaming: false })
+    expect(decision.toolUse).toMatchObject({ receipt: { protocolId: 'codex.script-steps' } })
+    expect(fromCodexScriptSteps(toolUse, result)?.exactOutput).toBe(result.content)
+    // And still "separately visible" (review B7): both commands' outputs are
+    // on the card, not behind a closed data summary.
+    if (decision.toolUse.action !== 'render') throw new Error('expected a rendered card')
+    const { container } = render(<>{decision.toolUse.node}</>)
+    expect(container.textContent).toContain('clean')
+    expect(container.textContent).toContain('passed')
   })
 
   it('preserves command line endings while removing each carrier framing newline', () => {
@@ -338,7 +352,9 @@ results.forEach((r,i)=>{text(\`--- \${i+1} ---\`);text(r.output)});`,
       type: 'tool_result',
       tool_use_id: toolUse.id,
       content: 'Script failed\nWall time 0.4 seconds\nOutput:\n\nlint: 3 errors found\nScript error:\nExecution failed',
-      codex: { kind: 'custom_tool_call_output' },
+      // The parts Codex sent (header, the text() output, its own "Script
+      // error:" report), as rollout.ts records them beside the joined string.
+      codex: { kind: 'custom_tool_call_output', partLengths: ['Script failed\nWall time 0.4 seconds\nOutput:\n'.length, 'lint: 3 errors found'.length, 'Script error:\nExecution failed'.length] },
     } as ToolResultBlock & { codex: { kind: string } }
     const model = fromCodexExecScript(toolUse, { result })
 
@@ -347,8 +363,20 @@ results.forEach((r,i)=>{text(\`--- \${i+1} ---\`);text(r.output)});`,
       errorSummary: 'lint: 3 errors found',
     })
 
+    // #1510: the finished script is now the script-steps card; the failure
+    // and every byte of the result stay visible there (see the fan-out test).
     const decision = renderCodexOperation({ toolUse, result, live: false, streaming: false })
-    expect(decision.toolResult?.action).not.toBe('absorb')
+    expect(decision.toolUse).toMatchObject({ receipt: { protocolId: 'codex.script-steps' } })
+    const steps = fromCodexScriptSteps(toolUse, result)!
+    expect(steps.status).toBe('failed')
+    expect(steps.exactOutput).toBe(result.content)
+    expect(steps.results).toContainEqual(expect.objectContaining({ kind: 'script-error' }))
+    // What the original errorSummary assertion was for: the failure's own
+    // words are visible on the card (review B7).
+    if (decision.toolUse.action !== 'render') throw new Error('expected a rendered card')
+    const { container } = render(<>{decision.toolUse.node}</>)
+    expect(container.textContent).toContain('lint: 3 errors found')
+    expect(container.textContent).toContain('script failed')
   })
 
   it('extracts the captured serialized ExecCommandResult carrier without showing transport JSON', () => {
