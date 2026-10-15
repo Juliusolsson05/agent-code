@@ -122,9 +122,11 @@ describe('Sidekick panel', () => {
     act(() => { useAppStore.getState().setKeyboardRegion('sidekick') })
     try {
       render(<SidekickPanel workspace={workspaceWith({ sk: { kind: 'claude', cwd: HOME, sidekickId: ID } })} actions={actionsWith(vi.fn())} />)
-      // Nothing to focus yet: the caret is left where it was, not put in the
-      // queued-prompt editor.
-      expect(document.activeElement).toBe(lane)
+      // Nothing to focus yet, but the caret leaves the LANE at once — left
+      // there, Enter submitted the lane's draft through its own textarea
+      // handler (#1524 review). The column holds it; the queued-prompt editor
+      // is never chosen.
+      expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Sidekick' }))
       act(() => { leafHarness.reveal() })
       await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('leaf sk')))
     } finally {
@@ -326,5 +328,49 @@ describe('Sidekick Spotlight (#1493 follow-up)', () => {
     expect(confirmRemove).toHaveBeenCalledTimes(1)
     expect(confirmRemove.mock.calls[0]?.[1]).toBe(ID)
     expect(useAppStore.getState().sidekickRemoveRequest).toBeNull()
+  })})
+
+describe('Sidekick focus claim does not fight the user (#1524 review)', () => {
+  function mountLate() {
+    useSidekickIndexStore.getState().accept(view([summary('this-window')]))
+    leafHarness.late = true
+    act(() => { useAppStore.getState().setKeyboardRegion('sidekick') })
+    render(<SidekickPanel workspace={workspaceWith({ sk: { kind: 'claude', cwd: HOME, sidekickId: ID } })} actions={actionsWith(vi.fn())} />)
+  }
+  afterEach(() => { leafHarness.late = false })
+
+  it('pauses while a dialog holds focus, and lands in the composer once focus returns to the column', async () => {
+    mountLate()
+    const dialog = document.createElement('div')
+    dialog.setAttribute('role', 'dialog')
+    const field = document.createElement('input')
+    dialog.append(field)
+    document.body.append(dialog)
+    act(() => { field.focus() })
+    // Let the MutationObserver callback (a microtask) run before asserting.
+    await act(async () => { leafHarness.reveal(); await new Promise(resolve => setTimeout(resolve, 0)) })
+    // The palette's focus trap keeps its caret: no tug of war.
+    expect(document.activeElement).toBe(field)
+    dialog.remove()
+    act(() => { screen.getByRole('region', { name: 'Sidekick' }).focus() })
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('leaf sk')))
+  })
+
+  it('is cancelled when the user focuses something outside the column before the input appears', async () => {
+    mountLate()
+    const sidePanelInput = document.createElement('input')
+    document.body.append(sidePanelInput)
+    act(() => { sidePanelInput.focus() })
+    await act(async () => { leafHarness.reveal(); await new Promise(resolve => setTimeout(resolve, 0)) })
+    expect(document.activeElement).toBe(sidePanelInput)
+  })
+
+  it('a chip click lands in the composer, not on the chip', async () => {
+    useSidekickIndexStore.getState().accept(view([summary('this-window')]))
+    act(() => { useAppStore.getState().setKeyboardRegion('workspace') })
+    render(<SidekickPanel workspace={workspaceWith({ sk: { kind: 'claude', cwd: HOME, sidekickId: ID } })} actions={actionsWith(vi.fn())} />)
+    const chip = screen.getByRole('button', { name: /^S1/ })
+    act(() => { chip.focus(); fireEvent.click(chip) })
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('leaf sk')))
   })
 })

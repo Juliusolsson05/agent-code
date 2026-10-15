@@ -113,15 +113,19 @@ describe('SpotlightView header', () => {
     fireEvent.keyDown(radios[2]!, { key: 'ArrowLeft', altKey: true })
     expect(document.activeElement).toBe(radios[2])
   })
-  it('renders the Spotlight agent unfocused while the keyboard is in the Sidekick beside it (focus follow-up)', () => {
+  it('dims the Spotlight agent while the keyboard is in the Sidekick, keeping its layout focus (#1524 review)', () => {
+    // Only the LOOK changes: the leaf keeps `focused` (layout focus), so
+    // returning to the workspace is not a focus change that steals the caret.
     const realBefore = useRealAppStore.getState()
     try {
       const view = renderSpotlight()
-      expect(view.getByTestId('leaf').getAttribute('data-focused')).toBe('true')
+      expect(view.queryByTestId('spotlight-dim')).toBeNull()
       act(() => { useRealAppStore.setState({ keyboardRegion: 'sidekick' }) })
-      expect(view.getByTestId('leaf').getAttribute('data-focused')).toBe('false')
+      expect(view.getByTestId('spotlight-dim')).toBeTruthy()
+      expect(view.getByTestId('leaf').getAttribute('data-focused')).toBe('true')
     } finally {
       useRealAppStore.setState(realBefore, true)
     }
   })
+
 })

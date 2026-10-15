@@ -12,6 +12,7 @@ import { paneHasInteractionOwner } from '@renderer/lib/interaction-ownership'
 import { PaneDialogHostProvider } from '@renderer/components/ui/pane-dialog'
 import { agentFollowEnabled } from '@renderer/workspace/agentFollow'
 import { focusIsUnowned, useInteractiveOwnership } from '@renderer/workspace/tile-tree/TileLeaf/useInteractiveOwnership'
+import { useKeyboardRegionActive } from '@renderer/features/sidekick/ui/KeyboardRegionContext'
 import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 import { AgentFeed } from '@renderer/features/feed/agent/AgentFeed'
 import { HermesChatFeed } from '@renderer/features/hermes-chat/HermesChatFeed'
@@ -163,6 +164,7 @@ export function TileLeaf({
   // into "visible" for the mask below and into "owns keyboard input" for
   // every document-level router. See useInteractiveOwnership for why.
   const { interactive, hidden: workspaceHidden } = useInteractiveOwnership(focused)
+  const regionActive = useKeyboardRegionActive()
   useMonitorCommit(sessionId, runtime.semantic, !workspaceHidden)
   // This one OR is the ENTIRE implementation of "Tail All" scoping, and it is
   // load-bearing in a way that is easy to mistake for a shortcut.
@@ -788,7 +790,12 @@ export function TileLeaf({
     return registerComposerEnterTarget({
       key: sessionId,
       focused: interactive,
-      hovered: composerHovered,
+      // Hover intent counts only inside the region that owns the keyboard
+      // (#1524 review): with the keyboard in the Sidekick, the pointer
+      // resting on a dimmed lane's composer made that LANE win a bare Enter
+      // (pickTarget prefers hover), and its draft was sent instead of the
+      // sidekick's. The lane is one click away; the region decides first.
+      hovered: composerHovered && regionActive,
       blocked: () => paneHasInteractionOwner(inputRef.current),
       hasSubmittableDraft: () => {
         // Slash mode is PTY-owned: Enter commits Claude Code's highlighted
@@ -805,7 +812,7 @@ export function TileLeaf({
         void submitCurrentDraft('global-enter')
       },
     })
-  }, [sessionId, interactive, composerHovered, input, runtime.draftImages.length, slashMode, submitCurrentDraft])
+  }, [sessionId, interactive, composerHovered, regionActive, input, runtime.draftImages.length, slashMode, submitCurrentDraft])
 
   // Auto-send a clicked prompt suggestion. onApplySuggestion prefills the draft
   // and stashes the text in autoSendPendingRef; this effect waits until the

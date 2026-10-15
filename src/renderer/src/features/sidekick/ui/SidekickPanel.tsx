@@ -11,6 +11,7 @@ import { confirmRemoveSidekick } from '@renderer/features/sidekick/ui/confirmRem
 import { sidekickChipLabel, SidekickStrip } from '@renderer/features/sidekick/ui/SidekickStrip'
 import { useSidekickSpotlightActive } from '@renderer/features/sidekick/state/sidekickSpotlight'
 import { KeyboardRegionContext, SIDEKICK_PANEL_ATTRIBUTE } from '@renderer/features/sidekick/ui/KeyboardRegionContext'
+import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 import { clampSidekickPanelWidth, DEFAULT_SIDEKICK_PANEL } from '@renderer/workspace/sidekickPanel'
 import { renderWorkspaceLeaf } from '@renderer/workspace/tile-tree/TileTree'
@@ -99,49 +100,87 @@ export function SidekickPanel({ workspace, actions }: Props) {
       .finally(() => setBusy(null))
   }, [actions, attempt, bootstrapComplete, panel.sidekickId, place.kind])
 
-  // Move the caret into the sidekick whenever it owns the keyboard (F2,
-  // fixed for real in the focus follow-up).
+  // Move the caret into the sidekick whenever it owns the keyboard.
   //
   // WHY the panel does this and not TileLeaf: TileLeaf focuses its input only
   // when its `focused` prop CHANGES or focus is unowned. ⌘J (and a chip click,
   // and the picker) set the region programmatically while the caret still
   // sits in the lane's composer — focus is OWNED, and the sidekick leaf mounts
-  // already `focused`, so nothing moved it and typing and Enter kept going to
-  // the lane while the region said "sidekick".
+  // already `focused`, so nothing moved it: the region said "sidekick" while
+  // typing and Enter went to the lane (the owner's report).
   //
-  // WHY it waits for the input instead of trying once: the first cut looked
-  // for a textarea one frame after the row was held. In the app the agent's
-  // input is not there yet — the composer mounts after the runtime boots, and
-  // xterm creates its helper textarea when the terminal attaches — so it found
-  // nothing and never tried again. (Its test used a stand-in leaf that
-  // rendered a textarea at once, which is why it passed.) A MutationObserver
-  // on the body catches the input the moment it appears.
-  //
-  // WHAT it focuses: this session's own composer (`data-composer-input`),
-  // else xterm's helper textarea in terminal view — never "the first
-  // textarea", which could be a queued-prompt editor.
-  //
-  // It stands down as soon as focus is anywhere inside the body (the user
-  // clicked into it, or it worked), and when the region leaves the Sidekick.
+  // HOW (each rule is a bug the first cuts had):
+  //  - The caret leaves the lane AT ONCE. If the sidekick's input does not
+  //    exist yet — still attaching, the runtime booting, xterm not attached —
+  //    the column itself (tabIndex -1) holds the caret. Leaving it in the lane
+  //    until the input appeared let Enter submit the lane's draft through the
+  //    lane textarea's OWN handler, which no region gate sees (#1524 review).
+  //  - It then waits for the input with a MutationObserver. A one-frame try
+  //    (the F2 fix) ran before the input existed and never retried; its test
+  //    used a stand-in that rendered a textarea at once.
+  //  - It targets this session's composer (`data-composer-input`), else xterm's
+  //    helper textarea — never "the first textarea" (a queued-prompt editor).
+  //  - It is done once the caret is inside the LEAF. A chip button or the
+  //    holding column is not done: clicking a chip should land in its composer,
+  //    as a lane chip does.
+  //  - It PAUSES while a dialog owns the interaction (the palette, a confirm):
+  //    pulling focus out of a focus trap made it pull back and re-select its
+  //    input, so the next keystroke overwrote it. Radix returns focus to the
+  //    column when the dialog closes, and the claim resumes.
+  //  - It is CANCELLED the moment the user focuses anything outside the column
+  //    (a side-panel input, Monaco): a pending claim must never override a
+  //    choice made after it started.
+  const rootRef = useRef<HTMLDivElement | null>(null)
   const bodyRef = useRef<HTMLDivElement | null>(null)
   const heldSessionId = place.kind === 'here' ? place.sessionId : null
   useEffect(() => {
-    if (region !== 'sidekick' || !heldSessionId) return
-    const body = bodyRef.current
-    if (!body) return
+    if (region !== 'sidekick') return
+    const root = rootRef.current
+    if (!root) return
+    let cancelled = false
+    const done = () => {
+      const active = document.activeElement
+      return active !== null && bodyRef.current?.contains(active) === true
+    }
     const claim = (): boolean => {
-      if (body.contains(document.activeElement)) return true
-      const input = sidekickInputIn(body, heldSessionId)
-      if (!input) return false
-      input.focus()
-      return body.contains(document.activeElement)
+      if (cancelled) return true
+      if (done()) return true
+      const active = document.activeElement
+      if (hasAppInteractionOwner() || (active instanceof Element && active.closest(DIALOG_SELECTOR) !== null)) return false
+      const body = bodyRef.current
+      const input = body && heldSessionId ? sidekickInputIn(body, heldSessionId) : null
+      if (input) {
+        input.focus()
+        if (done()) return true
+      }
+      if (!root.contains(document.activeElement)) root.focus({ preventScroll: true })
+      return false
+    }
+    const cancelOnUserChoice = (event: FocusEvent) => {
+      const target = event.target
+      if (!(target instanceof Element) || root.contains(target)) return
+      // A dialog taking focus is a pause, not a choice (see claim).
+      if (target.closest(DIALOG_SELECTOR)) return
+      cancelled = true
+      stop()
+    }
+    const observer = new MutationObserver(() => { if (claim()) stop() })
+    const stop = () => {
+      observer.disconnect()
+      document.removeEventListener('focusin', cancelOnUserChoice, true)
     }
     if (claim()) return
-    const observer = new MutationObserver(() => {
-      if (claim()) observer.disconnect()
-    })
-    observer.observe(body, { childList: true, subtree: true })
-    return () => observer.disconnect()
+    observer.observe(root, { childList: true, subtree: true })
+    // Dialog close returns focus to the column without a DOM mutation inside
+    // it; listen for that too.
+    const resumeAfterDialog = () => { if (!cancelled && claim()) stop() }
+    document.addEventListener('focusin', cancelOnUserChoice, true)
+    root.addEventListener('focusin', resumeAfterDialog)
+    return () => {
+      cancelled = true
+      stop()
+      root.removeEventListener('focusin', resumeAfterDialog)
+    }
   }, [region, heldSessionId])
 
   const openHere = useCallback(async () => {
@@ -245,6 +284,10 @@ export function SidekickPanel({ workspace, actions }: Props) {
   // flow, it is the same 10px / 4px boundary every lane-to-lane split uses.
   return (
     <div
+      ref={rootRef}
+      // Holds the caret while the sidekick's input is not mounted yet, so it
+      // is never left in a lane composer (see the focus claim above).
+      tabIndex={-1}
       role="region"
       aria-label="Sidekick"
       data-sidekick-spotlight={spotlit ? 'true' : undefined}
@@ -253,7 +296,7 @@ export function SidekickPanel({ workspace, actions }: Props) {
       // remount the agent (xterm dispose + PTY replay, the #752 cost) on every
       // toggle; changing this box's size is a plain resize, the way a lane
       // resize is.
-      className={spotlit ? 'flex h-full min-h-0 min-w-0 flex-1 bg-canvas' : 'flex h-full min-h-0 flex-shrink-0 bg-canvas'}
+      className={spotlit ? 'flex h-full min-h-0 min-w-0 flex-1 bg-canvas outline-none' : 'flex h-full min-h-0 flex-shrink-0 bg-canvas outline-none'}
       style={spotlit ? undefined : { width: width + SIDEKICK_COLUMN_CHROME_PX }}
       {...{ [SIDEKICK_PANEL_ATTRIBUTE]: '' }}
     >
@@ -316,6 +359,9 @@ export function SidekickPanel({ workspace, actions }: Props) {
     </div>
   )
 }
+
+/** Surfaces that own focus temporarily: the claim pauses for them. */
+const DIALOG_SELECTOR = '[role="dialog"], [role="alertdialog"], [role="menu"], [data-radix-popper-content-wrapper]'
 
 /** The element typing should land in for this sidekick, if it exists yet:
  *  its composer (prose/Hermes views), else xterm's input (terminal view). */
