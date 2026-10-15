@@ -43,7 +43,7 @@ import { getHermesConnectionService } from '@main/hermes/registry.js'
 import { hermesTranscriptSource, registerHermesHistory } from '@providers/hermes/runtime/hermesHistory.js'
 import { HermesSignedOutError } from '@main/hermes/tokenBroker.js'
 import { describeError, HermesConnectionMissingError, type HermesDisconnectReason } from '@main/hermes/service.js'
-import { errorFields, hermesClientLog } from '@main/hermes/clientLog.js'
+import { createOutageDeduper, errorFields, hermesClientLog } from '@main/hermes/clientLog.js'
 import type { ConditionAction, ConditionCustomAction } from '@shared/conditions-core/contract.js'
 import type {
   HermesConditionKind,
@@ -99,6 +99,9 @@ const STABLE_AFTER_MS = 5_000
  * The held-message failure in a few words for the chat line. hermes-headless
  * sentences end with a period; inside "Not sent (…):" that reads oddly.
  */
+/** The lines every reconnect attempt repeats; folded while an outage lasts (clientLog.ts createOutageDeduper). */
+const OUTAGE_EVENTS = new Set(['reconnect-attempt', 'reconnect-failed', 'connection-connecting', 'connection-disconnected', 'connection-ready'])
+
 function heldFailureReason(error: unknown): string {
   const message = error instanceof Error ? error.message.trim() : String(error)
   return (message || 'unknown error').replace(/\.$/, '')
@@ -138,6 +141,7 @@ export class HermesSession extends EventEmitter implements AgentSession {
   /** Open requests in arrival order; the card shows the oldest per kind. */
   private readonly openRequests: HermesRequest[] = []
   private noticeCounter = 0
+  private readonly outage = createOutageDeduper()
   /** When each live request arrived (sudo/secret countdown). */
   private readonly requestReceivedAt = new Map<string, number>()
   /** Telegram-thread mode (#1496): the gateway routing key this pane follows. */
@@ -328,7 +332,12 @@ export class HermesSession extends EventEmitter implements AgentSession {
       // diagnose the 2026-10-15 loss with but the server's log (#1527). Main
       // cannot write into the renderer composer, so the line is where the
       // text survives (the same convention as Cancel on the held card).
-      this.emitNotice(`Not sent (${heldFailureReason(error)}): ${text}`)
+      // "unknown" means the socket died AFTER prompt.submit went out: Hermes
+      // may be running it. "Not sent" there invites a resend that runs the
+      // turn twice (review of #1529), so that one case says to check first.
+      this.emitNotice(error instanceof HermesPromptError && error.kind === 'unknown'
+        ? `May not have been sent (${heldFailureReason(error)}); check the chat before sending it again: ${text}`
+        : `Not sent (${heldFailureReason(error)}): ${text}`)
       this.log('hold-failed', { holdId, textLength: text.length, ...errorFields(error) })
     })
     headless.on('hold-released', ({ holdId, outcome }: { holdId: string; outcome: { status: string | null } }) => {
@@ -613,6 +622,13 @@ export class HermesSession extends EventEmitter implements AgentSession {
    * connection and Hermes conversation so it reads next to the server log.
    */
   private log(event: string, details: Record<string, unknown> = {}): void {
+    if (OUTAGE_EVENTS.has(event) && !this.outage.admit(event, details)) return
+    // Each of these ends a stretch of connection churn (the start-up dial
+    // counts as one), so the next outage starts with an empty set.
+    if (event === 'started' || event === 'reconnected' || event === 'detached') {
+      const folded = this.outage.end()
+      if (folded > 0) details = { ...details, repeatedLinesFolded: folded }
+    }
     hermesClientLog().write({ connectionId: this.connectionId, conversation: this.headless?.storedSessionId || this.storedSessionId, event, ...details })
   }
 

@@ -107,8 +107,8 @@ export function setHermesClientLogForTests(log: HermesClientLog | null): void {
  * (RpcError, HermesPromptError from hermes-headless).
  */
 export function errorFields(error: unknown): Record<string, unknown> {
-  if (!(error instanceof Error)) return { error: String(error) }
-  const fields: Record<string, unknown> = { error: error.message, errorName: error.name }
+  if (!(error instanceof Error)) return { error: clip(String(error)) }
+  const fields: Record<string, unknown> = { error: clip(error.message), errorName: error.name }
   const record = error as unknown as Record<string, unknown>
   if (typeof record.code === 'number' || typeof record.code === 'string') fields.code = record.code
   if (typeof record.kind === 'string') fields.kind = record.kind
@@ -117,4 +117,54 @@ export function errorFields(error: unknown): Record<string, unknown> {
   if (typeof record.method === 'string') fields.method = record.method
   if (typeof record.stage === 'string') fields.stage = record.stage
   return fields
+}
+
+/**
+ * WHY messages are clipped: the RPC refusals are short and carry no user
+ * text, but a lane error can wrap a REST failure, and an HTTP error message
+ * may quote a response body (session titles come from the user's first
+ * message). The diagnosis is in the first sentence; the rest is risk.
+ */
+const MAX_ERROR_CHARS = 300
+function clip(message: string): string {
+  return message.length > MAX_ERROR_CHARS ? `${message.slice(0, MAX_ERROR_CHARS)}…` : message
+}
+
+/**
+ * Collapses the repeating lines of an outage (review of #1529). Each
+ * reconnect attempt writes attempt / connecting / failed / disconnected; at
+ * the 15 s backoff cap that is ~70 KB an hour per pane, so a few hours
+ * offline rotated the failure that started the outage out of both files,
+ * the opposite of what rotation is for. Now a line identical to one already
+ * written during this outage (same event, same details apart from the
+ * attempt counter) is counted instead of written, and the count rides on
+ * the line that ends the outage. The FIRST occurrence of every distinct
+ * failure is always on disk.
+ */
+export function createOutageDeduper(): {
+  /** True when the line should be written. */
+  admit(event: string, details: Record<string, unknown>): boolean
+  /** Ends the outage; returns how many lines were folded into it. */
+  end(): number
+} {
+  const seen = new Set<string>()
+  let folded = 0
+  return {
+    admit(event, details) {
+      const { attempt: _attempt, ...rest } = details
+      const signature = `${event} ${JSON.stringify(rest)}`
+      if (seen.has(signature)) {
+        folded += 1
+        return false
+      }
+      seen.add(signature)
+      return true
+    },
+    end() {
+      const count = folded
+      seen.clear()
+      folded = 0
+      return count
+    },
+  }
 }

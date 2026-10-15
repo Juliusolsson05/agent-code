@@ -33,6 +33,22 @@ found only from the server's log.
   produces the reason + full-text notice and a log line with code and request id.
   Fails before the change (the notice was the 80-char excerpt, nothing logged).
 
+## Review round (one Claude and one Codex reviewer; findings and fixes)
+- **Package** (hermes-headless#5, commit `3623bd2`):
+  - overlapping re-attaches now queue;
+  - a 4001 waits for an attach already in flight;
+  - a failed recovery is reported as not sent;
+  - a lane retry re-resolves the tip;
+  - a lane never creates a conversation on 4007;
+  - "Send now" hands its text back through `hold-failed`.
+
+  Details and tests: the package plan's Review round.
+- **App:**
+  - The `unknown` outcome (socket dropped after the submit went out) now reads "May not have been sent (…); check the chat before sending it again: <text>". "Not sent" invited a resend that runs the turn twice. Test: the lane system test with the socket closing on submit.
+  - Outage lines are folded (`createOutageDeduper`). Each distinct line is written once per outage, and the count rides on `reconnected`/`started`/`detached`. Without this, ~70 KB/hour/pane rotated the incident's first lines out.
+  - Error messages in the log are clipped to 300 characters, because a REST failure can quote a response body.
+- **Not adopted:** none.
+
 ## Verification
 `tsc -b tsconfig.node.json` + `tsc -p tsconfig.web.json --noEmit`, the touched tests,
 then the full suite once. Not verified here: a real network drop against the VPS;

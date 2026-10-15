@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { HermesPromptError } from 'hermes-headless'
 
-import { createHermesClientLog, errorFields } from '@main/hermes/clientLog.js'
+import { createHermesClientLog, createOutageDeduper, errorFields } from '@main/hermes/clientLog.js'
 
 const dirs: string[] = []
 async function tempDir(): Promise<string> {
@@ -50,5 +50,29 @@ describe('Hermes client log (#1527)', () => {
       kind: 'refused',
       requestId: 'hh6',
     })
+  })
+})
+
+describe('an outage in the client log (review of #1529)', () => {
+  it('writes each distinct line once, counts the repeats, and starts fresh after the outage', () => {
+    const outage = createOutageDeduper()
+    const attempt = (n: number) => [
+      outage.admit('reconnect-attempt', { attempt: n }),
+      outage.admit('connection-connecting', {}),
+      outage.admit('reconnect-failed', { error: 'connect ETIMEDOUT', code: 'ETIMEDOUT' }),
+      outage.admit('connection-disconnected', { code: 1006, reason: '' }),
+    ]
+    expect(attempt(1)).toEqual([true, true, true, true])
+    expect(attempt(2)).toEqual([false, false, false, false])
+    expect(attempt(3)).toEqual([false, false, false, false])
+    // A DIFFERENT failure is always written: it may be the one that matters.
+    expect(outage.admit('reconnect-failed', { error: 'getaddrinfo ENOTFOUND', code: 'ENOTFOUND' })).toBe(true)
+    expect(outage.end()).toBe(8)
+    expect(outage.admit('reconnect-attempt', { attempt: 1 })).toBe(true)
+  })
+
+  it('clips long error messages: a REST failure can quote a response body', () => {
+    const fields = errorFields(new Error(`HTTP 500: ${'x'.repeat(1000)}`))
+    expect(String(fields.error).length).toBeLessThanOrEqual(301)
   })
 })

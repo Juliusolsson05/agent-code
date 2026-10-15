@@ -27,7 +27,10 @@ let socket: FakeSocket
 let history: Record<string, unknown>
 // Answer for prompt.submit: a result, or Hermes' 4001 for a runtime it no
 // longer holds (tui_gateway/server.py `_sess_nowait`).
-let submitAnswer: { result: unknown } | { error: { code: number; message: string } }
+// `close`: the socket drops after the submit went out, so Hermes may be
+// running it (the package's `unknown` outcome).
+type SubmitAnswer = { result: unknown } | { error: { code: number; message: string } } | 'close'
+let submitAnswer: SubmitAnswer
 let logged: HermesClientLogEntry[]
 
 // The recording's clock: the busy rule ages a phone turn by Hermes' own row
@@ -43,7 +46,9 @@ beforeEach(() => {
   vi.setSystemTime(phoneRowAt + 2_000)
   socket = new FakeSocket()
   history = resultOf('r3')
-  submitAnswer = { result: { status: 'streaming', user_row_id: 6 } }
+  // Widened on purpose: TypeScript would otherwise narrow the fake server's
+  // closure below to this first value and reject the 'close' check.
+  submitAnswer = { result: { status: 'streaming', user_row_id: 6 } } as SubmitAnswer
   logged = []
   setHermesClientLogForTests({ write: (entry) => logged.push(entry), flush: async () => undefined })
   setHermesConnectionService({
@@ -64,7 +69,8 @@ beforeEach(() => {
       answered.add(String(call.id))
       const method = String(call.method)
       if (method === 'prompt.submit') {
-        socket.push({ jsonrpc: '2.0', id: call.id, ...submitAnswer })
+        if (submitAnswer === 'close') socket.close(1006, '')
+        else socket.push({ jsonrpc: '2.0', id: call.id, ...submitAnswer })
         continue
       }
       const result = method === 'client.capabilities' ? CAPS
@@ -137,5 +143,20 @@ describe('a Hermes pane following the Telegram thread', () => {
     expect(failure).toMatchObject({ connectionId: 'conn-1', code: 4001, kind: 'refused', requestId: String(submits.at(-1)!.id), textLength: message.length })
     // Never the user's words in the log.
     expect(JSON.stringify(logged)).not.toContain(message)
+  })
+
+  it('a held message that MAY have reached Hermes says to check before resending (review of #1529)', async () => {
+    const { session, rows } = await startLane()
+    history = resultOf('r4')
+    await session.deliverPromptText('Possibly delivered.')
+    submitAnswer = 'close'
+    history = resultOf('r44')
+    socket.push({ jsonrpc: '2.0', method: 'event', params: { type: 'sessions.changed', session_id: '', payload: {} } })
+    for (let tick = 0; tick < 300 && !logged.some((entry) => entry.event === 'hold-failed'); tick += 1) await new Promise((resolve) => setTimeout(resolve, 10))
+
+    const notices = rows.filter((row) => row.row.role === 'notice').map((row) => String(row.row.text))
+    expect(notices.find((text) => text.endsWith(': Possibly delivered.'))).toMatch(/^May not have been sent \(.*\); check the chat before sending it again: Possibly delivered\.$/)
+    expect(notices.some((text) => text.startsWith('Not sent'))).toBe(false)
+    await session.stop()
   })
 })
