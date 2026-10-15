@@ -43,6 +43,7 @@ import { getHermesConnectionService } from '@main/hermes/registry.js'
 import { hermesTranscriptSource, registerHermesHistory } from '@providers/hermes/runtime/hermesHistory.js'
 import { HermesSignedOutError } from '@main/hermes/tokenBroker.js'
 import { describeError, HermesConnectionMissingError, type HermesDisconnectReason } from '@main/hermes/service.js'
+import { errorFields, hermesClientLog } from '@main/hermes/clientLog.js'
 import type { ConditionAction, ConditionCustomAction } from '@shared/conditions-core/contract.js'
 import type {
   HermesConditionKind,
@@ -93,6 +94,15 @@ const HERMES_APP_COMMANDS_WITH_REFUSALS: ComposerCommand[] = composerCommandsFro
 const BACKOFF_BASE_MS = 300
 const BACKOFF_CAP_MS = 15_000
 const STABLE_AFTER_MS = 5_000
+
+/**
+ * The held-message failure in a few words for the chat line. hermes-headless
+ * sentences end with a period; inside "Not sent (…):" that reads oddly.
+ */
+function heldFailureReason(error: unknown): string {
+  const message = error instanceof Error ? error.message.trim() : String(error)
+  return (message || 'unknown error').replace(/\.$/, '')
+}
 
 // Actions on the held-prompt card (Telegram-thread mode).
 const HERMES_HELD_SEND = 'hermes.held.send'
@@ -194,6 +204,7 @@ export class HermesSession extends EventEmitter implements AgentSession {
    * the server and a later Reload Agent resumes it.
    */
   private detach(reason: HermesDisconnectReason): void {
+    this.log('detached', { reason })
     if (this.stopped || this.signedOut || !this.headless) return
     // Stays detached: the socket closing below must not start the reconnect
     // loop, which would only redial a connection with no credentials.
@@ -278,7 +289,10 @@ export class HermesSession extends EventEmitter implements AgentSession {
     headless.semantic.on('event', (event: SemanticEvent) => this.emit('semantic-event', event))
     headless.committed.on('entry', (row: CommittedRow) => this.emitRow(row.key, row.storedSessionId, row.row as Record<string, unknown>))
     headless.committed.on('boundary', (boundary: HistoryBoundary) => this.emitBoundary(boundary))
-    headless.committed.on('history_error', (error: Error) => this.emit('jsonl-error', error))
+    headless.committed.on('history_error', (error: Error) => {
+      this.log('history-error', errorFields(error))
+      this.emit('jsonl-error', error)
+    })
     headless.screen.on('activity', (activity: ScreenActivityEvent) => {
       this.emit('process-state', { active: activity.active, status: activity.status ?? undefined })
     })
@@ -288,6 +302,7 @@ export class HermesSession extends EventEmitter implements AgentSession {
       // that follows `session-replaced` wipes every row before it, so a notice
       // emitted now never reached the screen (round-2 review x1 #2).
       this.pendingNotice = `The previous Hermes conversation (${previousStoredSessionId}) is gone from the server, so this pane started a new one.`
+      this.log('session-replaced', { previous: previousStoredSessionId })
     })
     headless.on('notice', (notice: HermesNotice) => this.onHermesNotice(notice))
     headless.on('side-answer', (answer: HermesSideAnswer) => this.onSideAnswer(answer))
@@ -296,6 +311,7 @@ export class HermesSession extends EventEmitter implements AgentSession {
       // gone from the server, and the resume silently resets the bubble.
       // Without this line the answer just vanished (r4 F7, #1495).
       this.pendingNotice = 'Hermes restarted while it was replying, so that reply was lost. Send your message again if you still need it.'
+      this.log('turn-lost')
     })
     headless.on('request', (request: HermesRequest) => this.onRequest(request))
     headless.on('lane', (state: HermesLaneState) => this.onLane(state))
@@ -304,11 +320,24 @@ export class HermesSession extends EventEmitter implements AgentSession {
       // package resets the history as a new conversation; the line says why
       // the chat just changed under the user. Compression is seamless.
       if (move.reason === 'new-conversation') this.pendingNotice = 'Telegram started a new conversation; this pane follows it.'
+      this.log('lane-moved', { from: move.from, to: move.to, reason: move.reason })
     })
-    headless.on('hold-failed', ({ text }: { text: string }) => {
-      this.emitNotice(`Could not send your held message: ${text.length > 80 ? `${text.slice(0, 79)}…` : text}`)
+    headless.on('hold-failed', ({ holdId, text, error }: { holdId: string; text: string; error: Error }) => {
+      // The reason AND the whole text: the 80-char excerpt this used to show
+      // lost the rest of the message, and dropping `error` left nothing to
+      // diagnose the 2026-10-15 loss with but the server's log (#1527). Main
+      // cannot write into the renderer composer, so the line is where the
+      // text survives (the same convention as Cancel on the held card).
+      this.emitNotice(`Not sent (${heldFailureReason(error)}): ${text}`)
+      this.log('hold-failed', { holdId, textLength: text.length, ...errorFields(error) })
     })
-    headless.on('lane-error', (error: Error) => console.warn('[hermes] lane refresh failed:', describeError(error)))
+    headless.on('hold-released', ({ holdId, outcome }: { holdId: string; outcome: { status: string | null } }) => {
+      this.log('hold-released', { holdId, status: outcome.status })
+    })
+    headless.on('lane-error', (error: Error) => {
+      console.warn('[hermes] lane refresh failed:', describeError(error))
+      this.log('lane-error', errorFields(error))
+    })
     headless.on('request-closed', ({ id }: { id: string }) => this.onRequestClosed(id))
     headless.on('connection-operation', (operation: HermesConnectionOperation) => this.onConnectionOperation(operation))
     headless.on('connection-sync', (operation: HermesConnectionOperation | null) => this.onConnectionSync(operation))
@@ -329,8 +358,10 @@ export class HermesSession extends EventEmitter implements AgentSession {
       // real cause (#1495) and carries the stage + codes for the journal;
       // the raw error stays in main's log only.
       console.warn('[hermes] start failed:', describeError(error))
+      this.log('start-failed', errorFields(error))
       throw classifyHermesStartFailure(error)
     }
+    this.log('started', { lane: this.laneKey !== null })
     service.reportReachability(this.connectionId, true)
     this.openInput()
     if (!this.laneKey && this.freshPane && service.consumeLaneLookupFailure(this.connectionId)) {
@@ -429,7 +460,15 @@ export class HermesSession extends EventEmitter implements AgentSession {
       // A skill or quick command that became a prompt starts a turn.
       return { turnStarted: outcome.kind === 'prompt' && outcome.result.status !== 'queued' }
     }
-    const outcome = await this.headless.prompt(text)
+    let outcome: Awaited<ReturnType<HermesHeadless['prompt']>>
+    try {
+      outcome = await this.headless.prompt(text)
+    } catch (error) {
+      // The composer keeps the text (delivery contract); the log keeps why.
+      this.log('prompt-failed', { textLength: text.length, ...errorFields(error) })
+      throw error
+    }
+    if (outcome.status === 'held') this.log('held', { holdId: outcome.holdId ?? null, textLength: text.length })
     if (outcome.status === 'held') {
       this.emit('process-state', { active: true, status: 'Hermes is replying on Telegram; your message sends when it finishes.' })
       return { turnStarted: false }
@@ -569,6 +608,14 @@ export class HermesSession extends EventEmitter implements AgentSession {
     this.emit('jsonl-entry', payload, hermesTranscriptSource(this.connectionId, storedSessionId))
   }
 
+  /**
+   * One line in the Hermes client log (#1527), always naming this pane's
+   * connection and Hermes conversation so it reads next to the server log.
+   */
+  private log(event: string, details: Record<string, unknown> = {}): void {
+    hermesClientLog().write({ connectionId: this.connectionId, conversation: this.headless?.storedSessionId || this.storedSessionId, event, ...details })
+  }
+
   /** A local, non-durable line in the chat (slash output, reconnect notes). */
   private emitNotice(text: string): void {
     const stored = this.storedSessionId ?? ''
@@ -621,6 +668,7 @@ export class HermesSession extends EventEmitter implements AgentSession {
   }
 
   private onConnection(state: HermesConnectionState): void {
+    this.log(`connection-${state.kind}`, state.kind === 'ready' ? { epoch: state.epoch } : state.kind === 'disconnected' ? { code: state.code, reason: state.reason } : {})
     if (this.stopped || this.signedOut) return
     if (state.kind === 'ready') {
       // Socket up, conversation not yet attached: start() and reconnect()
@@ -665,11 +713,14 @@ export class HermesSession extends EventEmitter implements AgentSession {
     const service = getHermesConnectionService()
     this.reconnecting = true
     let retry = false
+    this.log('reconnect-attempt', { attempt: this.attempt })
     try {
       await this.headless.reconnect()
+      this.log('reconnected')
       service.reportReachability(this.connectionId, true)
       this.openInput()
     } catch (error) {
+      this.log('reconnect-failed', errorFields(error))
       // Not transient: retrying a dead sign-in or a removed connection would
       // spin forever. The pane says what to do instead.
       if (error instanceof HermesSignedOutError) this.detach('signed-out')
