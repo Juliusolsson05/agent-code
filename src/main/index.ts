@@ -154,6 +154,7 @@ import { createFileVaultStore } from '@main/keyVault/vaultStore.js'
 import { createSafeStorageCodec } from '@main/keyVault/safeStorageCodec.js'
 import { UserMcpService } from '@main/userMcp/service.js'
 import { HermesConnectionService } from '@main/hermes/service.js'
+import { HermesAgentBridge } from '@main/hermes/agentBridge.js'
 import { setHermesConnectionService } from '@main/hermes/registry.js'
 import { partitionClosedWindowSessions, SidekickService } from '@main/sidekicks/SidekickService.js'
 import { SIDEKICK_CHANNELS } from '@shared/sidekicks/types.js'
@@ -1348,6 +1349,17 @@ async function startApp(): Promise<void> {
     // unpinned lambda here where a `{ force: true }` could slip in (#1451
     // review c).
     readUsageSnapshot: readUsageSnapshotForTools,
+    // #1512: the `hermes` domain. One bridge for the app, over the same
+    // connection service the panes dial through, so an agent's message uses
+    // the owner's stored sign-in and never sees a token.
+    hermesAgentBridge: new HermesAgentBridge({ connections: hermesConnections, stateDir: STATE_DIR }),
+    // The agent's Goal names its own Hermes conversation; main holds no pane
+    // titles (renderer state), and the Goal is what the owner reads to know
+    // what an agent is for.
+    sessionTitle: async scope => {
+      const identity = scope.tldrIdentity ?? scope.sessionId
+      return (await goalStore.read([identity]))[identity]?.text ?? null
+    },
     tldrStore,
     goalStore,
     tldrEnforcement,

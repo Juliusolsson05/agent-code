@@ -339,6 +339,22 @@ export class HermesConnectionService extends EventEmitter {
     }
   }
 
+  /**
+   * The Telegram DM thread's routing key, with NO side effects: unlike
+   * defaultLaneKey it neither sets nor clears the "lookup failed" flag the
+   * next pane spawn consumes. For callers that are not a pane spawn (the
+   * `hermes` MCP bridge, #1512 review A F8): an agent's lookup must not make
+   * an unrelated pane opened a minute later claim its own lookup failed, nor
+   * erase a real failure before that pane reads it.
+   */
+  async lookupLaneKey(id: string): Promise<string | null> {
+    try {
+      return (await HermesHeadless.defaultLane(this.restFor(id)))?.sessionKey ?? null
+    } catch {
+      return null
+    }
+  }
+
   /** True once, for the pane spawned right after a failed thread lookup on this connection. */
   consumeLaneLookupFailure(id: string): boolean {
     const at = this.laneLookupFailedAt.get(id)
