@@ -82,6 +82,8 @@ describe('AgentCodeWorkspaceView', () => {
         <Block block={external} role="assistant" />
       </ProviderContext.Provider>,
     )
+    // The external server's tool stays a plain MCP call naming its server
+    // (#1519 one-line row), never the Agent Code card.
     expect(screen.getByText('MCP · external')).toBeInTheDocument()
     expect(screen.queryByText('Agent Code MCP')).not.toBeInTheDocument()
   })
