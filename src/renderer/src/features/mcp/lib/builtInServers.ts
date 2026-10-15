@@ -27,6 +27,8 @@ export const BUILT_IN_MCP_SERVERS: readonly {
   { domain: 'browser', title: 'Browser Pocket', description: 'Open, read and click the agent\'s own browser pocket (needs Browser Pocket on in Experimental).' },
   // #1339: read-only quota, the same numbers as the Usage screen.
   { domain: 'usage', title: 'Usage', description: 'Let the agent read provider quota (the Usage screen\'s numbers) before it spawns work.' },
+  // #1512: off by default; a message makes your Hermes act on its server.
+  { domain: 'hermes', title: 'Hermes', description: 'Let the agent read your Hermes conversations and message your Hermes agent (in a conversation of its own unless told otherwise).' },
   // #1143: last because it manages the list this grid shows.
   { domain: 'mcp_servers', title: 'MCP Servers', description: 'Let the agent add, change and remove your MCP servers.' },
   // #1161: proposals only — they land switched off until the user reviews

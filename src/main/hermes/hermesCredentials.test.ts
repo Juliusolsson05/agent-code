@@ -15,7 +15,7 @@ import { HermesTokenStore } from '@main/hermes/tokenStore.js'
 import { HermesSignedOutError, HermesTokenBroker } from '@main/hermes/tokenBroker.js'
 import { runNativeSignIn, SignInCancelledError } from '@main/hermes/nativeSignIn.js'
 import { HermesConnectionService } from '@main/hermes/service.js'
-import { latestRecording } from 'hermes-headless/testing/corpus'
+import { latestRecording, recordingFor } from 'hermes-headless/testing/corpus'
 import type { HermesTokens } from 'hermes-headless'
 
 // Same test codec as the user-MCP secret tests: the `enc:` prefix makes an
@@ -521,5 +521,46 @@ describe('REST client after a connection URL edit', () => {
       ['hermes-a.example', 'Bearer token-for-A'],
       ['hermes-b.example', 'Bearer token-for-B'],
     ])
+  })
+})
+
+// "Change Telegram Thread…" (#1501). The listing is the REAL `GET
+// /api/sessions` body from the recorded T8 (v0.22.0: the plain DM plus its
+// topic 7, both named "Tester").
+describe('thread listing for the thread picker', () => {
+  const t8 = recordingFor('T8', 'v0.22.0')
+    .filter((entry) => entry.dir === 'in' && entry.kind === 'http' && /\/api\/sessions\?/.test(String(entry.frame.url)) && entry.frame.status === 200)
+    .at(-1)!.frame.body
+
+  async function serviceAnswering(answer: () => Response) {
+    const hermes = new HermesConnectionService({
+      stateDir: dir, codec, openExternal: () => undefined, openSocket: async () => ({}) as never,
+      fetchImpl: async () => answer(),
+    })
+    await hermes.initialize()
+    const connection = await hermes.add({ name: 'VPS', baseUrl: URL_A })
+    await new HermesTokenStore(join(dir, 'hermes', 'tokens'), codec).set(connection.id, URL_A, tokens())
+    return { hermes, id: connection.id }
+  }
+
+  it('lists every thread, routing keys and names but never a stored conversation id', async () => {
+    const { hermes, id } = await serviceAnswering(() => new Response(JSON.stringify(t8), { status: 200 }))
+    const listing = await hermes.listLanes(id)
+    expect(listing.ok).toBe(true)
+    const lanes = listing.ok ? listing.lanes : []
+    expect(lanes.map((lane) => [lane.sessionKey, lane.threadId])).toEqual([
+      ['agent:main:telegram:dm:111:7', '7'],
+      ['agent:main:telegram:dm:111', null],
+    ])
+    expect(lanes.every((lane) => !('headId' in lane))).toBe(true)
+  })
+
+  it('reports a failed listing as a value, and does not flag the next new pane as a failed lookup', async () => {
+    const { hermes, id } = await serviceAnswering(() => new Response('upstream down', { status: 502 }))
+    const listing = await hermes.listLanes(id)
+    expect(listing.ok).toBe(false)
+    // That flag makes the NEXT new pane say "opened as a separate chat
+    // because the thread lookup failed"; a picker failure is not that.
+    expect(hermes.consumeLaneLookupFailure(id)).toBe(false)
   })
 })

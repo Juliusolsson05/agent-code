@@ -61,6 +61,14 @@ export function registerHermesIpc(service: HermesConnectionService): void {
     if (!isId(id)) throw new Error('hermes:default-lane: invalid id')
     return service.defaultLaneKey(id)
   })
+
+  // Every thread on the server, for the "Change Telegram Thread…" picker
+  // (#1501). The listing DOES cross here (names and routing keys), because
+  // the user is choosing among them; head ids do not.
+  ipcMain.handle('hermes:list-lanes', (_evt, id: unknown) => {
+    if (!isId(id)) throw new Error('hermes:list-lanes: invalid id')
+    return service.listLanes(id)
+  })
 }
 
 function isId(value: unknown): value is string {

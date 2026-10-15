@@ -23,6 +23,8 @@ export type BuiltInMcpDomain =
   // #1339: read provider quota (the Usage screen's snapshot) without root
   // management, so orchestrating agents can pick a provider with headroom.
   | 'usage'
+  // #1512: read and message the owner's Hermes agent (runtime/hermesTools.ts).
+  | 'hermes'
 
 export const BUILT_IN_MCP_DOMAINS = [
   'tldr',
@@ -39,6 +41,7 @@ export const BUILT_IN_MCP_DOMAINS = [
   'mcp_servers',
   'skills',
   'usage',
+  'hermes',
 ] as const satisfies readonly BuiltInMcpDomain[]
 
 /**
@@ -88,6 +91,11 @@ export const CONFIGURABLE_BUILT_IN_MCP_DOMAINS = [
   // gated and not parent-held-only. Off by default all the same: an agent
   // gets it only when the user (or an orchestrating parent) asks.
   'usage',
+  // #1512: configurable, not confirmation-gated: its blast radius is a
+  // conversation with the owner's own Hermes agent, visible in Hermes like
+  // any other. Off by default (not in the shipped default set) because a send
+  // makes that agent act on the owner's server and accounts.
+  'hermes',
 ] as const satisfies readonly BuiltInMcpDomain[]
 
 export type ConfigurableBuiltInMcpDomain =
@@ -200,6 +208,9 @@ export const PARENT_HELD_ONLY_BUILT_IN_MCP_DOMAINS: ReadonlySet<BuiltInMcpDomain
   // numbers back through orchestration_read_agent. A parent may pass usage on
   // only when it holds usage itself.
   'usage',
+  // #1512: messaging the owner's Hermes makes it act with their accounts. A
+  // parent with only Orchestration must not mint that for a child.
+  'hermes',
 ])
 
 /**
@@ -237,6 +248,7 @@ const BUILT_IN_MCP_DOMAINS_BY_PROVIDER = {
     'mcp_servers',
     'skills',
     'usage',
+    'hermes',
   ],
   codex: [...BUILT_IN_MCP_DOMAINS],
   opencode: [...BUILT_IN_MCP_DOMAINS],

@@ -1,0 +1,218 @@
+{
+ "provenance": "Recorded: the owner's own Claude Code transcripts (~/.claude/projects, 2026-09/10). tool_use and tool_result blocks unmodified, wrapped in a minimal assistant/user line for the mapper, EXCEPT the samples marked mutated:true: the Monitor result is cut after their first clause (mechanical mutation) because the rest is Claude Code harness instruction text, which this public repo does not carry. Read in full before committing: no credentials, no private messages. The 'ack-paths' SendUserFile sample is the newer result form that lists each delivered path (108 of 199 SendUserFile results in the owner's corpus, 2026-10-15).",
+ "samples": [
+  {
+   "kind": "ack",
+   "tool": "TaskStop",
+   "mutated": false,
+   "lines": [
+    {
+     "type": "assistant",
+     "uuid": "a-2",
+     "timestamp": "2026-10-15T00:00:00.000Z",
+     "message": {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "tool_use",
+        "id": "toolu_01AJku4JnrAjjpBLTE2dsx5F",
+        "name": "TaskStop",
+        "input": {
+         "task_id": "byk8lrbq9"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "uuid": "u-2",
+     "timestamp": "2026-10-15T00:00:00.000Z",
+     "message": {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01AJku4JnrAjjpBLTE2dsx5F",
+        "content": "{\"message\":\"Successfully stopped task: byk8lrbq9 (ROOM=none npm run dev)\",\"task_id\":\"byk8lrbq9\",\"task_type\":\"local_bash\",\"command\":\"ROOM=none npm run dev\"}"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "kind": "error",
+   "tool": "TaskStop",
+   "mutated": false,
+   "lines": [
+    {
+     "type": "assistant",
+     "uuid": "a-3",
+     "timestamp": "2026-10-15T00:00:00.000Z",
+     "message": {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "tool_use",
+        "id": "toolu_01W5mjrDeUd7HDzrbxa9HCd7",
+        "name": "TaskStop",
+        "input": {
+         "task_id": "aa98c802363cb1b87"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "uuid": "u-3",
+     "timestamp": "2026-10-15T00:00:00.000Z",
+     "message": {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01W5mjrDeUd7HDzrbxa9HCd7",
+        "content": "<tool_use_error>Task aa98c802363cb1b87 is not running (status: completed)</tool_use_error>",
+        "is_error": true
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "kind": "ack",
+   "tool": "SendUserFile",
+   "mutated": false,
+   "lines": [
+    {
+     "type": "assistant",
+     "uuid": "a-4",
+     "timestamp": "2026-10-15T00:00:00.000Z",
+     "message": {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "tool_use",
+        "id": "toolu_01R5JaGoZ2AHawinrgMgA71C",
+        "name": "SendUserFile",
+        "input": {
+         "files": [
+          "/private/tmp/claude-501/-Users-juliusolsson-Desktop-Development-agent-code/a5fb379b-24c3-417c-acfb-25e1c70be4d4/scratchpad/open-issues-2026-09-27.md"
+         ],
+         "caption": "All 113 open issues, sorted by severity",
+         "status": "normal",
+         "display": "render"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "uuid": "u-4",
+     "timestamp": "2026-10-15T00:00:00.000Z",
+     "message": {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01R5JaGoZ2AHawinrgMgA71C",
+        "content": "1 file delivered to user."
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "kind": "ack",
+   "tool": "Monitor",
+   "mutated": true,
+   "lines": [
+    {
+     "type": "assistant",
+     "uuid": "a-5",
+     "timestamp": "2026-10-15T00:00:00.000Z",
+     "message": {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "tool_use",
+        "id": "toolu_017Rg4MtVQqv4h6qhar3kRx2",
+        "name": "Monitor",
+        "input": {
+         "description": "host PR #1480 CI checks + sg-b report",
+         "timeout_ms": 1800000,
+         "command": "bash -c 'prev=\"\"; sg=0; while true; do s=$(gh pr checks 1480 --repo Juliusolsson05/agent-code --json name,bucket 2>/dev/null || echo \"[]\"); cur=$(echo \"$s\" | jq -r \".[] | select(.bucket!=\\\"pending\\\") | \\\"\\(.name): \\(.bucket)\\\"\" | sort); comm -13 <(echo \"$prev\") <(echo \"$cur\"); prev=$cur; if [ $sg = 0 ] && [ -e /Users/juliusolsson/Desktop/Development/agent-code/.worktrees/extension-agent-status/tmp/review/report-sg-b.md ]; then echo \"sg-b report landed\"; sg=1; fi; n=$(echo \"$s\" | jq \"length\"); if [ \"$n\" -gt 0 ] && echo \"$s\" | jq -e \"all(.bucket!=\\\"pending\\\")\" >/dev/null; then echo \"host CI complete\"; [ $sg = 1 ] && break; fi; sleep 30; done'"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "uuid": "u-5",
+     "timestamp": "2026-10-15T00:00:00.000Z",
+     "message": {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_017Rg4MtVQqv4h6qhar3kRx2",
+        "content": "Monitor started (task bwpyrp399, expires in 30m unless the source ends first)."
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "kind": "ack-paths",
+   "tool": "SendUserFile",
+   "mutated": false,
+   "lines": [
+    {
+     "type": "assistant",
+     "uuid": "a-7",
+     "timestamp": "2026-10-15T00:00:00.000Z",
+     "message": {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "tool_use",
+        "id": "toolu_01P5WniW5Y6USR2PYGupnGm1",
+        "name": "SendUserFile",
+        "input": {
+         "files": [
+          "/var/folders/tv/yfsy4sfx1qnbs39hbtzgl0xc0000gn/T/claude-chrome-screenshots-xwVbFU/screenshot-1788030467769-0.jpg"
+         ],
+         "caption": "Quest Hero running at localhost:5173 \u2014 you can make out Bran (the capsule) and the buildings behind the title overlay. Lighting needs a pass, it's too dark.",
+         "status": "normal",
+         "display": "render"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "uuid": "u-7",
+     "timestamp": "2026-10-15T00:00:00.000Z",
+     "message": {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01P5WniW5Y6USR2PYGupnGm1",
+        "content": "1 file delivered to user.\n  /var/folders/tv/yfsy4sfx1qnbs39hbtzgl0xc0000gn/T/claude-chrome-screenshots-xwVbFU/screenshot-1788030467769-0.jpg \u2192 file_uuid: f88b7712-43b8-4c4e-a761-c53672c5f724"
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

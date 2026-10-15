@@ -161,6 +161,8 @@ export type UiShellSlice = UiShellState & {
   setExtensionFailures: (failures: ExtensionFailure[]) => void
   openAgentViewModePicker: (sessionId: SessionId) => void
   closeAgentViewModePicker: () => void
+  openHermesThreadPicker: (sessionId: SessionId) => void
+  closeHermesThreadPicker: () => void
   openColorFlagPicker: (sessionId: SessionId) => void
   closeColorFlagPicker: () => void
 }

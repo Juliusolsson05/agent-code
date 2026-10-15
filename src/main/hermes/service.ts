@@ -36,6 +36,7 @@ import {
   type HermesConnectionDraft,
   type HermesConnectionInfo,
   type HermesConnectionState,
+  type HermesLaneListing,
   type HermesTestResult,
 } from '@shared/hermes/types.js'
 
@@ -335,6 +336,47 @@ export class HermesConnectionService extends EventEmitter {
       // (consumeLaneLookupFailure); silently opening a desktop-only chat
       // when the owner expects the thread was a review finding (#1503).
       this.laneLookupFailedAt.set(id, Date.now())
+      return null
+    }
+  }
+
+  /**
+   * Every messaging thread on the server, for "Change Telegram Thread…"
+   * (#1501). Unlike `defaultLaneKey`, this one DOES hand display names and
+   * routing keys to the renderer: choosing a thread is impossible without
+   * seeing them, and the user asked for exactly this list. Head ids stay
+   * here (HermesLaneChoice says why).
+   *
+   * Never throws, and does NOT touch `laneLookupFailedAt`: that flag is the
+   * "your new pane opened as a separate chat because the lookup failed"
+   * notice, and a failed listing in the picker is reported in the picker.
+   */
+  async listLanes(id: string): Promise<HermesLaneListing> {
+    try {
+      const lanes = await HermesHeadless.listLanes(this.restFor(id))
+      return {
+        ok: true,
+        lanes: lanes.map(({ sessionKey, platform, chatType, threadId, displayName, lastActiveAt }) => ({
+          sessionKey, platform, chatType, threadId, displayName, lastActiveAt,
+        })),
+      }
+    } catch (error) {
+      return { ok: false, error: describeError(error, this.connections.find((entry) => entry.id === id)?.baseUrl) }
+    }
+  }
+
+  /**
+   * The Telegram DM thread's routing key, with NO side effects: unlike
+   * defaultLaneKey it neither sets nor clears the "lookup failed" flag the
+   * next pane spawn consumes. For callers that are not a pane spawn (the
+   * `hermes` MCP bridge, #1512 review A F8): an agent's lookup must not make
+   * an unrelated pane opened a minute later claim its own lookup failed, nor
+   * erase a real failure before that pane reads it.
+   */
+  async lookupLaneKey(id: string): Promise<string | null> {
+    try {
+      return (await HermesHeadless.defaultLane(this.restFor(id)))?.sessionKey ?? null
+    } catch {
       return null
     }
   }

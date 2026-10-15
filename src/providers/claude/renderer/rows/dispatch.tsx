@@ -1,3 +1,6 @@
+import { fromMcpCall } from '@providers/shared/renderer/protocols/mcp-call/model'
+import { fromClaudeHousekeepingLine, isClaudeHousekeepingTool } from '@providers/claude/renderer/adapters/housekeepingLine'
+import { McpCallRow } from '@providers/shared/renderer/protocols/mcp-call/McpCallRow'
 import type { ReactNode } from 'react'
 
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
@@ -281,10 +284,26 @@ function renderClaudeToolUse(
         : adapted
       return model ? <WriteRow model={model} /> : undefined
     }
-    default:
-      return undefined
+    default: {
+      // Any other MCP tool (#1519): one line instead of name + chip +
+      // "1 param" + "ok: true". After the switch so a provider-specific MCP
+      // card (orchestration, workspace, workflow, tasks above) always wins.
+      // An Agent Code tool whose OWN card declined (drifted input) keeps the
+      // visible generic fallback those adapters promise (review A2).
+      if (OWNED_AGENT_CODE_TOOL.test(block.name)) return undefined
+      // Claude Code's own housekeeping tools (Monitor, SendUserFile, TaskStop;
+      // #1522) speak the same one-line language; their names never start
+      // with mcp__, so the two never compete.
+      const housekeeping = fromClaudeHousekeepingLine(block, context.result ?? null, { live: context.live })
+      if (housekeeping) return <McpCallRow model={housekeeping} block={block} />
+      const mcp = fromMcpCall(block, context.result ?? null, { live: context.live })
+      return mcp ? <McpCallRow model={mcp} block={block} /> : undefined
+    }
   }
 }
+
+/** Agent Code MCP tools that have their own cards; the MCP line never claims them. */
+const OWNED_AGENT_CODE_TOOL = /^mcp__agent_code__(orchestration_|ai_workspace_|workflow_)/
 
 function firstResultLine(result: ToolResultBlock | null | undefined): string | undefined {
   if (!result) return undefined
@@ -406,6 +425,19 @@ function renderClaudeToolResult(
   if (source?.name === 'WebSearch') {
     const model = fromClaudeWebSearchResult(block, source)
     return model ? <ClaudeWebSearchResultRow model={model} /> : undefined
+  }
+  if (source && isClaudeHousekeepingTool(source.name)) {
+    // Same rule as the MCP line: absorbed only when the line recognised the
+    // acknowledgement (or the error) and its disclosure holds the full text.
+    return fromClaudeHousekeepingLine(source, block)?.absorbsResult ? null : undefined
+  }
+  if (source && !OWNED_AGENT_CODE_TOOL.test(source.name)) {
+    // Absorbed only when the MCP line fully carries the result: an
+    // acknowledgement, or an error/refusal whose full text the line's
+    // disclosure holds (model.ts absorbsResult). A read's payload, a
+    // third-party reply or an image keeps the shared result row.
+    const mcp = fromMcpCall(source, block)
+    if (mcp?.absorbsResult) return null
   }
   return undefined
 }
