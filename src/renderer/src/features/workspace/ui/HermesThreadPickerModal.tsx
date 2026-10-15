@@ -13,6 +13,7 @@ import { useListNavigation } from '@renderer/lib/useListNavigation'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId } from '@renderer/workspace/types'
 import type { HermesLaneListing } from '@shared/hermes/types'
+import { SESSION_START_FAILED_MESSAGE } from '@shared/types/session'
 
 import { hermesThreadChoices, type HermesThreadChoice } from './hermesThreadChoices'
 
@@ -58,11 +59,18 @@ export function HermesThreadPickerModal({ open, sessionId, workspace, onClose }:
     return () => { live = false }
   }, [open, connectionId, sessionId])
 
+  // The pane went away under the open picker (closed, reloaded from another
+  // command, close_run): nothing here can act any more, so close instead of
+  // leaving a disabled list on screen (review of #1521, L2).
+  useEffect(() => {
+    if (open && sessionId && !meta) onClose()
+  }, [open, sessionId, meta, onClose])
+
   // While loading (or after a failure) "Separate chat" is still offered: it
   // needs nothing from the server, and a user leaving a thread because the
   // server's listing is broken should not be stuck on it.
   const choices = useMemo<HermesThreadChoice[]>(
-    () => hermesThreadChoices(listing?.ok ? listing.lanes : [], currentLaneKey),
+    () => hermesThreadChoices(listing?.ok ? listing.lanes : [], currentLaneKey, listing?.ok === true),
     [listing, currentLaneKey],
   )
 
@@ -77,14 +85,27 @@ export function HermesThreadPickerModal({ open, sessionId, workspace, onClose }:
     // replaced, and a picker still open over it could fire a second swap
     // against a session that no longer exists.
     onClose()
-    void workspace.replaceSession(meta.cwd, {
-      targetSessionId: sessionId,
-      hermesLaneKey: choice.laneKey,
-      // A different thread is a different conversation: orchestration
-      // parentage and the bootstrap flag must not carry (replaceSession's
-      // newConversation note). Position and MCP choices still do.
-      newConversation: true,
-    })
+    void (async () => {
+      // WHY every outcome is reported on the pane (review of #1521, same
+      // rule as the Conversations picker, #1241): the picker is already
+      // closed, so a failed swap (the server unreachable, a refused commit)
+      // was an unhandled rejection or silence, and the pane just stayed on
+      // the old thread. A fixed sentence, never the rejection's text: the
+      // spawn error can carry environment values or URLs.
+      try {
+        const replaced = await workspace.replaceSession(meta.cwd, {
+          targetSessionId: sessionId,
+          hermesLaneKey: choice.laneKey,
+          // A different thread is a different conversation: orchestration
+          // parentage and the bootstrap flag must not carry (replaceSession's
+          // newConversation note). Position and MCP choices still do.
+          newConversation: true,
+        })
+        if (!replaced) workspace.showPaneToast(sessionId, `Could not switch this pane to ${choice.label}.`)
+      } catch {
+        workspace.showPaneToast(sessionId, `Could not switch this pane to ${choice.label}: ${SESSION_START_FAILED_MESSAGE}`)
+      }
+    })()
   }
 
   const nav = useListNavigation({

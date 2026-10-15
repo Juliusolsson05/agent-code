@@ -47,3 +47,10 @@ describe('Hermes thread picker rows', () => {
     ])
   })
 })
+
+describe('Hermes thread picker rows before the listing arrives', () => {
+  it('does not claim the followed thread is gone from the server while the list is loading or failed', () => {
+    const rows = hermesThreadChoices([], DM, false)
+    expect(rows.find((row) => row.laneKey === DM)).toMatchObject({ current: true, description: 'The thread this pane follows now.' })
+  })
+})

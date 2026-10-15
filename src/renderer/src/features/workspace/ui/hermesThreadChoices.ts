@@ -22,6 +22,12 @@ export type HermesThreadChoice = {
 export function hermesThreadChoices(
   lanes: readonly HermesLaneChoice[],
   currentLaneKey: string | null,
+  /**
+   * False while the listing loads or after it failed. Then an empty `lanes`
+   * says nothing about the server, and the current-thread row must not claim
+   * the thread is gone from it (review of #1521, L1).
+   */
+  listed = true,
   now: number = Date.now(),
 ): HermesThreadChoice[] {
   const rows: HermesThreadChoice[] = [
@@ -50,7 +56,7 @@ export function hermesThreadChoices(
     rows.splice(1, 0, {
       laneKey: currentLaneKey,
       label: 'Current thread',
-      description: 'Not in the server’s recent threads.',
+      description: listed ? 'Not in the server’s recent threads.' : 'The thread this pane follows now.',
       current: true,
     })
   }
