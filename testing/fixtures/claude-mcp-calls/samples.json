@@ -1,0 +1,269 @@
+{
+ "provenance": "Recorded: the owner's own Claude Code transcripts (~/.claude/projects, 2026-09/10). The tool_use and tool_result blocks are unmodified; each pair is wrapped in a minimal assistant/user transcript line for the mapper. browser_status's id was re-keyed (the block bytes are unchanged). Read in full before committing: no credentials, no private messages, no provider instruction text.",
+ "samples": [
+  {
+   "kind": "error",
+   "tool": "mcp__agent_code__goal_set",
+   "lines": [
+    {
+     "type": "assistant",
+     "uuid": "a-0",
+     "timestamp": "2026-10-14T10:00:00.000Z",
+     "message": {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "tool_use",
+        "id": "toolu_01T6Hne8qsmKVNdeuwEEFTKG",
+        "name": "mcp__agent_code__goal_set",
+        "input": {
+         "goal": "Independently review the host side of the extension agent-status feature (PR #1480) for correctness, nudge delivery, performance and privacy, and write a report."
+        },
+        "caller": {
+         "type": "direct"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "uuid": "u-0",
+     "timestamp": "2026-10-14T10:00:00.000Z",
+     "message": {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "content": "MCP error -32602: Input validation error: Invalid arguments for tool goal_set: Invalid input: expected string, received undefined at text",
+        "is_error": true,
+        "tool_use_id": "toolu_01T6Hne8qsmKVNdeuwEEFTKG"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "kind": "ack",
+   "tool": "mcp__agent_code__browser_open",
+   "lines": [
+    {
+     "type": "assistant",
+     "uuid": "a-1",
+     "timestamp": "2026-10-14T10:00:01.000Z",
+     "message": {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "tool_use",
+        "id": "toolu_01EFxu3DeP5d5EgJbr8mQwQw",
+        "name": "mcp__agent_code__browser_open",
+        "input": {
+         "url": "http://localhost:5199/?fixture=showcase&modes=dark-nord,dark,light&width=440"
+        },
+        "caller": {
+         "type": "direct"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "uuid": "u-1",
+     "timestamp": "2026-10-14T10:00:01.000Z",
+     "message": {
+      "role": "user",
+      "content": [
+       {
+        "tool_use_id": "toolu_01EFxu3DeP5d5EgJbr8mQwQw",
+        "type": "tool_result",
+        "content": [
+         {
+          "type": "text",
+          "text": "{\"ok\":true,\"state\":\"opened\",\"url\":\"http://localhost:5199/?fixture=showcase&modes=dark-nord,dark,light&width=440\"}"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "kind": "error",
+   "tool": "mcp__agent_code__browser_navigate",
+   "lines": [
+    {
+     "type": "assistant",
+     "uuid": "a-2",
+     "timestamp": "2026-10-14T10:00:02.000Z",
+     "message": {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "tool_use",
+        "id": "toolu_01UFAm4ncR4yyFjZjgUWv3uf",
+        "name": "mcp__agent_code__browser_navigate",
+        "input": {
+         "action": "reload"
+        },
+        "caller": {
+         "type": "direct"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "uuid": "u-2",
+     "timestamp": "2026-10-14T10:00:02.000Z",
+     "message": {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "content": "{\"ok\":false,\"code\":\"failed\",\"message\":\"page.reload: net::ERR_ABORTED; maybe frame was detached?\\nCall log:\\n\\u001b[2m  - waiting for navigation until \\\"domcontentloaded\\\"\\u001b[22m\\n\"}",
+        "is_error": true,
+        "tool_use_id": "toolu_01UFAm4ncR4yyFjZjgUWv3uf"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "kind": "ack",
+   "tool": "mcp__agent_code__goal_set",
+   "lines": [
+    {
+     "type": "assistant",
+     "uuid": "a-3",
+     "timestamp": "2026-10-14T10:00:03.000Z",
+     "message": {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "tool_use",
+        "id": "toolu_01Fu7m5jpS6Xsu8WoF17Ns3w",
+        "name": "mcp__agent_code__goal_set",
+        "input": {
+         "text": "Build an accurate picture of what Agent Code is, why it exists, how it's put together, and which repo conventions are easy to get wrong, before any changes are made."
+        },
+        "caller": {
+         "type": "direct"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "uuid": "u-3",
+     "timestamp": "2026-10-14T10:00:03.000Z",
+     "message": {
+      "role": "user",
+      "content": [
+       {
+        "tool_use_id": "toolu_01Fu7m5jpS6Xsu8WoF17Ns3w",
+        "type": "tool_result",
+        "content": [
+         {
+          "type": "text",
+          "text": "{\"ok\":true,\"text\":\"Build an accurate picture of what Agent Code is, why it exists, how it's put together, and which repo conventions are easy to get wrong, before any changes are made.\",\"updatedAt\":\"2026-09-25T01:15:43.432Z\",\"revision\":1}"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "kind": "ack",
+   "tool": "mcp__agent_code__tldr_update",
+   "lines": [
+    {
+     "type": "assistant",
+     "uuid": "a-4",
+     "timestamp": "2026-10-14T10:00:04.000Z",
+     "message": {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "tool_use",
+        "id": "toolu_01UE9TNXmc6j9vheZGAr6b5Y",
+        "name": "mcp__agent_code__tldr_update",
+        "input": {
+         "text": "Read the README, agent instructions, architecture overview and repo layout, and summarized what Agent Code is and which conventions are easy to get wrong; nothing changed. Waiting for the user to name the actual task. Local main is 47 commits behind origin/main."
+        },
+        "caller": {
+         "type": "direct"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "uuid": "u-4",
+     "timestamp": "2026-10-14T10:00:04.000Z",
+     "message": {
+      "role": "user",
+      "content": [
+       {
+        "tool_use_id": "toolu_01UE9TNXmc6j9vheZGAr6b5Y",
+        "type": "tool_result",
+        "content": [
+         {
+          "type": "text",
+          "text": "{\"ok\":true,\"text\":\"Read the README, agent instructions, architecture overview and repo layout, and summarized what Agent Code is and which conventions are easy to get wrong; nothing changed. Waiting for the user to name the actual task. Local main is 47 commits behind origin/main.\",\"updatedAt\":\"2026-09-25T01:16:28.844Z\",\"revision\":1}"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "kind": "refusal",
+   "tool": "mcp__agent_code__browser_status",
+   "lines": [
+    {
+     "type": "assistant",
+     "uuid": "a-5",
+     "timestamp": "2026-10-14T10:00:05.000Z",
+     "message": {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "tool_use",
+        "id": "toolu_status_recorded",
+        "name": "mcp__agent_code__browser_status",
+        "input": {}
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "uuid": "u-5",
+     "timestamp": "2026-10-14T10:00:05.000Z",
+     "message": {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_status_recorded",
+        "content": "{\"ok\":false,\"code\":\"disabled\",\"message\":\"Browser Pocket is turned off (Settings → Experimental). Ask the user to enable it.\"}"
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

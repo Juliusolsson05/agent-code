@@ -5,6 +5,7 @@ import type { Unsub } from '@preload/api/types.js'
 import type {
   HermesConnectionDraft,
   HermesConnectionInfo,
+  HermesLaneListing,
   HermesTestResult,
 } from '@shared/hermes/types.js'
 
@@ -22,6 +23,8 @@ export const hermesApi = {
   hermesCancelSignIn: (id: string): Promise<void> => ipcRenderer.invoke('hermes:cancel-sign-in', id),
   /** The gateway routing key of the connection's Telegram DM thread, or null (#1496). */
   hermesDefaultLane: (id: string): Promise<string | null> => ipcRenderer.invoke('hermes:default-lane', id),
+  /** Every messaging thread on the connection's server, for "Change Telegram Thread…" (#1501). */
+  hermesListLanes: (id: string): Promise<HermesLaneListing> => ipcRenderer.invoke('hermes:list-lanes', id),
   hermesSignOut: (id: string): Promise<void> => ipcRenderer.invoke('hermes:sign-out', id),
   onHermesConnectionsChanged: (cb: (connections: HermesConnectionInfo[]) => void): Unsub =>
     subscribe('hermes:connections-changed', cb),

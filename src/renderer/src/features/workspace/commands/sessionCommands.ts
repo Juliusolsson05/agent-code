@@ -727,6 +727,27 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
+    id: 'hermes-change-thread',
+    category: 'session',
+    surface: 'session',
+    title: 'Change Telegram Thread…',
+    description: '**What it does:** Chooses which messaging thread this Hermes pane follows: your direct chat with the bot, a DM topic, a group, or a separate chat only Agent Code shows.\n\n**Use when:** The pane opened on the wrong thread, or you want a desktop-only conversation.\n\n**Notes:** The pane reopens on the chosen thread and keeps it across Reload Agent.',
+    keywords: ['hermes', 'telegram', 'thread', 'topic', 'group', 'lane', 'chat', 'separate', 'change thread'],
+    // Only a Hermes pane with a connection has threads to choose; a pane
+    // still waiting for its connection has no server to list them from.
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      const meta = sessionId ? workspace.state.sessions[sessionId] : null
+      return meta?.kind === 'hermes' && Boolean(meta.remoteConnectionId)
+    },
+    run: ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      ui.closePalette()
+      ui.openHermesThreadPicker(sessionId)
+    },
+  },
+  {
     id: 'copy-resume-command',
     category: 'session',
     // Default tier since the public-release audit (#973): un-hidden by hand

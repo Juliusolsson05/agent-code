@@ -563,6 +563,17 @@ function mapCodexRolloutToFeedEntriesUnstamped(entry: Record<string, unknown>): 
     ) {
       return []
     }
+    // The length of each original text part, when the output was a text-only
+    // array that codexOutputText joined with '\n' (#1510). The content stays
+    // the byte-identical joined string every consumer reads; this lets a
+    // reader that needs the part BOUNDARIES (an `exec` script prints one part
+    // per text() call) recover them exactly instead of guessing from lines,
+    // which split a JSONL dump into thousands of "results" and merged two
+    // pretty-printed ones (review of #1518). Lengths, not copies: no output
+    // is held twice.
+    const partLengths = Array.isArray(payload.output) && payload.output.length > 1 && normalized === structured
+      ? textPartLengths(payload.output)
+      : null
     return [
       codexToolResultEntry(
         uuid,
@@ -570,7 +581,7 @@ function mapCodexRolloutToFeedEntriesUnstamped(entry: Record<string, unknown>): 
         payload.call_id,
         normalized,
         exitCode !== 0,
-        { kind: 'custom_tool_call_output' },
+        { kind: 'custom_tool_call_output', ...(partLengths ? { partLengths } : {}) },
       ),
     ]
   }
@@ -706,4 +717,15 @@ function mapCodexRolloutToFeedEntriesUnstamped(entry: Record<string, unknown>): 
  *  older-history loader and the dedupe path cannot disagree. */
 export function codexHistoryMarker(entry: Record<string, unknown>): string {
   return codexRolloutIdentity(entry)
+}
+
+/** Each part's length when every part is text (a string or `{text}`); else null. */
+function textPartLengths(parts: unknown[]): number[] | null {
+  const lengths: number[] = []
+  for (const part of parts) {
+    if (typeof part === 'string') lengths.push(part.length)
+    else if (part && typeof part === 'object' && typeof (part as { text?: unknown }).text === 'string') lengths.push((part as { text: string }).text.length)
+    else return null
+  }
+  return lengths
 }

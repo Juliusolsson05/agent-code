@@ -272,6 +272,7 @@ function OpenCommandPalette({
   const openProviderSwitchPicker = useAppStore(state => state.openProviderSwitchPicker)
   const openRewindPrompt = useAppStore(state => state.openRewindPrompt)
   const openAgentViewModePicker = useAppStore(state => state.openAgentViewModePicker)
+  const openHermesThreadPicker = useAppStore(state => state.openHermesThreadPicker)
   const openColorFlagPicker = useAppStore(state => state.openColorFlagPicker)
   const openAgentTitlePrompt = useAppStore(state => state.openAgentTitlePrompt)
   const openRootManagementPrompt = useAppStore(state => state.openRootManagementPrompt)
@@ -544,6 +545,7 @@ function OpenCommandPalette({
         openProviderSwitchPicker,
         openRewindPrompt,
         openAgentViewModePicker,
+        openHermesThreadPicker,
         openColorFlagPicker,
         openAgentTitlePrompt,
         openRootManagementPrompt,
@@ -670,6 +672,7 @@ function OpenCommandPalette({
       openProviderSwitchPicker,
       openRewindPrompt,
       openAgentViewModePicker,
+      openHermesThreadPicker,
       openAgentTitlePrompt,
       openRootManagementPrompt,
       closeUsageModal,

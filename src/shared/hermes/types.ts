@@ -46,6 +46,30 @@ export type HermesTestResult =
   | { ok: false; error: string }
 
 /**
+ * One messaging thread a Hermes pane can follow ("Change Telegram Thread…",
+ * #1501). hermes-headless' LaneSummary minus `headId`: the renderer chooses a
+ * THREAD, never a stored conversation id. The lane pins the routing key and
+ * re-resolves the id itself (lane/lanes.ts), so handing out a head id would
+ * only invite a caller to pin a row that a Telegram /new is about to end.
+ */
+export type HermesLaneChoice = {
+  /** The gateway routing key, `agent:main:telegram:dm:<chat>[:<thread>]`. */
+  sessionKey: string
+  platform: string
+  chatType: string | null
+  /** A DM topic / forum thread: its own lane, separate from the plain chat. */
+  threadId: string | null
+  displayName: string | null
+  /** Seconds, server clock. */
+  lastActiveAt: number | null
+}
+
+/** A failed listing is a VALUE, so the picker can say why instead of an IPC rejection's "Error invoking remote method". */
+export type HermesLaneListing =
+  | { ok: true; lanes: HermesLaneChoice[] }
+  | { ok: false; error: string }
+
+/**
  * Validate a draft before it reaches main's store. Pure so both the Settings
  * form (live validation) and main (authoritative) run the same rule.
  */
