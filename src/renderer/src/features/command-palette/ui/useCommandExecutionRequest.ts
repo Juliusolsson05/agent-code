@@ -1,6 +1,7 @@
 import { useLayoutEffect } from 'react'
 import { useAppStore } from '@renderer/app-state/store'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
+import { sidekickCommandTarget } from '@renderer/workspace/sidekickPanel'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { commandExecutionRequests, type CommandExecutionRequest } from '../commandExecutionRequests'
 import { commandOwnsOpenSurface } from '../surfaceOwnership'
@@ -25,6 +26,17 @@ export function useCommandExecutionRequest(
     // Recheck at actual dispatch, after lazy mounting and window focus changes.
     // The observation the caller used may have been true before React loaded
     // this context but false now; never reinterpret it as the new active agent.
+    // While the keyboard is in the Sidekick, every agent command resolves to the
+    // sidekick (commandTargetSessionIdForState). External control never
+    // addresses a sidekick — they are filtered out of everything it observes —
+    // so running a command now would act on an agent the caller cannot see.
+    // Refuse with a reason instead (#1493 follow-up).
+    {
+      const store = useAppStore.getState()
+      if (sidekickCommandTarget(context.workspace.state, store).owns) {
+        unavailable('The keyboard is in the Sidekick, which external control does not address; observe again'); return
+      }
+    }
     if (request.expectedSessionId && commandTargetSessionId(context.workspace) !== request.expectedSessionId) {
       unavailable('The selected agent changed before dispatch; observe again'); return
     }

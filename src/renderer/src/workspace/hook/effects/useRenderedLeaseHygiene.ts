@@ -56,7 +56,15 @@ export function useRenderedLeaseHygiene(workspace: Workspace): void {
     // Sidekick's composer and copied a hidden message (#1513 review). Only the
     // LANES are hidden there, so a sidekick row's own picker is left alone —
     // the Sidekick is what the user is looking at.
-    const sidekickOnly = sidekickSpotlight && !workspace.readerMode && !workspace.spotlight && !settingsPageOpen
+    //
+    // And the Sidekick column is on screen under EVERY one of these except
+    // Settings: lane Spotlight and Reader cover the lanes, not it. Now that
+    // Copy Assistant / Copy Code Block act on a sidekick when the keyboard is
+    // there (lane parity), cancelling a sidekick's picker because a lane
+    // Spotlight happens to be open killed the feature in the one column the
+    // user is using. Sidekick rows keep their pickers unless Settings (or a
+    // closed panel) hides the Sidekick too.
+    const sidekickVisible = workspace.state.sidekickPanel?.open === true && !settingsPageOpen
     if (!workspace.readerMode && !workspace.spotlight && !settingsPageOpen && !sidekickSpotlight) return
     // WHY reader/spotlight/settings clear picker leases:
     // these surfaces hide or replace the feed interaction layer while global
@@ -66,7 +74,7 @@ export function useRenderedLeaseHygiene(workspace: Workspace): void {
     // Draft-driven rendering is intentionally unaffected because composer
     // draft text is real user state; picker leases are transient affordances.
     for (const sessionId of Object.keys(workspace.runtimes)) {
-      if (sidekickOnly && workspace.state.sessions[sessionId]?.sidekickId) continue
+      if (sidekickVisible && workspace.state.sessions[sessionId]?.sidekickId) continue
       const runtime = workspace.runtimes[sessionId]
       if (runtime?.assistantPicker) workspace.pickerCancel(sessionId)
       if (runtime?.codeBlockPicker) workspace.setCodeBlockPicker(sessionId, null)

@@ -1,3 +1,5 @@
+import { builtInCommandCatalog } from '@renderer/features/command-palette/catalog'
+import { SIDEKICK_EXCLUDED_COMMAND_IDS } from '@renderer/features/sidekick/commands/sidekickTarget'
 import { createTldrHoldController, dismissTldr, observeTldrHoldRelease, useTldrView } from '@renderer/features/tldr/viewState'
 import { CLIPBOARD_WRITE_FAILED } from '@renderer/lib/clipboardFailure'
 import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
@@ -294,7 +296,47 @@ export const SIDEKICK_REGION_COMMAND_IDS: ReadonlySet<string> = new Set([
   // Spotlight works on the sidekick too (#1493 follow-up): the command itself
   // decides which Spotlight the chord means (spotlightCommands.ts).
   'toggle-spotlight',
+  // Every chord a lane agent answers to (#1493 follow-up, "the sidekick must
+  // expose every feature a lane does"). Each acts on the COMMAND TARGET, which
+  // is the sidekick while the keyboard is here (commandTargetSessionIdForState
+  // answers the Sidekick first), so they pass the same visible-owner test as
+  // Spotlight's Tail and Jump Latest. (Every other 'session'/'debug' command,
+  // including ones the user binds, is admitted by surface:
+  // SIDEKICK_AGENT_COMMAND_IDS.)
+  //
+  // Deliberately NOT here: lane/layout grammar (all 'dispatch' context),
+  // creation chords (⌘N, ⌥D, ⌥C… spawn into a LANE via
+  // resolveDispatchSpawnTarget), Close Tab ⌘⇧W, Reader ⌥R, Browser Pocket
+  // ⌘⇧B, Resume ⌘⇧R and Goal Loop ⌘⇧G — each refuses or means a lane.
+  'close-pane',
+  'reload-agent',
+  'soft-reload-agent',
+  'set-agent-view-mode',
+  'prompt-template',
+  'view-prompts',
+  'toggle-tail',
+  'jump-latest-message',
+  'toggle-debug-panel',
 ])
+
+/**
+ * Agent-scoped commands, admitted from the Sidekick by SURFACE rather than by a
+ * hand-kept list (#1517 review): a 'session' or 'debug' surface command acts on
+ * the command target, which is the sidekick there. An id allowlist silently
+ * dropped every agent command whose chord the USER assigned — bind Copy
+ * Assistant Message to ⌘⇧C and it worked in a lane but did nothing in the
+ * Sidekick. The lane/project-only ones among them are the
+ * SIDEKICK_EXCLUDED_COMMAND_IDS (which also refuse at admission).
+ */
+const SIDEKICK_AGENT_COMMAND_IDS: ReadonlySet<string> = new Set(
+  builtInCommandCatalog
+    .filter(command => (command.surface === 'session' || command.surface === 'debug') && !SIDEKICK_EXCLUDED_COMMAND_IDS.has(command.id))
+    .map(command => command.id),
+)
+
+function sidekickRegionAdmits(commandId: string): boolean {
+  return SIDEKICK_REGION_COMMAND_IDS.has(commandId) || SIDEKICK_AGENT_COMMAND_IDS.has(commandId)
+}
 
 /** Chord -> candidate commands, built once per override change. */
 function buildBindingIndex(
@@ -768,8 +810,20 @@ export function useKeybinds(
           return
         }
       }
+      // Does the Sidekick own the keyboard? (keyboardRegion, or Sidekick
+      // Spotlight, which owns it whatever the region says — #1513 review.)
+      // Computed once, here, because the fullscreen-editor rule below depends
+      // on it too.
+      const shellState = useAppStore.getState()
+      const sidekickSpotlightOn = shellState.sidekickSpotlight && !shellState.settingsPageOpen
+      const sidekickOwnsKeyboard = shellState.keyboardRegion === 'sidekick' || sidekickSpotlightOn
+      // A fullscreen Global Editor covers the LANES, not the Sidekick column
+      // beside it. While the keyboard is in the Sidekick the editor owns
+      // nothing: without this, the guard just below swallowed ⌘W and the
+      // TLDR/Goal holds declined, so the Sidekick lost Close and its peeks
+      // whenever the editor happened to be fullscreen (#1517 review).
       const fullscreenEditorOwnsWorkspace =
-        useAppStore.getState().globalEditorOpen && useGlobalEditorStore.getState().editorFullscreen
+        shellState.globalEditorOpen && useGlobalEditorStore.getState().editorFullscreen && !sidekickOwnsKeyboard
       const hiddenWorkspaceShortcut =
         (cmd && !alt && e.code === 'KeyW') ||
         (alt && !cmd && shouldPreventOwnedApplicationShortcut(e))
@@ -799,11 +853,17 @@ export function useKeybinds(
       // are active (shouldn't happen — picker is feed-only — but the
       // ordering keeps the intent local).
       const focusedSessionId = commandTargetSessionId(workspace)
+      // A sidekick target is drawn in the Sidekick column, which stays on
+      // screen beside a lane Spotlight or Reader (#1493 follow-up): those
+      // takeovers hide the LANES, not it. Only Settings covers the Sidekick.
+      // Without this, Copy Assistant / Copy Code Block navigation in the
+      // Sidekick died whenever a lane Spotlight happened to be open.
+      const focusedIsSidekick = focusedSessionId !== null
+        && workspace.state.sessions[focusedSessionId]?.sidekickId !== undefined
       const renderedPickerSurfaceVisible = focusedSessionId
         ? renderedAgentSurfaceIsVisible(workspace, agentViewMode, focusedSessionId) &&
-          !workspace.spotlight &&
-          workspace.readerMode === null &&
-          !settingsPageOpen
+          !settingsPageOpen &&
+          (focusedIsSidekick || (!workspace.spotlight && workspace.readerMode === null))
         : false
       const picker = focusedSessionId ? workspace.runtimes[focusedSessionId]?.assistantPicker : null
       if (picker && focusedSessionId && renderedPickerSurfaceVisible) {
@@ -893,69 +953,8 @@ export function useKeybinds(
         // Other keys fall through, same as the assistant picker.
       }
 
-      // The Sidekick panel owns the keyboard (#1493, review round 1 F1). Every
-      // routed command below targets the WORKSPACE's focused pane or layout —
-      // ⌘W would close the lane agent the user is not looking at, ⌥J would
-      // move a Dispatch row, Escape would leave Spotlight. Same fail-closed
-      // shape as the Reader/Spotlight lists: only the commands whose visible
-      // owner IS the panel, plus the palette entry point, cross. Everything
-      // else returns WITHOUT preventDefault so the sidekick's own composer or
-      // terminal still receives the key (Escape interrupts the agent there).
-      // Checked before the Escape takeovers on purpose, after the app-modal
-      // and in-pane picker owners above (those are explicit, visible owners).
-      // Sidekick Spotlight (#1493 follow-up) counts as the Sidekick owning the
-      // keyboard whatever `keyboardRegion` says. The lanes are hidden under it,
-      // so a lane chord must never run: review of #1513 found that clicking
-      // app chrome, or leaving Settings, could leave the region at
-      // 'workspace' while the Sidekick still filled the window, and then ⌘W
-      // closed a lane agent nobody could see and Esc closed a hidden lane
-      // Spotlight instead of this one. Settings covering it is the exception:
-      // Settings owns the interaction then (the app-owner gate above).
-      const appState = useAppStore.getState()
-      const sidekickSpotlightOn = appState.sidekickSpotlight && !appState.settingsPageOpen
-      if (appState.keyboardRegion === 'sidekick' || sidekickSpotlightOn) {
-        // Esc leaves Sidekick Spotlight, the same one-key dismiss as lane
-        // Spotlight below — which this gate would otherwise never reach.
-        // NOT conditioned on a fullscreen Global Editor (unlike lane
-        // Spotlight's Esc): the editor is retained-hidden under this takeover,
-        // its own Esc handler declines while hidden, and the flag would have
-        // left Esc with no owner at all (#1513 review).
-        if (k === 'Escape' && sidekickSpotlightOn) {
-          e.preventDefault()
-          appState.setSidekickSpotlight(false)
-          return
-        }
-        const sidekickCommandId = routedCommandForEvent(e, bindingIndex, GLOBAL_CONTEXT_ONLY)
-        if (sidekickCommandId && SIDEKICK_REGION_COMMAND_IDS.has(sidekickCommandId)) {
-          e.preventDefault()
-          requestCommandInvocation(sidekickCommandId, 'keybinding')
-        }
-        return
-      }
-
-      if (k === 'Escape' && workspace.spotlight && !fullscreenEditorOwnsWorkspace) {
-        e.preventDefault()
-        workspace.toggleSpotlight()
-        return
-      }
-
-      // Esc also exits Reader Mode. Same one-key dismiss pattern as
-      // Spotlight — both are read-only "fullscreen" overlays the user
-      // expects to bail out of with Escape.
-      if (k === 'Escape' && workspace.readerMode && !fullscreenEditorOwnsWorkspace) {
-        e.preventDefault()
-        workspace.toggleReaderMode()
-        return
-      }
-
-      if (k === 'Escape' && settingsPageOpen) {
-        e.preventDefault()
-        closeSettingsPage()
-        return
-      }
-
       // The goal loop overlay is not a hold gesture, so it does not share the
-      // TLDR hold path below — but it shares that path's editor rule, and for
+      // TLDR hold path — but it shares that path's editor rule, and for
       // the same reason: Monaco owns Cmd+Shift+G as Find Previous exactly as it
       // owns Cmd+G as Find Next and Cmd+L as Select Line (#1045 review
       // reproduced the collision — the overlay latched on top of Monaco's find,
@@ -981,6 +980,85 @@ export function useKeybinds(
           tldrHold.start(e, preview)
         }
         return true
+      }
+
+      // (Both helpers sit above the Sidekick gate so it can share them: the
+      // Sidekick's TLDR/Goal peeks must HOLD, not latch — #1493 follow-up.)
+
+      // The Sidekick panel owns the keyboard (#1493, review round 1 F1). Every
+      // routed command below targets the WORKSPACE's focused pane or layout —
+      // ⌘W would close the lane agent the user is not looking at, ⌥J would
+      // move a Dispatch row, Escape would leave Spotlight. Same fail-closed
+      // shape as the Reader/Spotlight lists: only the commands whose visible
+      // owner IS the panel, plus the palette entry point, cross. Everything
+      // else returns WITHOUT preventDefault so the sidekick's own composer or
+      // terminal still receives the key (Escape interrupts the agent there).
+      // Checked before the Escape takeovers on purpose, after the app-modal
+      // and in-pane picker owners above (those are explicit, visible owners).
+      // Sidekick Spotlight (#1493 follow-up) counts as the Sidekick owning the
+      // keyboard whatever `keyboardRegion` says. The lanes are hidden under it,
+      // so a lane chord must never run: review of #1513 found that clicking
+      // app chrome, or leaving Settings, could leave the region at
+      // 'workspace' while the Sidekick still filled the window, and then ⌘W
+      // closed a lane agent nobody could see and Esc closed a hidden lane
+      // Spotlight instead of this one. Settings covering it is the exception:
+      // Settings owns the interaction then (the app-owner gate above).
+      if (sidekickOwnsKeyboard) {
+        // Esc leaves Sidekick Spotlight, the same one-key dismiss as lane
+        // Spotlight below — which this gate would otherwise never reach.
+        // NOT conditioned on a fullscreen Global Editor (unlike lane
+        // Spotlight's Esc): the editor is retained-hidden under this takeover,
+        // its own Esc handler declines while hidden, and the flag would have
+        // left Esc with no owner at all (#1513 review).
+        if (k === 'Escape' && sidekickSpotlightOn) {
+          e.preventDefault()
+          shellState.setSidekickSpotlight(false)
+          return
+        }
+        // The Sidekick renders a real TileLeaf, so — like Spotlight — its
+        // visible feed keeps the feed-scoped bindings (End = Jump to Latest)
+        // when the user is not typing. 'dispatch' is never admitted: those
+        // are the lane grammar, and the lanes are not what is in front of
+        // the keyboard.
+        const sidekickContexts = focusedSessionId
+          && focusedIsSidekick
+          && renderedAgentSurfaceIsVisible(workspace, agentViewMode, focusedSessionId)
+          && !isTextEditingTarget(e.target)
+          ? GLOBAL_AND_FEED_CONTEXTS
+          : GLOBAL_CONTEXT_ONLY
+        const sidekickCommandId = routedCommandForEvent(e, bindingIndex, sidekickContexts, {
+          textEditingTarget: isTextEditingTarget(e.target),
+        })
+        // TLDR (⌘L) and Goal (⌘G) are hold gestures over the sidekick's own
+        // pane, the same synchronous path a lane and Spotlight use.
+        if (handleTldrHold(sidekickCommandId)) return
+        if (editorOwnsRoutedCommand(sidekickCommandId)) return
+        if (sidekickCommandId && sidekickRegionAdmits(sidekickCommandId)) {
+          e.preventDefault()
+          requestCommandInvocation(sidekickCommandId, 'keybinding')
+        }
+        return
+      }
+
+      if (k === 'Escape' && workspace.spotlight && !fullscreenEditorOwnsWorkspace) {
+        e.preventDefault()
+        workspace.toggleSpotlight()
+        return
+      }
+
+      // Esc also exits Reader Mode. Same one-key dismiss pattern as
+      // Spotlight — both are read-only "fullscreen" overlays the user
+      // expects to bail out of with Escape.
+      if (k === 'Escape' && workspace.readerMode && !fullscreenEditorOwnsWorkspace) {
+        e.preventDefault()
+        workspace.toggleReaderMode()
+        return
+      }
+
+      if (k === 'Escape' && settingsPageOpen) {
+        e.preventDefault()
+        closeSettingsPage()
+        return
       }
 
       // Reader and Spotlight are inline full-screen takeovers rather than

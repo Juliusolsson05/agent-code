@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import { commandTargetSessionIdForState, useCommandTargetInputs } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
 // Derive the focused agent's cwd — used by the Global Editor shell to
 // pick a project root at tab-change time.
@@ -31,10 +31,15 @@ import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selecto
 // any tab opens, or in transient states between actions). The shell
 // renders an empty-state stub in that case.
 export function useFocusedAgentCwd(workspace: Workspace): string | null {
+  // The target also moves with the keyboard (the Sidekick answers first,
+  // #1493 follow-up), which is not WorkspaceState — see useCommandTargetInputs.
+  const targetInputs = useCommandTargetInputs()
   return useMemo(() => {
     const id = commandTargetSessionIdForState(workspace.state)
     if (!id) return null
     const cwd = workspace.state.sessions[id]?.cwd
     return cwd ?? null
-  }, [workspace.state])
+  // targetInputs is a dependency, not a value: it re-runs the memo when the
+  // keyboard crosses between the lanes and the Sidekick.
+  }, [workspace.state, targetInputs])
 }

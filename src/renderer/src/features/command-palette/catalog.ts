@@ -1,4 +1,5 @@
 import { tldrCommands } from '@renderer/features/tldr/commands'
+import { excludeSidekickTargets } from '@renderer/features/sidekick/commands/sidekickTarget'
 import { goalLoopCommands } from '@renderer/features/goal-loop/commands'
 import { layoutCommands } from '@renderer/features/workspace/commands/layoutCommands'
 import { globalEditorCommands } from '@renderer/features/global-editor/commands/globalEditorCommands'
@@ -64,7 +65,10 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
  * only deliberately; `catalog.test.ts` pins the exact order so an accidental
  * import shuffle fails loudly instead of silently reshuffling the UI.
  */
-export const builtInCommandCatalog: readonly CommandDef[] = Object.freeze([
+// excludeSidekickTargets (#1493 follow-up): the few lane/project-only commands
+// are refused for a sidekick target; every other command that acts on the
+// command target works on the sidekick exactly as on a lane.
+export const builtInCommandCatalog: readonly CommandDef[] = Object.freeze(excludeSidekickTargets([
   ...tabCommands,
   // Right after the tab family: a window is the thing a tab lives in, so
   // "New Window" belongs beside "New Tab" in the empty-query browse order.
@@ -112,7 +116,7 @@ export const builtInCommandCatalog: readonly CommandDef[] = Object.freeze([
   // PALETTE_SELF_EXCLUDED_COMMAND_IDS), so its position cannot shift anything
   // the user browses. Appending also keeps every existing row's index stable.
   ...paletteCommands,
-])
+]))
 
 /**
  * Structural problems found in a catalog, as human-readable sentences.

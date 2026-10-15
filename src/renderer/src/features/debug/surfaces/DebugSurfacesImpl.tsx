@@ -8,7 +8,7 @@ import { RenderingDebugInspector } from '@renderer/features/debug/renderingDebug
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 import { useDevDebugConfig } from '@renderer/features/debug/devDebugConfig'
-import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import { commandTargetSessionId, useCommandTargetInputs } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { useHasAgentTerminalDimensionClaim } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 
 // The debug side surfaces, one block per panel flag, in the exact
@@ -33,6 +33,8 @@ export function DebugSurfacesImpl() {
   const toggleDevDebugPanel = useAppStore(state => state.toggleDevDebugPanel)
   const devDebugEnabled = useDevDebugConfig(state => state.enabled)
 
+  // Follows the keyboard into and out of the Sidekick (useCommandTargetInputs WHY).
+  useCommandTargetInputs()
   const targetId = commandTargetSessionId(workspace)
   const paneTerminalClaimsDimensions = useHasAgentTerminalDimensionClaim(targetId)
   if (!targetId) return null

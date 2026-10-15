@@ -1,0 +1,341 @@
+{
+ "provenance": "Recorded: the owner's own Codex rollouts (~/.codex/sessions/2026/10, last 60 files, 2026-10-14). One small real `exec` script and its `custom_tool_call_output` per script-shape x output-shape class, chosen by size (<3.5 KB). Unmodified bytes; read in full before committing (no credentials). Shapes measured over 1,566 scripts: see src/providers/codex/renderer/adapters/scriptSteps.ts.",
+ "samples": [
+  {
+   "shape": "fanout:exec_command",
+   "output_shape": "plain",
+   "call": {
+    "type": "custom_tool_call",
+    "call_id": "call_80742b4cda97435787aef1173088cc3f",
+    "name": "exec",
+    "input": "const results = await Promise.allSettled([\n tools.exec_command({cmd:\"rg -n 'declare function startVitest|function startVitest' node_modules/vitest/dist/node* node_modules/vitest/dist/chunks/cli-api* && rg --files src/renderer/src | rg 'TileLeaf.tsx$' && sed -n '890,918p' src/renderer/src/styles.css && git diff --check origin/main...HEAD\",\"max_output_tokens\":2000}),\n tools.exec_command({cmd:\"node --input-type=module <<'NODE'\\nimport fs from 'node:fs';\\nconst css = fs.readFileSync('src/renderer/src/styles.css', 'utf8');\\nconst lum = color => { const rgb = color.slice(1).match(/../g).map(v => parseInt(v,16)/255).map(v => v<=0.04045?v/12.92:((v+0.055)/1.055)**2.4);return rgb[0]*0.2126+rgb[1]*0.7152+rgb[2]*0.0722; };\\nfor(const selector of ['[data-mode=\\\"light\\\"] {','[data-mode=\\\"light-soft\\\"] {','[data-contrast=\\\"high\\\"][data-mode=\\\"light-soft\\\"] {']) {\\n const block = css.slice(css.indexOf(selector)).split('}')[0];\\n const value = name => block.match(new RegExp('--theme-'+name+':\\\\\\\\s*(#[0-9a-f]+);'))[1];\\n const contrast = (a,b) => {const aa=lum(value(a)),bb=lum(value(b));return ((Math.max(aa,bb)+0.05)/(Math.min(aa,bb)+0.05)).toFixed(2);};\\n console.log(JSON.stringify({selector,canvas:value('canvas'),userBg:value('user-bg'),ink:value('ink'),textOnCanvas:contrast('ink','canvas'),textOnPrompt:contrast('ink','user-bg')}));\\n}\\nNODE\",\"max_output_tokens\":1200})\n]);\nresults.forEach((r,i)=>text({i,result:r}));\n"
+   },
+   "output": {
+    "type": "custom_tool_call_output",
+    "call_id": "call_80742b4cda97435787aef1173088cc3f",
+    "output": [
+     {
+      "type": "input_text",
+      "text": "Script completed\nWall time 0.2 seconds\nOutput:\n"
+     },
+     {
+      "type": "input_text",
+      "text": "{\"i\":0,\"result\":{\"status\":\"fulfilled\",\"value\":{\"chunk_id\":\"55a145\",\"wall_time_seconds\":0.000012667,\"exit_code\":0,\"original_token_count\":281,\"output\":\"node_modules/vitest/dist/node.d.ts:110:declare function startVitest(mode: VitestRunMode, cliFilters?: string[], options?: CliOptions, viteOverrides?: UserConfig$1, vitestOptions?: VitestOptions): Promise<Vitest>;\\nnode_modules/vitest/dist/chunks/cli-api.CnMVyzaz.js:14596:async function startVitest(mode, cliFilters = [], options = {}, viteOverrides, vitestOptions) {\\nsrc/renderer/src/workspace/tile-tree/TileLeaf.tsx\\n.prose-theme h1,\\n.prose-theme h2,\\n.prose-theme h3,\\n.prose-theme h4,\\n.prose-theme h5,\\n.prose-theme h6 {\\n  margin: 16px 0 8px;\\n  font-weight: 700;\\n  line-height: 1.2;\\n  color: var(--theme-ink);\\n  letter-spacing: -0.005em;\\n}\\n\\n.prose-theme h1 { font-size: 17px; }\\n.prose-theme h2 { font-size: 15px; }\\n.prose-theme h3 { font-size: 14px; }\\n.prose-theme h4,\\n.prose-theme h5,\\n.prose-theme h6 { font-size: 13.5px; }\\n\\n/*\\n * Tailwind's preflight resets list-style to none on every ul/ol, which\\n * strips default bullets. We want real bullets and numbers for markdown\\n * lists, so restore them explicitly on .prose-theme scopes only.\\n */\\n.prose-theme ul {\\n  margin: 0 0 10px;\\n  padding-left: 22px;\\n  list-style: disc;\\n\"}}}"
+     },
+     {
+      "type": "input_text",
+      "text": "{\"i\":1,\"result\":{\"status\":\"fulfilled\",\"value\":{\"chunk_id\":\"75c374\",\"wall_time_seconds\":0.000014583,\"exit_code\":0,\"original_token_count\":113,\"output\":\"{\\\"selector\\\":\\\"[data-mode=\\\\\\\"light\\\\\\\"] {\\\",\\\"canvas\\\":\\\"#faf9f6\\\",\\\"userBg\\\":\\\"#d8d4c6\\\",\\\"ink\\\":\\\"#19181a\\\",\\\"textOnCanvas\\\":\\\"16.80\\\",\\\"textOnPrompt\\\":\\\"11.92\\\"}\\n{\\\"selector\\\":\\\"[data-mode=\\\\\\\"light-soft\\\\\\\"] {\\\",\\\"canvas\\\":\\\"#f4f0e7\\\",\\\"userBg\\\":\\\"#d4cab6\\\",\\\"ink\\\":\\\"#23211d\\\",\\\"textOnCanvas\\\":\\\"14.13\\\",\\\"textOnPrompt\\\":\\\"9.89\\\"}\\n{\\\"selector\\\":\\\"[data-contrast=\\\\\\\"high\\\\\\\"][data-mode=\\\\\\\"light-soft\\\\\\\"] {\\\",\\\"canvas\\\":\\\"#ffffff\\\",\\\"userBg\\\":\\\"#d9d9d9\\\",\\\"ink\\\":\\\"#000000\\\",\\\"textOnCanvas\\\":\\\"21.00\\\",\\\"textOnPrompt\\\":\\\"14.88\\\"}\\n\"}}}"
+     }
+    ]
+   }
+  },
+  {
+   "shape": "fanout:exec_command+mcp",
+   "output_shape": "BG",
+   "call": {
+    "type": "custom_tool_call",
+    "call_id": "call_56f1e8f3a8bd426589c384c790a4f119",
+    "name": "exec",
+    "input": "const results=await Promise.allSettled([\ntools.exec_command({cmd:\"npx vitest run > /tmp/hubble-piano-final-tests.log 2>&1\",\"workdir\":\"/Users/juliusolsson/Desktop/Development/hubble/.worktrees/piano-playground\",\"yield_time_ms\":1000,\"max_output_tokens\":1000}),\ntools.exec_command({cmd:\"npm run -s typecheck\\ngit diff --check\\ngit status --short\",\"workdir\":\"/Users/juliusolsson/Desktop/Development/hubble/.worktrees/piano-playground\",\"yield_time_ms\":1000,\"max_output_tokens\":1000})\n]);results.forEach(text);\nawait tools.mcp__agent_code__tldr_update({text:\"Piano playground controls and camera overlay are implemented. Browser smoke and focused tests pass; seven fault mutations are caught. Independent reviews are running. A full-suite web-surface failure was reproduced on unchanged main and recorded separately as #63.\"});\n"
+   },
+   "output": {
+    "type": "custom_tool_call_output",
+    "call_id": "call_56f1e8f3a8bd426589c384c790a4f119",
+    "output": [
+     {
+      "type": "input_text",
+      "text": "Script completed\nWall time 1.2 seconds\nOutput:\n"
+     },
+     {
+      "type": "input_text",
+      "text": "{\"status\":\"fulfilled\",\"value\":{\"chunk_id\":\"012e5c\",\"wall_time_seconds\":1.001957167,\"session_id\":20104,\"original_token_count\":0,\"output\":\"\"}}"
+     },
+     {
+      "type": "input_text",
+      "text": "{\"status\":\"fulfilled\",\"value\":{\"chunk_id\":\"9f7c7b\",\"wall_time_seconds\":1.004280625,\"session_id\":6286,\"original_token_count\":0,\"output\":\"\"}}"
+     }
+    ]
+   }
+  },
+  {
+   "shape": "inline-1",
+   "output_shape": "BG",
+   "call": {
+    "type": "custom_tool_call",
+    "call_id": "call_d0e78be6f1a3405f9f3ca7dd5dc6fc29",
+    "name": "exec",
+    "input": "text(await tools.exec_command({cmd:\"python3 - <<'PY'\\nfrom pathlib import Path\\np=Path(Path('/tmp/todoist-codex-review-scratch-path').read_text())/'reviewtests/review.test.mjs'\\ns=p.read_text()+r'''\\n\\ntest('evidence: trash confirmation omits children outside current date filter',async()=>{\\n const parent=world.fake.addTask({content:'Review hidden-child parent',due:due(0)})\\n const child=world.fake.addTask({content:'Review hidden tomorrow child',parent_id:parent.id,due:due(1)})\\n await run({},async({page})=>{\\n  await row(page,parent.content).hover();await row(page,parent.content).getByTitle('Delete (⌫)').click()\\n  const text=await dialog(page).innerText()\\n  assert.ok(!text.includes('sub-task'))\\n  await page.keyboard.press('Enter');await eventually(()=>parent.is_deleted)\\n  assert.equal(child.is_deleted,true)\\n  console.log('HIDDEN-CHILD',JSON.stringify({confirmation:text,parentDeleted:parent.is_deleted,hiddenChildDeleted:child.is_deleted}))\\n })\\n})\\n\\ntest('safety: read-only publication hides row trash and blocks both delete keys',async()=>{\\n await run({},async({page,rt})=>{\\n  await row(page,'Overdue invoice').click();await page.keyboard.press('Escape')\\n  const state=structuredClone(rt.last('todoist.main'));state.setup.user.readOnly=true\\n  await page.evaluate(s=>window.__publish(s),state)\\n  await page.waitForFunction(()=>!document.querySelector('[title=\\\"Delete (⌫)\\\"]'))\\n  await page.keyboard.press('Backspace');await page.keyboard.press('Delete')\\n  assert.equal(await dialog(page).count(),0)\\n  assert.equal(rt.invokes.filter(n=>n==='delete').length,0)\\n  console.log('READONLY',{rowTrash:0,deleteDialogs:0,deleteRequests:0})\\n })\\n})\\n'''\\np.write_text(s)\\nPY\\nTEST_NAME_PATTERN='trash confirmation omits|read-only publication' node dev/test.mjs reviewtests > /tmp/todoist-review-final-probes.log 2>&1\",\"workdir\":\"/var/folders/tv/yfsy4sfx1qnbs39hbtzgl0xc0000gn/T/todoist-codex-review-hj3m1uko\",\"yield_time_ms\":1000,\"max_output_tokens\":1000}));\n"
+   },
+   "output": {
+    "type": "custom_tool_call_output",
+    "call_id": "call_d0e78be6f1a3405f9f3ca7dd5dc6fc29",
+    "output": [
+     {
+      "type": "input_text",
+      "text": "Script completed\nWall time 1.2 seconds\nOutput:\n"
+     },
+     {
+      "type": "input_text",
+      "text": "{\"chunk_id\":\"26ddcb\",\"wall_time_seconds\":1.001760416,\"session_id\":53841,\"original_token_count\":0,\"output\":\"\"}"
+     }
+    ]
+   }
+  },
+  {
+   "shape": "inline-1",
+   "output_shape": "EXIT",
+   "call": {
+    "type": "custom_tool_call",
+    "call_id": "call_10b98a8f6e10411ba1e837950485fb62",
+    "name": "exec",
+    "input": "text(await tools.exec_command({cmd:\"rg -n -A4 '^name = \\\"aiohttp\\\"' temp/hermes-research/scratch-t2/hermes-agent/uv.lock; kill 57444 57432; uv export --frozen --no-hashes --no-emit-project --no-dev --python 3.14 --extra telegram --extra api-server --project temp/hermes-research/scratch-t2/runtime/src > temp/hermes-research/scratch-t2/requirements-platform.txt 2>temp/hermes-research/scratch-t2/platform-export.log\",max_output_tokens:1000}));\n"
+   },
+   "output": {
+    "type": "custom_tool_call_output",
+    "call_id": "call_10b98a8f6e10411ba1e837950485fb62",
+    "output": [
+     {
+      "type": "input_text",
+      "text": "Script completed\nWall time 0.1 seconds\nOutput:\n"
+     },
+     {
+      "type": "input_text",
+      "text": "{\"chunk_id\":\"256d2d\",\"wall_time_seconds\":0.000012375,\"exit_code\":2,\"original_token_count\":39,\"output\":\"63:name = \\\"aiohttp\\\"\\n64-version = \\\"3.14.3\\\"\\n65-source = { registry = \\\"https://pypi.org/simple\\\" }\\n66-dependencies = [\\n67-    { name = \\\"aiohappyeyeballs\\\" },\\n\"}"
+     }
+    ]
+   }
+  },
+  {
+   "shape": "inline-1",
+   "output_shape": "plain",
+   "call": {
+    "type": "custom_tool_call",
+    "call_id": "call_f27b79c0c8224c5cb0ea8a97480adc0c",
+    "name": "exec",
+    "input": "text(await tools.exec_command({cmd:\"node --input-type=module <<'JS'\\nimport { readFileSync } from 'node:fs';\\nimport { createRequire } from 'node:module';\\nimport { transformSync } from 'esbuild';\\nimport { Window } from 'happy-dom';\\nconst window = new Window();\\nfor (const key of ['window','document','HTMLElement','Element','Node','navigator']) Object.defineProperty(globalThis,key,{value:key==='window'?window:window[key],configurable:true});\\nglobalThis.IS_REACT_ACT_ENVIRONMENT = true;\\nconst require = createRequire(import.meta.url);\\nconst React = require('react');\\nconst { render, act, cleanup } = await import('@testing-library/react');\\nconst { create } = require('zustand');\\nconst useAppStore = create(()=>({keyboardRegion:'workspace',sidekickSpotlight:false,settingsPageOpen:false,gitBarOpen:false,worktreesBarOpen:false,agentStatusPanelOpen:false}));\\nconst workspace = {state:{sessions:{},stage:{lanes:[]}}};\\nfunction load(path, overrides) {\\n const mod={exports:{}};\\n const code=transformSync(readFileSync(path,'utf8'),{loader:path.endsWith('tsx')?'tsx':'ts',format:'cjs',jsx:'automatic'}).code;\\n new Function('require','module','exports',code)(name=>name in overrides?overrides[name]:require(name),mod,mod.exports);\\n return mod.exports;\\n}\\nconst selector=load('src/renderer/src/workspace/hook/selectors/commandTargetSessionId.ts',{\\n '@renderer/app-state/store':{useAppStore},\\n '@renderer/workspace/dispatch/dispatchTarget':{resolveStrictDispatchCommandTarget:()=>null},\\n '@renderer/workspace/sidekickPanel':{sidekickCommandTarget:()=>({owns:false})},\\n});\\nconst oldError=console.error;\\nconsole.error=()=>{};\\nfor(const [dir,name,flag,child] of [\\n ['git','GitBarSurface','gitBarOpen','GitBar'],\\n ['worktrees','WorktreesBarSurface','worktreesBarOpen','WorktreesBar'],\\n ['agent-status','AgentStatusPanelSurface','agentStatusPanelOpen','AgentStatusPanel'],\\n]){\\n useAppStore.setState({[flag]:false});\\n const mod=load(`src/renderer/src/features/${dir}/surfaces/${name}.tsx`,{\\n  [`@renderer/features/${dir}/ui/${child}`]:{[child]:()=>null},\\n  '@renderer/app-state/hooks':{useAppStore},\\n  '@renderer/workspace/WorkspaceContext':{useWorkspaceContext:()=>workspace},\\n  '@renderer/workspace/hook/selectors/commandTargetSessionId':selector,\\n });\\n render(React.createElement(mod[name]));\\n try { act(()=>useAppStore.setState({[flag]:true})); console.log(name+': opened successfully'); }\\n catch(error) {console.log(name+': '+error.message);}\\n cleanup();\\n}\\nconsole.error=oldError;\\nJS\",max_output_tokens:2000}));\n"
+   },
+   "output": {
+    "type": "custom_tool_call_output",
+    "call_id": "call_f27b79c0c8224c5cb0ea8a97480adc0c",
+    "output": [
+     {
+      "type": "input_text",
+      "text": "Script completed\nWall time 0.9 seconds\nOutput:\n"
+     },
+     {
+      "type": "input_text",
+      "text": "{\"chunk_id\":\"1ab01e\",\"wall_time_seconds\":0.727675708,\"exit_code\":0,\"original_token_count\":55,\"output\":\"GitBarSurface: Rendered more hooks than during the previous render.\\nWorktreesBarSurface: Rendered more hooks than during the previous render.\\nAgentStatusPanelSurface: Rendered more hooks than during the previous render.\\n\"}"
+     }
+    ]
+   }
+  },
+  {
+   "shape": "no-tool",
+   "output_shape": "plain",
+   "call": {
+    "type": "custom_tool_call",
+    "call_id": "call_5ce00fdeef1041f8a6e1116bd8600766",
+    "name": "exec",
+    "input": "const t=ALL_TOOLS.find(x=>x.name===\"mcp__agent_code__orchestration_read_agent\");text(t.description.slice(t.description.lastIndexOf(\"exec tool declaration:\")));\n"
+   },
+   "output": {
+    "type": "custom_tool_call_output",
+    "call_id": "call_5ce00fdeef1041f8a6e1116bd8600766",
+    "output": [
+     {
+      "type": "input_text",
+      "text": "Script completed\nWall time 0.0 seconds\nOutput:\n"
+     },
+     {
+      "type": "input_text",
+      "text": "exec tool declaration:\n```ts\ndeclare const tools: { mcp__agent_code__orchestration_read_agent(args: { maxCharsPerAgent?: number; maxCharsPerMessage?: number; maxMessages?: number; sessionId: string; }): Promise<CallToolResult>; };\n```"
+     }
+    ]
+   }
+  },
+  {
+   "shape": "seq:exec_command+mcp",
+   "output_shape": "BG,MCPERR",
+   "call": {
+    "type": "custom_tool_call",
+    "call_id": "call_e63de187e5bd4d66b7dad47dfba567a2",
+    "name": "exec",
+    "input": "text(await tools.exec_command({cmd:\"cat > temp/camera-fps-3/run.mjs <<'EOF'\\nimport {chromium} from 'playwright-core';\\nimport {readFile,writeFile} from 'node:fs/promises';\\nconst port=Number(await readFile(new URL('port.txt',import.meta.url),'utf8'));\\nconst browser=await chromium.launch({headless:true,args:['--disable-background-timer-throttling','--disable-renderer-backgrounding','--disable-backgrounding-occluded-windows']});\\ntry{\\nconst page=await browser.newPage({viewport:{width:1200,height:1000}});\\nawait page.route('**/*',route=>{const u=new URL(route.request().url());return ['127.0.0.1','localhost'].includes(u.hostname)?route.continue():route.abort();});\\npage.on('pageerror',e=>console.log('PAGEERROR',e.message));page.on('console',m=>{if(m.type()==='error')console.log('CONSOLE',m.text().slice(0,250));});\\nawait page.goto(`http://127.0.0.1:${port}/`);await page.waitForFunction(()=>window.ready);\\nconsole.log('ENV',await page.evaluate(()=>window.environment));\\nconst cases=process.argv.includes('--gate')?[{size:'crop',infer:false,fps:5},{size:'crop',infer:true,fps:5}]:[{size:'full',infer:false},{size:'crop',infer:false},{size:'full',infer:true},{size:'crop',infer:true},{size:'full',infer:true,dataset:'calibration'},{size:'crop',infer:true,dataset:'calibration'},{size:'full',infer:true,postDelay:200}];\\nfor(const c of cases){const result=await page.evaluate(c=>window.runCase(c),c);console.log(JSON.stringify({options:c,rates:result.rates,inference:result.timing.inferenceMs,decode:result.timing.decodeMs,server:result.server}));}\\nconst result=await page.evaluate(()=>({environment:window.environment,results:window.results}));await writeFile(new URL(process.argv.includes('--gate')?'gate.json':'chromium-results.json',import.meta.url),JSON.stringify(result,null,2));\\n}finally{await browser.close();}\\nEOF\\nnode temp/camera-fps-3/run.mjs\",yield_time_ms:1000,max_output_tokens:2000}));\ntext(await tools.mcp__agent_code__browser_open({url:\"about:blank\"}));\n"
+   },
+   "output": {
+    "type": "custom_tool_call_output",
+    "call_id": "call_e63de187e5bd4d66b7dad47dfba567a2",
+    "output": [
+     {
+      "type": "input_text",
+      "text": "Script completed\nWall time 1.2 seconds\nOutput:\n"
+     },
+     {
+      "type": "input_text",
+      "text": "{\"chunk_id\":\"9cc45e\",\"wall_time_seconds\":1.000962625,\"session_id\":94705,\"original_token_count\":73,\"output\":\"ENV {\\n  ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36',\\n  cores: 8,\\n  gpu: 'ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) (0x0000C0DE)), SwiftShader driver)',\\n  visibility: 'visible'\\n}\\n\"}"
+     },
+     {
+      "type": "input_text",
+      "text": "{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":false,\\\"code\\\":\\\"bad_url\\\",\\\"message\\\":\\\"Refused URL (scheme). Only http and https pages can be opened.\\\"}\"}],\"isError\":true}"
+     }
+    ]
+   }
+  },
+  {
+   "shape": "seq:exec_command+mcp",
+   "output_shape": "CATALOG",
+   "call": {
+    "type": "custom_tool_call",
+    "call_id": "call_70131dfdd3d543fe8fa70e63df604196",
+    "name": "exec",
+    "input": "text(await tools.exec_command({cmd:\"cat >> temp/camera-fps-3/bench.js <<'EOF'\\nif(new URLSearchParams(location.search).has('suite')) window.runSuite([{size:'full',infer:false},{size:'crop',infer:false},{size:'full',infer:true},{size:'crop',infer:true},{size:'full',infer:true,dataset:'calibration'},{size:'crop',infer:true,dataset:'calibration'},{size:'full',infer:true,postDelay:200}]);\\nEOF\",max_output_tokens:1000}));\ntext(await tools.mcp__agent_code__browser_open({url:\"http://localhost:53232/?suite=baseline\"}));\ntext(ALL_TOOLS.filter(x=>[\"mcp__agent_code__browser_console\",\"mcp__agent_code__browser_snapshot\"].includes(x.name)).map(x=>({name:x.name,doc:x.description.slice(x.description.indexOf(\"exec tool declaration:\"))})));\n"
+   },
+   "output": {
+    "type": "custom_tool_call_output",
+    "call_id": "call_70131dfdd3d543fe8fa70e63df604196",
+    "output": [
+     {
+      "type": "input_text",
+      "text": "Script completed\nWall time 0.2 seconds\nOutput:\n"
+     },
+     {
+      "type": "input_text",
+      "text": "{\"chunk_id\":\"bf9f07\",\"wall_time_seconds\":0.000005792,\"exit_code\":0,\"original_token_count\":0,\"output\":\"\"}"
+     },
+     {
+      "type": "input_text",
+      "text": "{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":true,\\\"state\\\":\\\"already\\\",\\\"url\\\":\\\"http://localhost:53232/?suite=baseline\\\"}\"}]}"
+     },
+     {
+      "type": "input_text",
+      "text": "[{\"name\":\"mcp__agent_code__browser_console\",\"doc\":\"exec tool declaration:\\n```ts\\ndeclare const tools: { mcp__agent_code__browser_console(args: { all?: boolean; }): Promise<CallToolResult>; };\\n```\"},{\"name\":\"mcp__agent_code__browser_snapshot\",\"doc\":\"exec tool declaration:\\n```ts\\ndeclare const tools: { mcp__agent_code__browser_snapshot(args: { [key: string]: unknown; }): Promise<CallToolResult>; };\\n```\"}]"
+     }
+    ]
+   }
+  },
+  {
+   "shape": "seq:exec_command+mcp",
+   "output_shape": "FAILED",
+   "call": {
+    "type": "custom_tool_call",
+    "call_id": "call_e3ede3dfd5d0498c917e3aab09669ab0",
+    "name": "exec",
+    "input": "text(await tools.exec_command({cmd:\"git checkout -- .\\nrm -rf .review-a\\ngit status --short\\ngit diff --exit-code\\npython3 - <<'PY'\\nfrom pathlib import Path\\np=Path('/Users/juliusolsson/Desktop/Development/agent-code/.worktrees/hermes-agent-pane/temp/hermes-loop/review-package/report-a.md')\\ns=p.read_text()\\nassert s.splitlines()[-1]=='FIX-BEFORE-MERGE'\\nassert s.count('### 1. major')==1\\nassert s.count('. major —')==6\\nassert not Path('.review-a').exists()\\nprint('Report verified: six major findings; final verdict FIX-BEFORE-MERGE. Worktree review artifacts removed.')\\nPY\",max_output_tokens:1000}));\ntext(await tools.mcp__agent_code__tldr_update({text:\"Review report delivered: FIX-BEFORE-MERGE with six major findings. Baseline/restored tests pass (38); 15/19 mutations survived. Worktree is clean; no fixes, commits, or live tests performed.\"}));\n"
+   },
+   "output": {
+    "type": "custom_tool_call_output",
+    "call_id": "call_e3ede3dfd5d0498c917e3aab09669ab0",
+    "output": [
+     {
+      "type": "input_text",
+      "text": "Script failed\nWall time 0.0 seconds\nOutput:\n"
+     },
+     {
+      "type": "input_text",
+      "text": "Script error:\nexec_command failed: CreateProcess { message: \"Rejected(\\\"`/bin/zsh -lc \\\\\\\"git checkout -- .\\\\nrm -rf .review-a\\\\ngit status --short\\\\ngit diff --exit-code\\\\npython3 - <<'PY'\\\\nfrom pathlib import Path\\\\np=Path('/Users/juliusolsson/Desktop/Development/agent-code/.worktrees/hermes-agent-pane/temp/hermes-loop/review-package/report-a.md')\\\\ns=p.read_text()\\\\nassert s.splitlines()[-1]=='FIX-BEFORE-MERGE'\\\\nassert s.count('### 1. major')==1\\\\nassert s.count('. major —')==6\\\\nassert not Path('.review-a').exists()\\\\nprint('Report verified: six major findings; final verdict FIX-BEFORE-MERGE. Worktree review artifacts removed.')\\\\nPY\\\\\\\"` rejected: rm -f style commands are not permitted. Use a safer approach\\\")\" }"
+     }
+    ]
+   }
+  },
+  {
+   "shape": "seq:exec_command+mcp",
+   "output_shape": "plain",
+   "call": {
+    "type": "custom_tool_call",
+    "call_id": "call_f1458b06796b4cb8b10a27c803a8fdae",
+    "name": "exec",
+    "input": "text(await tools.exec_command({cmd:\"git status --short; tail -4 /Users/juliusolsson/Desktop/Development/agent-code-todoist/.worktrees/review-briefs/report-codex-modal.md; test -s /Users/juliusolsson/Desktop/Development/agent-code-todoist/.worktrees/review-briefs/report-codex-modal.md\",\"max_output_tokens\":1000}));\ntext(await tools.mcp__agent_code__tldr_update({text:\"Review report written: FIX-BEFORE-MERGE, with six reproduced findings and a mutation table (3 killed, 7 survived). All 51 unit tests, 18 UI tests, and typecheck pass; shared worktree remains clean.\"}));\n"
+   },
+   "output": {
+    "type": "custom_tool_call_output",
+    "call_id": "call_f1458b06796b4cb8b10a27c803a8fdae",
+    "output": [
+     {
+      "type": "input_text",
+      "text": "Script completed\nWall time 0.1 seconds\nOutput:\n"
+     },
+     {
+      "type": "input_text",
+      "text": "{\"chunk_id\":\"aa023f\",\"wall_time_seconds\":0.00000775,\"exit_code\":0,\"original_token_count\":65,\"output\":\"- Mutation driver/results: `/tmp/todoist-review-mutations.py`, `/tmp/todoist-review-mutations.json`; individual logs `/tmp/todoist-review-M*.log`.\\n- Baseline checks: `/tmp/todoist-codex-review-tests.log`, `/tmp/todoist-codex-review-ui.log`.\\n\\nFIX-BEFORE-MERGE\\n\"}"
+     },
+     {
+      "type": "input_text",
+      "text": "{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":true,\\\"text\\\":\\\"Review report written: FIX-BEFORE-MERGE, with six reproduced findings and a mutation table (3 killed, 7 survived). All 51 unit tests, 18 UI tests, and typecheck pass; shared worktree remains clean.\\\",\\\"updatedAt\\\":\\\"2026-10-14T22:17:25.197Z\\\",\\\"revision\\\":3}\"}]}"
+     }
+    ]
+   }
+  },
+  {
+   "shape": "seq:mcp",
+   "output_shape": "plain",
+   "call": {
+    "type": "custom_tool_call",
+    "call_id": "call_6180d21cecc54331b13d421b97a6639a",
+    "name": "exec",
+    "input": "text(await tools.mcp__agent_code__tldr_update({text:\"Read-only review of PR #1517 found three reproduced issues: panel hook-order crashes, fullscreen-editor guards blocking Sidekick close/peeks, and dropped custom agent shortcuts. All 58 targeted tests pass; worktree unchanged.\"}));\n"
+   },
+   "output": {
+    "type": "custom_tool_call_output",
+    "call_id": "call_6180d21cecc54331b13d421b97a6639a",
+    "output": [
+     {
+      "type": "input_text",
+      "text": "Script completed\nWall time 0.0 seconds\nOutput:\n"
+     },
+     {
+      "type": "input_text",
+      "text": "{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":true,\\\"text\\\":\\\"Read-only review of PR #1517 found three reproduced issues: panel hook-order crashes, fullscreen-editor guards blocking Sidekick close/peeks, and dropped custom agent shortcuts. All 58 targeted tests pass; worktree unchanged.\\\",\\\"updatedAt\\\":\\\"2026-10-14T23:10:06.640Z\\\",\\\"revision\\\":3}\"}]}"
+     }
+    ]
+   }
+  },
+  {
+   "shape": "seq:write_stdin",
+   "output_shape": "TRUNC,EXIT",
+   "call": {
+    "type": "custom_tool_call",
+    "call_id": "call_cf3f7bc18430431aa36489fc0489ab85",
+    "name": "exec",
+    "input": "text(await tools.write_stdin({session_id:13202,chars:\"\\u0003\",yield_time_ms:1000,max_output_tokens:500}));\n"
+   },
+   "output": {
+    "type": "custom_tool_call_output",
+    "call_id": "call_cf3f7bc18430431aa36489fc0489ab85",
+    "output": [
+     {
+      "type": "input_text",
+      "text": "Script completed\nWall time 0.0 seconds\nOutput:\n"
+     },
+     {
+      "type": "input_text",
+      "text": "{\"chunk_id\":\"f5be10\",\"wall_time_seconds\":0.020199333,\"exit_code\":130,\"original_token_count\":3136,\"output\":\"Warning: truncated output (original token count: 3136)\\nTotal output lines: 158\\n\\n ❯ |core| src/main/sessionManager.lifecycle.test.ts (0 test)\\n ❯ |core| src/main/goalLoop/GoalLoopService.test.ts (0 test)\\n ❯ |core| src/main/userMcp/service.test.ts (0 test)\\n ❯ |core| src/main/lspDocumentOrdering.test.ts (0 test)\\n ❯ |core| src/main/sessionManager.codexReplacement.test.ts (49 tests | 49 failed) 177ms\\n     × finishes the recorded predecessor stop before starting a same-rollout successor 164ms\\n     × journals the handoff kill of the predecessor as replace.predecessor -> replace.predecessor 0ms\\n     × journals the handoff kill of the predecessor as undefined -> replacement.handoff 0ms\\n     × journals the handoff kill of the predecessor as rm -rf / -> replacement.handoff 0ms\\n     × keeps start-before-stop when the Codex replacement targets a different transcript 0ms\\n     × uses the observed rollout path to hand off a formerly fresh Codex pane 0ms\\n     × preserves close while formerly-fresh transcript proof is awaiting disk 0ms\\n     × does not fall back to …2636 tokens truncated… src/renderer/src/workspace/hook/persistence/sessionRecovery.integration.test.ts (0 test)\\n ❯ |core| src/renderer/src/rendering/observations/committed.test.ts (0 test)\\n ❯ |core| src/renderer/src/features/command-palette/taxonomy.test.ts (0 test)\\n ❯ |core| src/main/providerSwitch/transcriptEngine.test.ts (0 test)\\n ❯ |core| src/renderer/src/features/command-palette/commandTarget.renderer.test.ts (0 test)\\n ❯ |core| src/providers/codex/runtime/codexSession.nativeComposer.test.ts (0 test)\\n ❯ |core| src/renderer/src/workspace/pool.test.ts (0 test)\\n ❯ |core| src/renderer/src/features/usage-limit/usageLimit.test.ts (0 test)\\n ❯ |core| src/main/orchestration/OrchestrationBridge.parentCarry.test.ts (0 test)\\n ❯ |core| src/main/providerSwitch/compactOnArrival.test.ts (0 test)\\n ❯ |core| src/main/providerSwitch/rewindAttachments.test.ts (0 test)\\n ❯ |core| src/main/providerSwitch/rewindLiteralMarkup.test.ts (0 test)\\n ❯ |core| src/main/storage/workspaceFileStore.test.ts (0 test)\\n\"}"
+     }
+    ]
+   }
+  },
+  {
+   "shape": "inline-output-1",
+   "output_shape": "SCRIPT-TRUNC",
+   "call": {
+    "type": "custom_tool_call",
+    "call_id": "call_f3d6b550cf354a778a98d1cc12e46075",
+    "name": "exec",
+    "input": "text((await tools.exec_command({cmd:\"rg -n 'scrollFocusedToLatest|scrollToLatestRequest:' src/renderer/src/workspace/hook/actions src/renderer/src/session-runtime/state.ts; sed -n '625,672p' src/renderer/src/features/feed/ui/Feed.tsx; sed -n '698,744p' src/renderer/src/features/feed/ui/Feed.tsx; sed -n '808,843p' src/renderer/src/features/feed/ui/Feed.tsx; rg -n 'CodeRenderContext' src/renderer/src/features/feed/context.tsx\",max_output_tokens:1400})).output);\n"
+   },
+   "output": {
+    "type": "custom_tool_call_output",
+    "call_id": "call_f3d6b550cf354a778a98d1cc12e46075",
+    "output": [
+     {
+      "type": "input_text",
+      "text": "Script completed\nWall time 0.1 seconds\nOutput:\n"
+     },
+     {
+      "type": "input_text",
+      "text": "Warning: truncated output (original token count: 1570)\nTotal output lines: 138\n\nsrc/renderer/src/session-runtime/state.ts:599:  scrollToLatestRequest: number\nsrc/renderer/src/session-runtime/state.ts:930:    scrollToLatestRequest: 0,\nsrc/renderer/src/workspace/hook/actions/session.ts:266:      scrollToLatestRequest: current.scrollToLatestRequest + 1,\nsrc/renderer/src/workspace/hook/actions/session.ts:298:    scrollToLatestRequest: current.scrollToLatestRequest + 1,\n    return ids.sort().join('\\n')\n  }, [semanticTurn])\n  const liveUnresolvedQuestionIds = useMemo(\n    () => new Set(liveUnresolvedQuestionSignature ? liveUnresolvedQuestionSignature.split('\\n') : []),\n    [liveUnresolvedQuestionSignature],\n  )\n  const semanticHistorySignal = semanticHistory\n    .map(semanticTurnScrollSignal)\n    .join('|')\n  const workspaceVisible = useAgentTerminalOwnerVisible()\n  useEffect(() => {\n    // During a bulk bootstrap burst we skip per-append auto-scroll.\n    // The pin-once-on-transition effect below lands us at the bottom\n    // in a single operation after the burst ends — otherwise every\n    // entry appended during the burst would pin-scroll and wake up\n    // the LazyEntry observer cascade. See docs/superpowers/plans/\n    // 2026-04-15-bootstrap-replay-perf.md.\n    if (bootstrapping) return\n    // While the workspace is retained under display:none (editor fullscreen,\n    // Reader/Spotlight/Settings — #752) scrollHeight is 0 and a pin would be\n    // a no-op; the flag in the deps makes the reveal re-run this effect, so\n    // a sticky-bottom feed that grew while hidden comes back at the bottom.\n    if (!workspaceVisible) return\n    if (!tailMode && !stickyBottomRef.current) return\n    // scrollTop = scrollHeight pins to bottom without the smooth-scroll\n    // overshoot scrollIntoView sometimes produces. Direct, instant,\n    // no animation frames.\n    const el = scrollerRef.current\n    if (el) el.scrollTop = el.scrollHeight\n  }, [entries.length, tailMode, semanticTurnSignal, semanticHistorySignal, bootstrapping, workspaceVisible])\n\n  // Pin-once on the bootstrap → live transition. Runs exactly once per\n  // transition thanks to the previous-value ref: we read the prior\n  // value, compare, pin if we just left bootstrap mode, then store the\n  // new value for next time. No dependency on `entries.length` so the\n  // effect does not fire on subsequent live appends — those go\n  // through the regular auto-scroll effect above.\n  const prevBootstrappingRef = useRef(false)\n  useEffect(() => {\n    if (prevBootstrappingRef.current && !bootstrapping) {\n      const el = scrollerRef.current\n      // Fresh/resumed sessions with no saved scroll position should\n      // ALWAYS land on the latest content after the bootstrap burst.\n      // Relying purely on stickyBottomRef here is fragile because the\n      // initial mount/placeholder/lazy-l…170 tokens truncated…nst root = scrollerRef.current\n    if (!root) return\n    const target = root.querySelector(\n      `[data-entry-uuid=\"${pickerSelectedUuid}\"]`,\n    ) as HTMLElement | null\n    if (!target) return\n\n    // Compute desired scrollTop so the target's vertical center aligns\n    // with the scroller's vertical center. Clamp to the scroller's\n    // scrollable range so we don't try to scroll past start/end.\n    const targetCenter = target.offsetTop + target.offsetHeight / 2\n    const desired = targetCenter - root.clientHeight / 2\n    const maxScroll = root.scrollHeight - root.clientHeight\n    const to = Math.max(0, Math.min(maxScroll, desired))\n    const from = root.scrollTop\n    const distance = to - from\n    if (Math.abs(distance) < 1) return\n\n    // Cancel any in-flight animation so rapid Up/Down presses don't\n    // compound into a runaway scroll.\n    if (scrollAnimFrameRef.current !== null) {\n      cancelAnimationFrame(scrollAnimFrameRef.current)\n      scrollAnimFrameRef.current = null\n    }\n\n    const duration = 180\n    const startTime = performance.now()\n    const ease = (t: number) => 1 - Math.pow(1 - t, 3) // easeOutCubic\n\n    const step = (now: number) => {\n      const elapsed = now - startTime\n      const t = Math.min(1, elapsed / duration)\n      root.scrollTop = from + distance * ease(t)\n      if (t < 1) {\n        scrollAnimFrameRef.current = requestAnimationFrame(step)\n      } else {\n        scrollAnimFrameRef.current = null\n      }\n          scrollAnimFrameRef.current = requestAnimationFrame(step)\n        } else {\n          scrollAnimFrameRef.current = null\n        }\n      }\n      scrollAnimFrameRef.current = requestAnimationFrame(step)\n    }\n\n    return () => {\n      target.classList.remove(...outline)\n      if (scrollAnimFrameRef.current !== null) {\n        cancelAnimationFrame(scrollAnimFrameRef.current)\n        scrollAnimFrameRef.current = null\n      }\n    }\n  }, [codeBlockSelectedId])\n\n  useEffect(() => {\n    if (scrollToLatestRequest === 0) return\n    const el = scrollerRef.current\n    if (!el) return\n    if (scrollAnimFrameRef.current !== null) {\n      cancelAnimationFrame(scrollAnimFrameRef.current)\n      scrollAnimFrameRef.current = null\n    }\n    el.scrollTop = el.scrollHeight\n    stickyBottomRef.current = true\n    lastScrollTopRef.current = el.scrollTop\n    scrollPositions.set(sessionId, {\n      scrollTop: el.scrollTop,\n      stickyBottom: true,\n    })\n    if (onScrollInfo) onScrollInfo({ fraction: 0 })\n  }, [onScrollInfo, scrollToLatestRequest, sessionId])\n\n  // Index EVERY tool_use block (not just the visible set) so tool_result\n32://   CodeRenderContext       — sessionId + workspaceRoot, passed to\n121:export const CodeRenderContext = createContext<{\n165:// WHY this is a separate side-channel instead of part of CodeRenderContext:\n"
+     }
+    ]
+   }
+  }
+ ]
+}
