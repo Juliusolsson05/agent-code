@@ -15,6 +15,7 @@ import { useState } from 'react'
 import { Button } from '@renderer/components/ui/button'
 import { Input } from '@renderer/components/ui/input'
 import { useHermesConnections } from '@renderer/features/hermes-chat/useHermesConnections'
+import { HermesSshAccessSection } from '@renderer/features/hermes-settings/HermesSshAccessSection'
 import type { HermesConnectionInfo, HermesTestResult } from '@shared/hermes/types'
 
 function errorText(error: unknown): string {
@@ -138,6 +139,7 @@ function ConnectionCard({ connection }: { connection: HermesConnectionInfo }) {
             <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>Edit</Button>
             <Button size="sm" variant="ghost" disabled={busy} onClick={() => void run(() => window.api.hermesRemove(connection.id))}>Remove</Button>
           </div>
+          <HermesSshAccessSection connection={connection} />
         </>
       )}
     </div>

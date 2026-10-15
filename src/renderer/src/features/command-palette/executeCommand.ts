@@ -133,7 +133,7 @@ export type DispatchCommandOptions = {
 export type DispatchableRow = {
   id: string
   title: string
-  run: (ctx: CommandContext) => void | Promise<void>
+  run: (ctx: CommandContext) => void | Promise<unknown>
 }
 
 /**
@@ -285,7 +285,7 @@ async function runGuarded(options: {
   ctx: CommandContext
   reportError?: (message: string, error: unknown) => void
   label: string
-  run: (ctx: CommandContext) => void | Promise<void>
+  run: (ctx: CommandContext) => void | Promise<unknown>
 }): Promise<CommandDispatchOutcome> {
   const { id, key, source, ctx, reportError, label, run } = options
 

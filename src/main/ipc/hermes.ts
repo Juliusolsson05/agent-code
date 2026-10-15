@@ -3,6 +3,7 @@ import { ipcMain } from 'electron'
 import type { HermesConnectionService } from '@main/hermes/service.js'
 import { broadcastToWindows } from '@main/window/windowRegistry.js'
 import type { HermesConnectionDraft } from '@shared/hermes/types.js'
+import type { HermesSshDraft } from '@shared/hermes/ssh.js'
 
 export const HERMES_CONNECTIONS_CHANGED_CHANNEL = 'hermes:connections-changed'
 
@@ -69,6 +70,35 @@ export function registerHermesIpc(service: HermesConnectionService): void {
     if (!isId(id)) throw new Error('hermes:list-lanes: invalid id')
     return service.listLanes(id)
   })
+
+  // SSH access to the connection's server (#1528). The draft is shape-
+  // checked here; validateSshDraft (in the service) owns the real rules.
+  ipcMain.handle('hermes:set-ssh', (_evt, id: unknown, draft: unknown) => {
+    if (!isId(id) || (draft !== null && !isSshDraft(draft))) throw new Error('hermes:set-ssh: invalid arguments')
+    return service.setSshAccess(id, draft)
+  })
+
+  ipcMain.handle('hermes:detect', (_evt, id: unknown) => {
+    if (!isId(id)) throw new Error('hermes:detect: invalid id')
+    return service.detectHermes(id)
+  })
+
+  // Returns a command LINE for the renderer to type into a terminal pane it
+  // just opened (plan Ruling 1). The renderer names a connection and a
+  // target, never the command: main builds it from the validated record.
+  ipcMain.handle('hermes:shell-command', (_evt, id: unknown, target: unknown) => {
+    if (!isId(id) || (target !== 'vps' && target !== 'hermes')) throw new Error('hermes:shell-command: invalid arguments')
+    return service.shellCommand(id, target)
+  })
+}
+
+function isSshDraft(value: unknown): value is HermesSshDraft {
+  if (!value || typeof value !== 'object') return false
+  const draft = value as Record<string, unknown>
+  const optionalText = (field: unknown) => field === undefined || (typeof field === 'string' && field.length <= 1024)
+  return typeof draft.destination === 'string' && draft.destination.length <= 512 &&
+    optionalText(draft.port) && optionalText(draft.identityFile) && optionalText(draft.container) &&
+    (draft.sudo === undefined || typeof draft.sudo === 'boolean')
 }
 
 function isId(value: unknown): value is string {
