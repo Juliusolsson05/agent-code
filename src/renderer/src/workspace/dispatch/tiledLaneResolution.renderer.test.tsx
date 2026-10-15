@@ -1,4 +1,5 @@
-import { cleanup, render } from '@testing-library/react'
+import { useAppStore as useRealAppStore } from '@renderer/app-state/store'
+import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { DispatchLayout } from '@renderer/workspace/dispatch/DispatchLayout'
@@ -191,6 +192,26 @@ describe('unresolved tiled lanes', () => {
     // Resolution is a read: nothing rewrote the lane to make it paint.
     expect(selectTiledLaneSession).not.toHaveBeenCalled()
     expect(tiled.lanes[0]?.selectedSessionId).toBe(foreign)
+  })
+
+  it('renders every lane unfocused while the keyboard is in the Sidekick, and keeps the focused lane to return to (focus follow-up)', () => {
+    // The focused lane stayed undimmed and its leaf stayed focused while the
+    // user typed in the Sidekick, so it looked like the lane was still being
+    // addressed. The dim overlay is the lane's "not focused" rendering.
+    const dims = (container: HTMLElement) => container.querySelectorAll('[class*="bg-canvas/34"]').length
+    const tiled = { lanes: RECORDED_LANES.slice(0, 3).map(selectedSessionId => ({ selectedSessionId })), focusedLane: 1 }
+    const realBefore = useRealAppStore.getState()
+    try {
+      const view = renderLanes(tiled)
+      expect(dims(view.container)).toBe(2)
+      act(() => { useRealAppStore.setState({ keyboardRegion: 'sidekick' }) })
+      expect(dims(view.container)).toBe(3)
+      act(() => { useRealAppStore.setState({ keyboardRegion: 'workspace' }) })
+      // Back in the workspace, the same lane is focused again.
+      expect(dims(view.container)).toBe(2)
+    } finally {
+      useRealAppStore.setState(realBefore, true)
+    }
   })
 
   it('offers the keystroke hint only in the lane the keystroke would act on', () => {

@@ -21,6 +21,22 @@ export function useKeyboardRegionActive(): boolean {
   return useAppStore(state => state.keyboardRegion === region)
 }
 
+/**
+ * True while the Sidekick owns the keyboard: its region, or Sidekick Spotlight
+ * (which owns it whatever the region says, #1513 review).
+ *
+ * WHY the WORKSPACE reads this (the focus follow-up to #1493): the focused
+ * lane kept rendering as focused — undimmed, accent strip, its leaf
+ * `focused` — while the user typed in the Sidekick. It looked like the lane
+ * was still the agent being addressed, and its leaf's focus logic was still
+ * live. A lane is rendered focused only while the workspace owns the
+ * keyboard; `stage.focusedLane` itself is untouched, so it stays the lane the
+ * keyboard returns to.
+ */
+export function useSidekickOwnsKeyboard(): boolean {
+  return useAppStore(state => state.keyboardRegion === 'sidekick' || (state.sidekickSpotlight && !state.settingsPageOpen))
+}
+
 /** The DOM marker of the Sidekick panel; see useKeyboardRegionFollowsPointer. */
 export const SIDEKICK_PANEL_ATTRIBUTE = 'data-sidekick-panel'
 

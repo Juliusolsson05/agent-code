@@ -678,3 +678,13 @@ Owner: "we need to make the sidekick expose all features such as copy assistant 
   - Browser Pocket in the Sidekick (needs a pocket placement).
   - Duplicate as a new sidekick.
   - Goal Loop overlay focus (⌘⇧G) when both the lane leaf and the sidekick leaf are `focused`.
+
+## Follow-up: focusing the Sidekick actually works (2026-10-15)
+
+Owner: "focusing on the side pocket agent is not working… we are still focusing on a main grid agent even tho i am focusing on a sidekick".
+
+- **Root cause 1 (cursor).** The F2 fix tried to focus "the first textarea" once, one frame after the row was held. In the app the agent's input mounts later: the composer appears after the runtime boots, and xterm creates its helper textarea on attach. So the one try found nothing, and TileLeaf never moved focus, because its `focused` prop did not change and focus was owned by the lane composer. The region said Sidekick while the caret stayed in the lane. The F2 test passed only because its stand-in leaf rendered a textarea immediately.
+- **Fix 1.** The panel claims focus with a MutationObserver until the input exists. It targets this session's `data-composer-input`, else `textarea.xterm-helper-textarea`, never a queued-prompt editor. It stands down once focus is inside the body or the region leaves.
+- **Root cause 2 (looks).** The focused lane, and a lane Spotlight's leaf, still rendered focused while the Sidekick owned the keyboard: undimmed, accent strip, leaf `focused`.
+- **Fix 2.** `useSidekickOwnsKeyboard()` (KeyboardRegionContext). TiledDispatchLayout renders `focused = focusedLane === i && !sidekickOwnsKeyboard`, and SpotlightView passes no focused session while the Sidekick owns the keyboard. `stage.focusedLane` is untouched, so it stays the lane the keyboard returns to. This also resolves the earlier Goal Loop "two focused leaves" gap.
+- **Tests.** The stand-in leaf now has a late-mounting composer with `data-composer-input` behind a queued textarea. There are also tests for the lane dim overlay counts and the Spotlight leaf `focused`. Four mutation checks.

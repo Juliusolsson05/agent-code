@@ -99,22 +99,49 @@ export function SidekickPanel({ workspace, actions }: Props) {
       .finally(() => setBusy(null))
   }, [actions, attempt, bootstrapComplete, panel.sidekickId, place.kind])
 
-  // Move the caret into the sidekick whenever it owns the keyboard (F2).
-  // TileLeaf focuses its input only when its `focused` prop CHANGES or focus
-  // is unowned; the first ⌘J mounts the leaf already focused while the caret
-  // still sits in the lane's composer, so Enter submitted to the lane. The
-  // first textarea covers both views: the prose composer and xterm's helper
-  // textarea in terminal view.
+  // Move the caret into the sidekick whenever it owns the keyboard (F2,
+  // fixed for real in the focus follow-up).
+  //
+  // WHY the panel does this and not TileLeaf: TileLeaf focuses its input only
+  // when its `focused` prop CHANGES or focus is unowned. ⌘J (and a chip click,
+  // and the picker) set the region programmatically while the caret still
+  // sits in the lane's composer — focus is OWNED, and the sidekick leaf mounts
+  // already `focused`, so nothing moved it and typing and Enter kept going to
+  // the lane while the region said "sidekick".
+  //
+  // WHY it waits for the input instead of trying once: the first cut looked
+  // for a textarea one frame after the row was held. In the app the agent's
+  // input is not there yet — the composer mounts after the runtime boots, and
+  // xterm creates its helper textarea when the terminal attaches — so it found
+  // nothing and never tried again. (Its test used a stand-in leaf that
+  // rendered a textarea at once, which is why it passed.) A MutationObserver
+  // on the body catches the input the moment it appears.
+  //
+  // WHAT it focuses: this session's own composer (`data-composer-input`),
+  // else xterm's helper textarea in terminal view — never "the first
+  // textarea", which could be a queued-prompt editor.
+  //
+  // It stands down as soon as focus is anywhere inside the body (the user
+  // clicked into it, or it worked), and when the region leaves the Sidekick.
   const bodyRef = useRef<HTMLDivElement | null>(null)
   const heldSessionId = place.kind === 'here' ? place.sessionId : null
   useEffect(() => {
     if (region !== 'sidekick' || !heldSessionId) return
-    const frame = requestAnimationFrame(() => {
-      const body = bodyRef.current
-      if (!body || body.contains(document.activeElement)) return
-      body.querySelector<HTMLElement>('textarea')?.focus()
+    const body = bodyRef.current
+    if (!body) return
+    const claim = (): boolean => {
+      if (body.contains(document.activeElement)) return true
+      const input = sidekickInputIn(body, heldSessionId)
+      if (!input) return false
+      input.focus()
+      return body.contains(document.activeElement)
+    }
+    if (claim()) return
+    const observer = new MutationObserver(() => {
+      if (claim()) observer.disconnect()
     })
-    return () => cancelAnimationFrame(frame)
+    observer.observe(body, { childList: true, subtree: true })
+    return () => observer.disconnect()
   }, [region, heldSessionId])
 
   const openHere = useCallback(async () => {
@@ -288,6 +315,14 @@ export function SidekickPanel({ workspace, actions }: Props) {
       </div>
     </div>
   )
+}
+
+/** The element typing should land in for this sidekick, if it exists yet:
+ *  its composer (prose/Hermes views), else xterm's input (terminal view). */
+export function sidekickInputIn(body: HTMLElement, sessionId: string): HTMLElement | null {
+  const composer = Array.from(body.querySelectorAll<HTMLElement>('[data-composer-input]'))
+    .find(element => element.getAttribute('data-composer-input') === sessionId)
+  return composer ?? body.querySelector<HTMLElement>('textarea.xterm-helper-textarea')
 }
 
 function failureText(reason: string): string {

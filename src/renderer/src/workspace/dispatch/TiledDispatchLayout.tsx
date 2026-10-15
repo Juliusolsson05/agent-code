@@ -1,3 +1,4 @@
+import { useSidekickOwnsKeyboard } from '@renderer/features/sidekick/ui/KeyboardRegionContext'
 import { useCommandChordLabel } from '@renderer/features/command-keybindings/useCommandChord'
 import { LanePortChip } from '@renderer/features/browser-pocket/ui/LanePortChip'
 import { Fragment, useCallback, useMemo, useRef } from 'react'
@@ -317,6 +318,7 @@ function GridRowView({
   // Live chord for the empty-lane hint (plan H4) — the hint used to say
   // "press ⌥↓" literally, which lied after a rebind of Select Next Agent.
   const nextAgentChord = useCommandChordLabel('dispatch-select-next-agent')
+  const sidekickOwnsKeyboard = useSidekickOwnsKeyboard()
   const start = rowStartIndex(grid.rows, rowIndex)
   const end = start + gridRow.length
   const laneWeights = normalizedWeights(
@@ -436,7 +438,11 @@ function GridRowView({
           const laneIndex = start + column
           const lane = grid.lanes[laneIndex]
           const resolved = laneResolutions[laneIndex]
-          const focused = grid.focusedLane === laneIndex
+          // Rendered focused only while the WORKSPACE owns the keyboard: with
+          // the keyboard in the Sidekick every lane looks (and its leaf acts)
+          // unfocused, and focusedLane stays the lane it returns to
+          // (useSidekickOwnsKeyboard WHY).
+          const focused = grid.focusedLane === laneIndex && !sidekickOwnsKeyboard
           return (
             <div
               key={laneIndex}

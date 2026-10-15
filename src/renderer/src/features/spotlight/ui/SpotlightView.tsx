@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { SegmentedControl } from '@renderer/components/ui/segmented-control'
 import { useAppStore } from '@renderer/app-state/hooks'
+import { useSidekickOwnsKeyboard } from '@renderer/features/sidekick/ui/KeyboardRegionContext'
 import { setPocketView } from '@renderer/features/browser-pocket/actions'
 import { useSpotlightPocketMode } from '@renderer/features/browser-pocket/state/spotlightPocketMode'
 import { renderWorkspaceLeaf } from '@renderer/workspace/tile-tree/TileTree'
@@ -20,6 +21,11 @@ type Props = {
 
 export function SpotlightView({ workspace, agentViewMode, showStatusMode, showWorktreeBadges }: Props) {
   const browserPocketEnabled = useAppStore(state => state.settings.browserPocketEnabled)
+  // The Sidekick column stays beside a lane Spotlight; while the keyboard is
+  // in it, the Spotlight agent is not the one being addressed and must not
+  // render (or act) focused — the same rule as an unfocused lane
+  // (useSidekickOwnsKeyboard WHY).
+  const sidekickOwnsKeyboard = useSidekickOwnsKeyboard()
   const spotlight = workspace.spotlight
   if (!spotlight) return null
   const tab = workspace.state.tabs.find(item => item.id === spotlight.tabId)
@@ -80,7 +86,7 @@ export function SpotlightView({ workspace, agentViewMode, showStatusMode, showWo
       <div className="flex-1 min-h-0 min-w-0">
         {renderWorkspaceLeaf(
           focusedSessionId,
-          focusedSessionId,
+          sidekickOwnsKeyboard ? null : focusedSessionId,
           workspace,
           tab.id,
           agentViewMode,
@@ -90,7 +96,7 @@ export function SpotlightView({ workspace, agentViewMode, showStatusMode, showWo
           undefined,
           // Spotlight shows the agent WITH its browser pocket (#1142): the
           // same PocketedLeaf the lane uses, always split side by side here.
-          { surface: 'spotlight', laneIndex: null, focused: true, dimmed: false },
+          { surface: 'spotlight', laneIndex: null, focused: !sidekickOwnsKeyboard, dimmed: sidekickOwnsKeyboard },
         )}
       </div>
     </div>
