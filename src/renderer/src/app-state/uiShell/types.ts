@@ -480,6 +480,8 @@ export type UiShellState = {
    * session.
    */
   agentViewModePickerSessionId: SessionId | null
+  /** Non-null while "Change Telegram Thread…" is open for that Hermes pane (#1501). */
+  hermesThreadPickerSessionId: SessionId | null
   /**
    * Non-null when a built-in app is open; the value is its `AppDefinition` id.
    *

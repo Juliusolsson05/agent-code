@@ -78,6 +78,7 @@ export const createUiShellSlice: StateCreator<
   providerSwitchPickerSessionId: null,
   rewindPromptSessionId: null,
   agentViewModePickerSessionId: null,
+  hermesThreadPickerSessionId: null,
   openAppId: null,
   installedExtensions: [],
   // False until the first SUCCESSFUL extensionsList(). Distinguishes "no extensions"
@@ -494,6 +495,19 @@ export const createUiShellSlice: StateCreator<
       { agentViewModePickerSessionId: null },
       false,
       'uiShell/closeAgentViewModePicker',
+    ),
+
+  openHermesThreadPicker: sessionId =>
+    set(
+      { hermesThreadPickerSessionId: sessionId },
+      false,
+      'uiShell/openHermesThreadPicker',
+    ),
+  closeHermesThreadPicker: () =>
+    set(
+      { hermesThreadPickerSessionId: null },
+      false,
+      'uiShell/closeHermesThreadPicker',
     ),
 
   openColorFlagPicker: sessionId =>

@@ -36,6 +36,7 @@ import {
   type HermesConnectionDraft,
   type HermesConnectionInfo,
   type HermesConnectionState,
+  type HermesLaneListing,
   type HermesTestResult,
 } from '@shared/hermes/types.js'
 
@@ -336,6 +337,31 @@ export class HermesConnectionService extends EventEmitter {
       // when the owner expects the thread was a review finding (#1503).
       this.laneLookupFailedAt.set(id, Date.now())
       return null
+    }
+  }
+
+  /**
+   * Every messaging thread on the server, for "Change Telegram Thread…"
+   * (#1501). Unlike `defaultLaneKey`, this one DOES hand display names and
+   * routing keys to the renderer: choosing a thread is impossible without
+   * seeing them, and the user asked for exactly this list. Head ids stay
+   * here (HermesLaneChoice says why).
+   *
+   * Never throws, and does NOT touch `laneLookupFailedAt`: that flag is the
+   * "your new pane opened as a separate chat because the lookup failed"
+   * notice, and a failed listing in the picker is reported in the picker.
+   */
+  async listLanes(id: string): Promise<HermesLaneListing> {
+    try {
+      const lanes = await HermesHeadless.listLanes(this.restFor(id))
+      return {
+        ok: true,
+        lanes: lanes.map(({ sessionKey, platform, chatType, threadId, displayName, lastActiveAt }) => ({
+          sessionKey, platform, chatType, threadId, displayName, lastActiveAt,
+        })),
+      }
+    } catch (error) {
+      return { ok: false, error: describeError(error, this.connections.find((entry) => entry.id === id)?.baseUrl) }
     }
   }
 

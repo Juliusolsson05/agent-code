@@ -27,6 +27,7 @@ import { CloseOldAgentsSurface } from '@renderer/features/workspace/surfaces/Clo
 import { CloseCompletedAgentsSurface } from '@renderer/features/workspace/surfaces/CloseCompletedAgentsSurface'
 import { BulkProviderSwitchSurface } from '@renderer/features/workspace/surfaces/BulkProviderSwitchSurface'
 import { AgentViewModePickerSurface } from '@renderer/features/workspace/surfaces/AgentViewModePickerSurface'
+import { HermesThreadPickerSurface } from '@renderer/features/workspace/surfaces/HermesThreadPickerSurface'
 import { ColorFlagPickerSurface } from '@renderer/features/workspace/surfaces/ColorFlagPickerSurface'
 import { KeyboardShortcutsSurface } from '@renderer/features/settings/surfaces/KeyboardShortcutsSurface'
 import { RewindToPromptSurface } from '@renderer/features/workspace/surfaces/RewindToPromptSurface'
@@ -134,6 +135,9 @@ export const modalSurfaces: SurfaceEntry[] = [
   // skill's "Manage with Agent Code"; it paints over Settings because it opens
   // after it.
   { id: 'add-skill-dialog', Component: AddSkillDialogSurface },
+  // Appended per the contract above (#1501). Opened only from a session
+  // command that closes the palette first.
+  { id: 'hermes-thread-picker', Component: HermesThreadPickerSurface },
   // Built-in apps host. An app is always user-initiated and is the thing
   // awaiting input while open, so it should cover what is already on screen,
   // and it does: it opens after them (open order, see the stacking note above).

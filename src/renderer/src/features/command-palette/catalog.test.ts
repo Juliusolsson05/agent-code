@@ -144,6 +144,7 @@ const BASELINE_COMMAND_IDS: readonly string[] = [
   'reload-agent',
   'soft-reload-agent',
   'set-agent-view-mode',
+  'hermes-change-thread',
   'copy-resume-command',
   'duplicate-agent',
   'switch-provider',
@@ -276,12 +277,12 @@ const NAVIGATION_COMMAND_GROUP: readonly string[] = [
 const ids = (): string[] => builtInCommandCatalog.map(c => c.id)
 
 describe('built-in command catalog — baseline characterization', () => {
-  it('contains exactly the 143 governed commands in registration order', () => {
+  it('contains exactly the 145 governed commands in registration order', () => {
     // Order matters: this is the palette's empty-query browse order.
     expect(ids()).toEqual([...BASELINE_COMMAND_IDS])
   })
 
-  it('has exactly 143 commands', () => {
+  it('has exactly 145 commands', () => {
     // Stated separately from the order assertion because this number is the
     // thing that moves, and a bare count failure is a clearer signal than a
     // 99-line array diff.
@@ -319,11 +320,11 @@ describe('built-in command catalog — baseline characterization', () => {
     // Lane History (`lane-history`) → 140 with New Separate Hermes Chat (#1496:
     // New Hermes now follows the Telegram thread; this opts out) → 143 with
     // Sidekick, Sidekick Picker… and New Sidekick… (#1493) → 144 with Lane
-    // Back (`lane-back`, ⌥B).
+    // Back (`lane-back`, ⌥B) → 145 with Change Telegram Thread… (#1501).
     // Each step of that arithmetic was a deliberate edit to this line, which is the entire point of pinning it. (The two test
     // titles above had drifted to "115" while this line said 116; they now
     // track it again.)
-    expect(builtInCommandCatalog).toHaveLength(144)
+    expect(builtInCommandCatalog).toHaveLength(145)
   })
 
   it('reports no structural defects', () => {
@@ -370,9 +371,9 @@ describe('generated per-provider split commands', () => {
     // (#1190), then up by Reply to Reader Message (#1221, K2-4), then up by
     // New Lane Before, then up by Lane History, then up by New Separate Hermes
     // Chat (#1496), then up by the three Sidekick commands (#1493), then up by
-    // Lane Back.
+    // Lane Back, then up by Change Telegram Thread… (#1501).
     // Grok (#844) grew only the GENERATED term, 4 → 6, and Pi (#1132) 6 → 8.
-    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(134)
+    expect(builtInCommandCatalog.length - nonDefaultProviders.length * 2).toBe(135)
   })
 
   it('emits both directions for every non-default provider', () => {
@@ -529,9 +530,9 @@ describe('governance targets', () => {
     // Then `hermes-vertical` and `hermes-horizontal` (#1482, generated from
     // AGENT_PROVIDER_KINDS like Grok's and Pi's). Then `new-tiled-lane-before`,
     // then `lane-history`, then `hermes-separate-chat` (#1496). Then `sidekick-panel`, `sidekick-picker` and `new-sidekick` (#1493).
-    // Then `lane-back`.
-    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 64).toBe(110)
-    expect(builtInCommandCatalog).toHaveLength(144)
+    // Then `lane-back`. Then `hermes-change-thread` (#1501).
+    expect(builtInCommandCatalog.length + RETIRED_COMMAND_IDS.length - 65).toBe(110)
+    expect(builtInCommandCatalog).toHaveLength(145)
   })
 })
 
