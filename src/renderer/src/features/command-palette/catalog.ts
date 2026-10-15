@@ -7,6 +7,7 @@ import { paneCommands } from '@renderer/features/workspace/commands/paneCommands
 import { mcpCommands } from '@renderer/features/mcp/commands/mcpCommands'
 import { skillsCommands } from '@renderer/features/skills/commands/skillsCommands'
 import { sessionCommands } from '@renderer/features/workspace/commands/sessionCommands'
+import { hermesShellCommands } from '@renderer/features/hermes-chat/commands/hermesShellCommands'
 import { tabCommands } from '@renderer/features/workspace/commands/tabCommands'
 import { windowCommands } from '@renderer/features/workspace/commands/windowCommands'
 import { settingsCommands } from '@renderer/features/settings/commands/settingsCommands'
@@ -81,6 +82,9 @@ export const builtInCommandCatalog: readonly CommandDef[] = Object.freeze(exclud
   // regressions to users who navigate by position.
   ...globalEditorCommands,
   ...sessionCommands,
+  // Right after the session commands, so they sit near Change Telegram
+  // Thread… and the other Hermes entries in the browse order (#1528).
+  ...hermesShellCommands,
   // Right after the session commands, where the per-capability MCP toggles it
   // replaced used to sit (#1143), so the MCP family keeps its browse position.
   ...mcpCommands,
