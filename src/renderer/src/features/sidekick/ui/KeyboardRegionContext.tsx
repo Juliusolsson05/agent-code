@@ -42,6 +42,13 @@ export const REGION_NEUTRAL_SELECTOR = [
   // Sidekick's handle sits inside the panel's marked DOM, so without this a
   // resize silently took the keyboard away from the lane being typed in.
   '[role="separator"]',
+  // The docked side panels (Git, Worktrees, Agent Status, the debug panels)
+  // DESCRIBE the commanded agent — the sidekick while the keyboard is in the
+  // Sidekick (lane parity). Clicking into one used to hand the keyboard to the
+  // workspace, so the panel immediately switched to the lane agent and could
+  // never be used for the sidekick (#1517 review). A side panel is not a
+  // region of its own; the keyboard stays where it was.
+  '[data-slot="side-panel"]',
 ].join(', ')
 
 /**

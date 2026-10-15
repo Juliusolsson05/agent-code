@@ -648,3 +648,33 @@ Owner: "make sure spotlight works for the sidekick".
   - Lane picker leases ARE now cleared under Sidekick Spotlight (useRenderedLeaseHygiene; sidekick rows skipped). The earlier claim that the region gate protected them was wrong: picker handlers run before that gate.
   - While spotlit, the Sidekick owns the keyboard whatever `keyboardRegion` says. The useKeybinds gate keys on the flag too, and pointer/focus outside the panel no longer flips the region. The Surface re-pins the region when Settings closes.
   - Esc leaves Sidekick Spotlight even with a retained fullscreen Global Editor underneath.
+
+## Follow-up: lane parity — every agent command on the Sidekick (2026-10-14)
+
+Owner: "we need to make the sidekick expose all features such as copy assistant message etc that a lane would do". This **retires the v1 ruling** that palette commands never target a sidekick (Task 5 ruling above).
+
+- **Target.** `commandTargetSessionIdForState` asks `sidekickCommandTarget` (workspace/sidekickPanel.ts) first. The Sidekick owns the keyboard when all of these hold:
+  - the panel is open;
+  - Settings is not open;
+  - the keyboard region is `sidekick`, or Sidekick Spotlight is on.
+  While it owns the keyboard, the answer is the held row, or **null**, never a lane. That includes the empty "No sidekick yet" panel. It is checked before an open lane Spotlight/Reader, because those cover the lanes and not the Sidekick column.
+- **Inventory (verified, do not re-derive).** A read-only pass classified every target-reading command:
+  - **A, as-is:** view-prompts, rewind, undo-rewind, remove-cyber-block, reload, soft-reload, view mode, copy-resume, switch-provider, MCP, recording/debug, clear composer, tail, jump-latest, copy-last, copy-assistant, copy-code-block, title, color flag, TLDR/goal history, goal-loop-stop, agent-status, prompt templates.
+  - **B, lane/project only:** close-tab, pin, reader, the lane/row grammar, creation.
+  - **C, adapted:** close-pane, duplicate, linked, resume/search-conversations, browser pocket.
+- **Rulings.**
+  - Lane-only commands are refused through one wrapper: `excludeSidekickTargets` and `SIDEKICK_EXCLUDED_COMMAND_IDS` in `features/sidekick/commands/sidekickTarget.ts`, each with its WHY. Close Tab was data loss: with no projectId it closed the active project.
+  - ⌘W / Close Focused Session on a sidekick posts `uiShell.sidekickRemoveRequest`. SidekickPanelSurface turns that into a confirmed remove. `closeSession` cannot do it: it would push Undo Close as a project row and leave main's record behind.
+  - Keyboard routing in the Sidekick gate:
+    - the allowlist gains close-pane, reload, soft-reload, view mode, prompt-template, view-prompts, tail, jump-latest and the debug panel;
+    - the 'feed' context is admitted when the Sidekick feed is visible and the user is not typing;
+    - TLDR (⌘L) and Goal (⌘G) peeks share the hold controller, moved above the gate;
+    - 'dispatch' (lane grammar) and creation chords stay out.
+  - Copy pickers: a sidekick target counts as visible under a lane Spotlight/Reader, and lease hygiene spares sidekick rows unless Settings or a closed panel hides the Sidekick.
+  - External control (control.ts, commands.run) keeps lane semantics (`WORKSPACE_KEYBOARD_FLAGS`). commands.run is refused while the Sidekick owns the keyboard, because sidekicks are filtered out of everything the operator observes.
+  - `useCommandTargetInputs` re-renders the Git bar, Worktrees, Debug, Agent Status and the editor cwd when the keyboard crosses regions.
+- **Not done (follow-ups).**
+  - Reader Mode for a sidekick (same shape as Sidekick Spotlight).
+  - Browser Pocket in the Sidekick (needs a pocket placement).
+  - Duplicate as a new sidekick.
+  - Goal Loop overlay focus (⌘⇧G) when both the lane leaf and the sidekick leaf are `focused`.

@@ -1,3 +1,4 @@
+import { useAppStore } from '@renderer/app-state/store'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 
@@ -126,6 +127,30 @@ describe('ConversationsPicker', () => {
     await screen.findByText('break down this project')
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
     await waitFor(() => expect(ws.newTab).toHaveBeenCalled())
+  })
+
+  it('never resumes into a sidekick, however the picker was opened (#1517 review)', async () => {
+    // Resume is refused for a sidekick target at the command, but external
+    // control can open this picker directly; replaceSession would then pull a
+    // repo conversation into the sidekick and keep it a sidekick.
+    install()
+    const onClose = vi.fn()
+    const base = workspace()
+    const ws = workspace({ state: { ...base.state,
+      sessions: { ...base.state.sessions, sk: { cwd: '/home/u', kind: 'claude', sidekickId: 'side' } },
+      sidekickPanel: { open: true, width: 420, sidekickId: 'side' } } })
+    useAppStore.setState({ keyboardRegion: 'sidekick' })
+    try {
+      render(<ConversationsPicker open focusSearch={false} workspace={ws} onClose={onClose} />)
+      fireEvent.click(screen.getByRole('button', { name: /^everywhere$/i }))
+      await screen.findByText('break down this project')
+      fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
+      expect(await screen.findByText(/into the Sidekick/)).toBeInTheDocument()
+      expect(ws.replaceSession).not.toHaveBeenCalled()
+      expect(onClose).not.toHaveBeenCalled()
+    } finally {
+      useAppStore.setState({ keyboardRegion: 'workspace' })
+    }
   })
 
   it('stays open and says why when no pane is selected to resume into (#1241)', async () => {

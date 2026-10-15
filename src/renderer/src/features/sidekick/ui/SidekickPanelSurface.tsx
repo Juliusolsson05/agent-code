@@ -9,6 +9,8 @@ import { useSidekickIndexSync } from '@renderer/features/sidekick/state/useSidek
 import { useKeyboardRegionFollowsPointer } from '@renderer/features/sidekick/ui/KeyboardRegionContext'
 import { SidekickPanel } from '@renderer/features/sidekick/ui/SidekickPanel'
 import { SidekickPicker } from '@renderer/features/sidekick/ui/SidekickPicker'
+import { confirmRemoveSidekick } from '@renderer/features/sidekick/ui/confirmRemoveSidekick'
+import { useGlobalToast } from '@renderer/ui/GlobalToastContext'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 import type { SidekickIndexView, SidekickReleasedEvent } from '@shared/sidekicks/types'
 
@@ -59,6 +61,17 @@ export function SidekickPanelSurface() {
     const next = scrubbedPanelPointer(view, pointer, holdsPointer)
     if (next !== pointer) workspace.setSidekickPanel({ sidekickId: next })
   }, [holdsPointer, pointer, view, workspace])
+
+  // ⌘W / Close Focused Session on a sidekick (paneCommands' close-pane posts
+  // the request; see uiShell's sidekickRemoveRequest for why it is a request).
+  const removeRequest = useAppStore(state => state.sidekickRemoveRequest)
+  const requestRemove = useAppStore(state => state.requestSidekickRemove)
+  const { showToast } = useGlobalToast()
+  useEffect(() => {
+    if (!removeRequest) return
+    requestRemove(null)
+    void confirmRemoveSidekick(actions, removeRequest, showToast)
+  }, [actions, removeRequest, requestRemove, showToast])
 
   // A hidden panel cannot own the keyboard — closed, or retained under
   // Settings (below). Without the second case, typing into a Settings field

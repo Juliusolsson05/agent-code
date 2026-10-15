@@ -6,6 +6,7 @@ import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useKeybinds } from './useKeybinds'
 import { coerceSettings } from '@renderer/app-state/settings/persistence'
+import { useAppStore as useRealAppStore } from '@renderer/app-state/store'
 
 const harness = vi.hoisted(() => ({
   appState: {} as Record<string, unknown>,
@@ -134,27 +135,96 @@ describe('focus-mode keyboard ownership', () => {
   })
 
   it('while the Sidekick panel owns the keyboard, lane and layout chords do nothing (#1493 review round 1, F1)', () => {
-    // ⌘W used to close the focused LANE agent while the user typed in the
-    // Sidekick panel, ⌥↓ moved a Dispatch row, Escape left Spotlight. Only
-    // the panel's own commands and the palette entry point cross, and a
-    // refused chord is NOT prevented: the sidekick's composer still gets it.
+    // ⌘⇧W used to close the focused LANE's project while the user typed in
+    // the Sidekick panel, ⌥↓ moved a Dispatch row, Escape left Spotlight.
+    // Lane and project grammar never crosses, and a refused chord is NOT
+    // prevented: the sidekick's composer still gets it.
+    //
+    // ⌘W DOES cross since lane parity (#1493 follow-up): it is the agent's
+    // own Close, routed as close-pane, which acts on the command target — the
+    // sidekick — and asks to remove it (paneCommands). It no longer means the
+    // lane agent behind the panel.
     harness.appState = { ...harness.appState, keyboardRegion: 'sidekick' }
     const { workspace } = makeWorkspace('spotlight' as const)
     const view = render(<KeyboardHarness workspace={workspace} />)
 
-    const closePane = new KeyboardEvent('keydown', { metaKey: true, code: 'KeyW', key: 'w', bubbles: true, cancelable: true })
-    document.body.dispatchEvent(closePane)
+    const closeTab = new KeyboardEvent('keydown', { metaKey: true, shiftKey: true, code: 'KeyW', key: 'W', bubbles: true, cancelable: true })
+    document.body.dispatchEvent(closeTab)
     pressOptionArrow('ArrowDown')
     const escape = new KeyboardEvent('keydown', { code: 'Escape', key: 'Escape', bubbles: true, cancelable: true })
     document.body.dispatchEvent(escape)
     fireEvent.keyDown(document, { metaKey: true, code: 'KeyJ', key: 'j' })
     fireEvent.keyDown(document, { metaKey: true, shiftKey: true, code: 'KeyP', key: 'P' })
+    const closePane = new KeyboardEvent('keydown', { metaKey: true, code: 'KeyW', key: 'w', bubbles: true, cancelable: true })
+    document.body.dispatchEvent(closePane)
 
     const invoked = (harness.appState.requestCommandInvocation as ReturnType<typeof vi.fn>).mock.calls.map(call => call[0])
-    expect(invoked).toEqual(['sidekick-panel', 'open-command-palette'])
-    expect(closePane.defaultPrevented).toBe(false)
+    expect(invoked).toEqual(['sidekick-panel', 'open-command-palette', 'close-pane'])
+    expect(closeTab.defaultPrevented).toBe(false)
     expect(escape.defaultPrevented).toBe(false)
     expect(workspace.toggleSpotlight).not.toHaveBeenCalled()
+    view.unmount()
+  })
+
+  it('the Sidekick answers to a lane agent\'s chords: Reload, End (feed), and its own copy picker even under a lane Spotlight (lane parity)', () => {
+    // The command target is read from the REAL store (the selector imports
+    // it directly), the router's own state from the harness: set both.
+    const realBefore = useRealAppStore.getState()
+    useRealAppStore.setState({ keyboardRegion: 'sidekick', sidekickSpotlight: false, settingsPageOpen: false })
+    harness.appState = { ...harness.appState, keyboardRegion: 'sidekick' }
+    const { workspace } = makeWorkspace('spotlight' as const)
+    const picker = { uuid: 'u', index: 0 }
+    const sidekickRuntime = { ...emptyRuntime(), assistantPicker: picker }
+    const pickerMove = vi.fn()
+    const withSidekick = {
+      ...workspace,
+      state: {
+        ...workspace.state,
+        sessions: { ...workspace.state.sessions, sk: { cwd: '/home', kind: 'claude' as const, sidekickId: 'side' } },
+        sidekickPanel: { open: true, width: 420, sidekickId: 'side' },
+      },
+      runtimes: { ...workspace.runtimes, sk: sidekickRuntime },
+      pickerMove,
+    } as unknown as Workspace
+    const view = render(<KeyboardHarness workspace={withSidekick} />)
+
+    fireEvent.keyDown(document, { altKey: true, shiftKey: true, code: 'KeyA', key: 'Å' })
+    fireEvent.keyDown(document, { code: 'End', key: 'End' })
+    // A creation chord spawns into a LANE: it stays a lane chord.
+    fireEvent.keyDown(document, { altKey: true, code: 'KeyD', key: '∂' })
+    fireEvent.keyDown(document, { code: 'ArrowUp', key: 'ArrowUp' })
+
+    const invoked = (harness.appState.requestCommandInvocation as ReturnType<typeof vi.fn>).mock.calls.map(call => call[0])
+    expect(invoked).toEqual(['reload-agent', 'jump-latest-message'])
+    // The lane Spotlight is open, yet the sidekick's own picker moves: the
+    // Sidekick column is on screen beside it.
+    expect(pickerMove).toHaveBeenCalledWith('sk', -1)
+    view.unmount()
+    useRealAppStore.setState(realBefore, true)
+  })
+
+  it('a user-assigned chord for any agent command works in the Sidekick, and a fullscreen editor does not swallow ⌘W there (#1517 review)', () => {
+    // The first cut admitted only an id allowlist, so Copy Assistant Message
+    // bound by the user to ⌘⇧C did nothing in the Sidekick; and the
+    // fullscreen-editor guard ate ⌘W before the Sidekick gate although the
+    // Sidekick sits beside the editor, not under it.
+    harness.editorFullscreen = true
+    harness.appState = {
+      ...harness.appState,
+      keyboardRegion: 'sidekick',
+      globalEditorOpen: true,
+      settings: { agentViewMode: 'agent', commandKeybindingOverrides: { 'copy-assistant-message': ['Cmd+Shift+C'] } },
+    }
+    const { workspace } = makeWorkspace('spotlight' as const)
+    const view = render(<KeyboardHarness workspace={workspace} />)
+
+    fireEvent.keyDown(document, { metaKey: true, shiftKey: true, code: 'KeyC', key: 'C' })
+    const closePane = new KeyboardEvent('keydown', { metaKey: true, code: 'KeyW', key: 'w', bubbles: true, cancelable: true })
+    document.body.dispatchEvent(closePane)
+
+    const invoked = (harness.appState.requestCommandInvocation as ReturnType<typeof vi.fn>).mock.calls.map(call => call[0])
+    expect(invoked).toEqual(['copy-assistant-message', 'close-pane'])
+    harness.editorFullscreen = false
     view.unmount()
   })
 
@@ -195,8 +265,12 @@ describe('focus-mode keyboard ownership', () => {
     const escape = new KeyboardEvent('keydown', { code: 'Escape', key: 'Escape', bubbles: true, cancelable: true })
     document.body.dispatchEvent(escape)
 
+    // ⌘W reaches the SIDEKICK's Close since lane parity (#1517): close-pane
+    // acts on the command target, which is the spotlit sidekick
+    // (sidekickLaneParity tests pin that), and asks to remove it. What must
+    // never happen — a hidden lane agent closing — is covered there.
     const invoked = (harness.appState.requestCommandInvocation as ReturnType<typeof vi.fn>).mock.calls.map(call => call[0])
-    expect(invoked).not.toContain('close-pane')
+    expect(invoked).toEqual(['close-pane'])
     expect(setSidekickSpotlight).toHaveBeenCalledWith(false)
     expect(workspace.toggleSpotlight).not.toHaveBeenCalled()
     harness.editorFullscreen = false

@@ -9,6 +9,7 @@ import {
 import { enabledAgentProviderKindsSnapshot } from '@renderer/features/providers/store'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { extractLastAssistantText } from '@renderer/lib/copyAssistant'
+import { useAppStore } from '@renderer/app-state/store'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 import { panel, toggle } from '@renderer/features/command-palette/commandState'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
@@ -119,6 +120,18 @@ export const paneCommands: CommandDef[] = [
     // the command is offered only while that agent still exists.
     when: ({ workspace, target }) => target === undefined || commandTarget({ workspace, target }) !== null,
     run: ({ workspace, target }) => {
+      // A sidekick is closed by REMOVING it (#1493 follow-up). closeSession
+      // cannot do it: it would kill the process, push an Undo Close entry that
+      // restores the row as a project agent, and leave main's sidekick record
+      // behind — and today it simply no-ops on a row with no project. Removal
+      // is main-side, so the Sidekick surface runs it, behind the same confirm
+      // the chip menu and picker use.
+      const targeted = commandTarget({ workspace, target })
+      const sidekickId = targeted ? workspace.state.sessions[targeted]?.sidekickId : undefined
+      if (sidekickId) {
+        useAppStore.getState().requestSidekickRemove(sidekickId)
+        return
+      }
       if (target === undefined) {
         workspace.closeFocused()
         return

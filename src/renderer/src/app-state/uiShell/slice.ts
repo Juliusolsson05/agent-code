@@ -58,6 +58,7 @@ export const createUiShellSlice: StateCreator<
   agentStatusPanelOpen: false,
   keyboardRegion: 'workspace',
   sidekickSpotlight: false,
+  sidekickRemoveRequest: null,
   sidekickPickerOpen: false,
   sidekickPickerMode: 'switch',
   performancePanelOpen: false,
@@ -336,6 +337,8 @@ export const createUiShellSlice: StateCreator<
     set(state => (state.keyboardRegion === region ? state : { keyboardRegion: region }), false, 'uiShell/setKeyboardRegion'),
   setSidekickSpotlight: open =>
     set(state => (state.sidekickSpotlight === open ? state : { sidekickSpotlight: open }), false, 'uiShell/setSidekickSpotlight'),
+  requestSidekickRemove: sidekickId =>
+    set({ sidekickRemoveRequest: sidekickId }, false, 'uiShell/requestSidekickRemove'),
   openSidekickPicker: (mode = 'switch') =>
     set({ sidekickPickerOpen: true, sidekickPickerMode: mode }, false, 'uiShell/openSidekickPicker'),
   closeSidekickPicker: () => set({ sidekickPickerOpen: false }, false, 'uiShell/closeSidekickPicker'),
