@@ -18,9 +18,27 @@ import { sidekickSpotlightActive } from '@renderer/features/sidekick/state/sidek
 // and input behaviour has its own tests; here it is a textarea, which is all
 // the panel's focus rule looks for. Hermes connections are irrelevant to a
 // Claude sidekick and would need the IPC subscription.
-vi.mock('@renderer/workspace/tile-tree/TileTree', () => ({
-  renderWorkspaceLeaf: (sessionId: string) => <textarea aria-label={`leaf ${sessionId}`} />,
-}))
+// The stand-in is shaped like the real TileLeaf where focus is concerned (the
+// focus follow-up: the first stand-in rendered a bare textarea AT ONCE, which
+// is exactly what hid the bug): the composer carries `data-composer-input`,
+// an unrelated queued-prompt textarea comes first in the DOM, and the
+// composer can be held back until "the runtime boots" (leafHarness.late).
+const leafHarness = vi.hoisted(() => ({ late: false, reveal: () => {} }))
+vi.mock('@renderer/workspace/tile-tree/TileTree', async () => {
+  const { useEffect, useState } = await import('react')
+  function Leaf({ sessionId }: { sessionId: string }) {
+    const [ready, setReady] = useState(!leafHarness.late)
+    useEffect(() => { leafHarness.reveal = () => setReady(true) }, [])
+    return (
+      <>
+        <textarea aria-label={`queued ${sessionId}`} />
+        {ready ? <textarea aria-label={`leaf ${sessionId}`} data-composer-input={sessionId} /> : null}
+      </>
+    )
+  }
+  return { renderWorkspaceLeaf: (sessionId: string) => <Leaf sessionId={sessionId} /> }
+})
+
 vi.mock('@renderer/features/hermes-chat/useHermesConnections', () => ({ useHermesConnections: () => null }))
 // The surface test below mounts SidekickPanelSurface; its window-wide duties
 // (index sync over IPC, persistence to main) are not what it is about.
@@ -90,6 +108,30 @@ describe('Sidekick panel', () => {
     expect(showSidekick).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     await waitFor(() => expect(showSidekick).toHaveBeenCalledTimes(2))
+  })
+
+  it('waits for the composer that mounts AFTER the row is held, and never lands in another textarea (focus follow-up)', async () => {
+    // The real bug: the composer mounts once the runtime boots, after the
+    // one-frame focus attempt had already given up, so the caret stayed in
+    // the lane composer and typing went to the lane.
+    useSidekickIndexStore.getState().accept(view([summary('this-window')]))
+    leafHarness.late = true
+    const lane = document.createElement('textarea')
+    document.body.append(lane)
+    lane.focus()
+    act(() => { useAppStore.getState().setKeyboardRegion('sidekick') })
+    try {
+      render(<SidekickPanel workspace={workspaceWith({ sk: { kind: 'claude', cwd: HOME, sidekickId: ID } })} actions={actionsWith(vi.fn())} />)
+      // Nothing to focus yet, but the caret leaves the LANE at once — left
+      // there, Enter submitted the lane's draft through its own textarea
+      // handler (#1524 review). The column holds it; the queued-prompt editor
+      // is never chosen.
+      expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Sidekick' }))
+      act(() => { leafHarness.reveal() })
+      await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('leaf sk')))
+    } finally {
+      leafHarness.late = false
+    }
   })
 
   it('moves the caret into the sidekick when it owns the keyboard, even if mounted already focused (F2)', async () => {
@@ -286,5 +328,49 @@ describe('Sidekick Spotlight (#1493 follow-up)', () => {
     expect(confirmRemove).toHaveBeenCalledTimes(1)
     expect(confirmRemove.mock.calls[0]?.[1]).toBe(ID)
     expect(useAppStore.getState().sidekickRemoveRequest).toBeNull()
+  })})
+
+describe('Sidekick focus claim does not fight the user (#1524 review)', () => {
+  function mountLate() {
+    useSidekickIndexStore.getState().accept(view([summary('this-window')]))
+    leafHarness.late = true
+    act(() => { useAppStore.getState().setKeyboardRegion('sidekick') })
+    render(<SidekickPanel workspace={workspaceWith({ sk: { kind: 'claude', cwd: HOME, sidekickId: ID } })} actions={actionsWith(vi.fn())} />)
+  }
+  afterEach(() => { leafHarness.late = false })
+
+  it('pauses while a dialog holds focus, and lands in the composer once focus returns to the column', async () => {
+    mountLate()
+    const dialog = document.createElement('div')
+    dialog.setAttribute('role', 'dialog')
+    const field = document.createElement('input')
+    dialog.append(field)
+    document.body.append(dialog)
+    act(() => { field.focus() })
+    // Let the MutationObserver callback (a microtask) run before asserting.
+    await act(async () => { leafHarness.reveal(); await new Promise(resolve => setTimeout(resolve, 0)) })
+    // The palette's focus trap keeps its caret: no tug of war.
+    expect(document.activeElement).toBe(field)
+    dialog.remove()
+    act(() => { screen.getByRole('region', { name: 'Sidekick' }).focus() })
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('leaf sk')))
+  })
+
+  it('is cancelled when the user focuses something outside the column before the input appears', async () => {
+    mountLate()
+    const sidePanelInput = document.createElement('input')
+    document.body.append(sidePanelInput)
+    act(() => { sidePanelInput.focus() })
+    await act(async () => { leafHarness.reveal(); await new Promise(resolve => setTimeout(resolve, 0)) })
+    expect(document.activeElement).toBe(sidePanelInput)
+  })
+
+  it('a chip click lands in the composer, not on the chip', async () => {
+    useSidekickIndexStore.getState().accept(view([summary('this-window')]))
+    act(() => { useAppStore.getState().setKeyboardRegion('workspace') })
+    render(<SidekickPanel workspace={workspaceWith({ sk: { kind: 'claude', cwd: HOME, sidekickId: ID } })} actions={actionsWith(vi.fn())} />)
+    const chip = screen.getByRole('button', { name: /^S1/ })
+    act(() => { chip.focus(); fireEvent.click(chip) })
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('leaf sk')))
   })
 })

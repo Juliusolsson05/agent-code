@@ -1,4 +1,5 @@
-import { cleanup, fireEvent, render, within } from '@testing-library/react'
+import { useAppStore as useRealAppStore } from '@renderer/app-state/store'
+import { cleanup, fireEvent, render, within, act } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { SpotlightView } from '@renderer/features/spotlight/ui/SpotlightView'
@@ -25,7 +26,9 @@ vi.mock('@renderer/app-state/hooks', () => ({
   useAppStore: (selector: (state: typeof appState) => unknown) => selector(appState),
 }))
 vi.mock('@renderer/workspace/tile-tree/TileTree', () => ({
-  renderWorkspaceLeaf: (sessionId: string) => <div data-testid="leaf" data-session-id={sessionId} />,
+  renderWorkspaceLeaf: (sessionId: string, focusedSessionId: string | null) => (
+    <div data-testid="leaf" data-session-id={sessionId} data-focused={String(focusedSessionId === sessionId)} />
+  ),
 }))
 
 const FIXTURE = loadRecordedDispatchWorkspace()
@@ -110,4 +113,19 @@ describe('SpotlightView header', () => {
     fireEvent.keyDown(radios[2]!, { key: 'ArrowLeft', altKey: true })
     expect(document.activeElement).toBe(radios[2])
   })
+  it('dims the Spotlight agent while the keyboard is in the Sidekick, keeping its layout focus (#1524 review)', () => {
+    // Only the LOOK changes: the leaf keeps `focused` (layout focus), so
+    // returning to the workspace is not a focus change that steals the caret.
+    const realBefore = useRealAppStore.getState()
+    try {
+      const view = renderSpotlight()
+      expect(view.queryByTestId('spotlight-dim')).toBeNull()
+      act(() => { useRealAppStore.setState({ keyboardRegion: 'sidekick' }) })
+      expect(view.getByTestId('spotlight-dim')).toBeTruthy()
+      expect(view.getByTestId('leaf').getAttribute('data-focused')).toBe('true')
+    } finally {
+      useRealAppStore.setState(realBefore, true)
+    }
+  })
+
 })

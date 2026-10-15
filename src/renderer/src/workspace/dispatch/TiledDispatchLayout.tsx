@@ -1,3 +1,4 @@
+import { useSidekickOwnsKeyboard } from '@renderer/features/sidekick/ui/KeyboardRegionContext'
 import { useCommandChordLabel } from '@renderer/features/command-keybindings/useCommandChord'
 import { LanePortChip } from '@renderer/features/browser-pocket/ui/LanePortChip'
 import { Fragment, useCallback, useMemo, useRef } from 'react'
@@ -317,6 +318,7 @@ function GridRowView({
   // Live chord for the empty-lane hint (plan H4) — the hint used to say
   // "press ⌥↓" literally, which lied after a rebind of Select Next Agent.
   const nextAgentChord = useCommandChordLabel('dispatch-select-next-agent')
+  const sidekickOwnsKeyboard = useSidekickOwnsKeyboard()
   const start = rowStartIndex(grid.rows, rowIndex)
   const end = start + gridRow.length
   const laneWeights = normalizedWeights(
@@ -437,6 +439,20 @@ function GridRowView({
           const lane = grid.lanes[laneIndex]
           const resolved = laneResolutions[laneIndex]
           const focused = grid.focusedLane === laneIndex
+          // LOOKS focused only while the WORKSPACE owns the keyboard: with the
+          // keyboard in the Sidekick every lane renders dimmed with a plain
+          // strip (useSidekickOwnsKeyboard WHY).
+          //
+          // WHY only the LOOK, and the leaf keeps `focused` (#1524 review):
+          // the first cut also passed the leaf focused=false. The leaf's
+          // `focused` is LAYOUT focus — pocket placement, hints, and the leaf's
+          // focus effect read it — so flipping it with the keyboard region
+          // moved a shared browser pocket between lanes, and coming back to
+          // the workspace counted as a focus CHANGE, which made the lane
+          // composer steal the caret from Monaco. Keyboard ownership is
+          // already gated inside the leaf (useInteractiveOwnership's region
+          // term), so only the rendering needed to change.
+          const looksFocused = focused && !sidekickOwnsKeyboard
           return (
             <div
               key={laneIndex}
@@ -484,7 +500,7 @@ function GridRowView({
                   rows={rows}
                   gridRow={gridRow}
                   selectedSessionId={lane?.selectedSessionId}
-                  focused={focused}
+                  focused={looksFocused}
                   // This lane's index, never `grid.focusedLane`: the strip is
                   // the lane-addressed selector, and the index is the one that
                   // follows focus. If both followed focus, the first lane would
@@ -524,7 +540,7 @@ function GridRowView({
                     resolved.paneLabel,
                     // The dim overlay below cannot cover a pocket page (it lives
                     // in the host layer), so the page dims itself from this.
-                    { surface: 'lane', laneIndex, focused, dimmed: !focused },
+                    { surface: 'lane', laneIndex, focused, dimmed: !looksFocused },
                   )
                 ) : (
                   <div className="flex h-full min-h-0 flex-col">
@@ -590,7 +606,7 @@ function GridRowView({
                 )}
                 </LaneSlotProvider>
                 {resolved && <LanePortChip sessionId={resolved.sessionId} workspace={workspace} />}
-                {!focused && (
+                {!looksFocused && (
                   <div className="absolute inset-0 pointer-events-none bg-canvas/34 ring-1 ring-inset ring-border" />
                 )}
               </div>
