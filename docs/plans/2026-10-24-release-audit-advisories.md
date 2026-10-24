@@ -7,7 +7,8 @@ Short plan. The shape is known: the production audit gate (`npm run audit:produc
 
 ## Change
 - `package.json`: raise the floors of the two direct dependencies to their fixed releases, inside their current majors: `@modelcontextprotocol/sdk` to `^1.32.2`, `zod` to `^4.6.7`.
-- `package-lock.json`: refreshed with `npm audit fix --package-lock-only`, which moves the transitive ones (`proxy-addr`, `body-parser`, `fast-uri`, `hono`, `ip-address`, and the voice-dictation package's `vitest`) to their fixed versions. No `--force`, no semver-major moves.
+- `packages/workflow-mcp` submodule: moved to Juliusolsson05/workflow-mcp#83, which raises that package's own exact pins (MCP SDK 1.30.0 → 1.32.2, zod 4.6.5 → 4.6.7, fast-uri override → 3.1.9). The root bump alone left two highs from those nested pins.
+- `package-lock.json`: targeted `npm update` of only the affected packages: `@modelcontextprotocol/sdk`, `zod`, `body-parser`, `proxy-addr`, `fast-uri`, `hono`, `ip-address` (plus `qs` and `content-type`, which follow body-parser). No majors.
 
 ## Tests
 No new tests: there is no behaviour to pin. The contract is the existing suite plus the audit gate, run by CI on the PR. Behaviour risk sits in the MCP SDK minor bump (1.29 → 1.32), which the existing MCP and workflow-mcp tests exercise.
@@ -17,3 +18,8 @@ Locally: `npm audit --omit=dev --audit-level=high` on the refreshed lockfile. Fu
 
 ## Out of scope
 Cutting the release itself (version bump and `release.yml` dispatch follow the merge, per RELEASE.md), and any audit-policy change.
+
+## Rulings
+- Ruling: targeted `npm update` instead of `npm audit fix`. `audit fix` also pulled Electron 43.7 → 43.8, which touches native modules and isn't needed to clear the gate. Cost if wrong: none; Electron can move in its own PR.
+- Ruling: keep the five dev-only optional wasm entries (`@emnapi/*`, `@napi-rs/wasm-runtime`, `@tybys/wasm-util`, Tailwind's wasm32 fallback) that local npm 11.11 prunes. Restored unchanged so the lockfile diff is only the security fix. Cost if wrong: CI's `npm ci` reports drift, and we regenerate with CI's npm.
+- Ruling: the voice-dictation `vitest`/`@vitest/*` advisories stay. They're moderate and under the gate's `high` threshold, and they live in another submodule. Cost if wrong: none for release; a follow-up in that repo.
