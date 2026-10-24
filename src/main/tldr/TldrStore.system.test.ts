@@ -103,7 +103,11 @@ describe('TLDR MCP and durable summaries', () => {
 
   it('advertises no reporting tool or instructions when disabled', async () => {
     const { client, store } = await setup([])
-    await expect(client.callTool({ name: 'tldr_update', arguments: { text: 'Must not be saved.' } })).rejects.toMatchObject({ code: -32601 })
+    expect((await client.listTools()).tools.map(tool => tool.name)).not.toContain('tldr_update')
+    // The MCP SDK answers an unknown tool with an isError result since 1.32 and threw before
+    // (-32601); either way the call must fail and save nothing, which the store check below proves.
+    const call = await client.callTool({ name: 'tldr_update', arguments: { text: 'Must not be saved.' } }).catch((error: unknown) => ({ isError: true, error }))
+    expect(call.isError).toBe(true)
     expect(client.getInstructions()).toBeUndefined()
     expect(await store.read(['agent-1'])).toEqual({})
   })
