@@ -3,6 +3,10 @@
 // reads env flags at module load) is imported. See
 // `./loadEnv.ts` for the rationale.
 import '@main/loadEnv.js'
+// Also side-effect, also first: drops the CLAUDE_CODE_CHILD_SESSION family a
+// parent agent leaves on us, which otherwise turns off transcript saving in
+// every Claude we spawn. See `./scrubParentAgentEnv.ts`.
+import '@main/scrubParentAgentEnv.js'
 import { mainOperations } from '@main/performance/operations.js'
 import { monitorCoordinator } from '@main/performance/MonitorCoordinator.js'
 import { mainProbe } from '@main/performance/MainProbe.js'
