@@ -212,7 +212,8 @@ user-chosen name. A `name` that merely repeats the title falls through to
 
 "Unwrapping" is a closed list, each entry proven by a fixture: `<stt note=…>…
 </stt>` → inner text; `<orchestration-handoff>…<task>X</task>` → `X` (the child's
-label is its task); `# AGENTS.md instructions for …`, `<environment_context>`,
+label is its task); `# AGENTS.md instructions[ for …]` (Codex omits ` for <dir>`
+for a global `~/.codex/AGENTS.md`), `<environment_context>`,
 `<command-name>…`, `<local-command-caveat>…`, `<local-command-stdout>…` → skip
 to the next user prompt. A wrapper not in the list is not stripped; it falls
 through to `cwd`, and the fixture that surfaces it is the signal to extend the
@@ -278,7 +279,7 @@ replaced by `p:<sha8>:<len>` **except** an allowlist of structural keys
 closed list of **wrapper prefixes** kept verbatim for their first 40 characters
 (`<orchestration-handoff>`, `<stt note=`, `<command-name>`,
 `<local-command-caveat>`, `<local-command-stdout>`, `# AGENTS.md instructions
-for`, `<environment_context>`, `# Handoff Summary`, `# Portable handoff
+for`, `# AGENTS.md instructions`, `<environment_context>`, `# Handoff Summary`, `# Portable handoff
 summary`). Label tests therefore assert `labelSource` and placeholder equality,
 never readable text; the live suite asserts readable text locally.
 

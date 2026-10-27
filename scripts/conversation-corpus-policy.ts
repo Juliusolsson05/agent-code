@@ -52,6 +52,10 @@ export const KEPT_WRAPPER_PREFIXES: readonly string[] = [
   '<system-reminder>',
   '<task-notification>',
   '# AGENTS.md instructions for',
+  // The directory-less form Codex writes for a global ~/.codex/AGENTS.md.
+  // After the ` for` entry because the first match wins and the longer prefix
+  // must keep its verbatim bytes.
+  '# AGENTS.md instructions',
   '# Handoff Summary',
   '# Portable handoff summary',
   // App-authored, not private: the title Agent Code gives an OpenCode Terminal

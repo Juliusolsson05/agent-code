@@ -29,7 +29,7 @@ const short = (cwd: string) => cwd.replace(manifest.repoRoot, '<repo>').replace(
 
 // The documented rules of docs/decomposition/conversations.md §2.2–2.4,
 // restated here by hand (never imported from the catalog).
-const NOT_A_PROMPT = ['# AGENTS.md instructions for', '<environment_context>', '<command-name>', '<local-command-caveat>', '<local-command-stdout>', '<recommended_plugins>', '<user_instructions>', '<system-reminder>', '<task-notification>', 'This session is being continued from a previous conversation']
+const NOT_A_PROMPT = ['# AGENTS.md instructions', '<environment_context>', '<command-name>', '<local-command-caveat>', '<local-command-stdout>', '<recommended_plugins>', '<user_instructions>', '<system-reminder>', '<task-notification>', 'This session is being continued from a previous conversation']
 type First = { text: string; wrapper: 'stt' | 'orchestration-handoff' | 'projected-handoff' | null } | null
 function firstPromptOf(texts: string[]): First {
   for (const raw of texts) {
