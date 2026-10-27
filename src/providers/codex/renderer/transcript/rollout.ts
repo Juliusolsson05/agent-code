@@ -79,8 +79,20 @@ function isCodexEnvironmentContextText(text: string): boolean {
   return /^\s*<environment_context\b/.test(text)
 }
 
+// WHY start AND end marker, and ` for <dir>` optional: this mirrors Codex's
+// own recogniser (UserInstructions::type_markers = ("# AGENTS.md
+// instructions", "</INSTRUCTIONS>") through matches_marked_text in
+// codex-rs/context-fragments/src/fragment.rs — trimmed, ASCII
+// case-insensitive start + end). The ` for <dir>` suffix is only written when
+// the instructions came from a project directory; a global ~/.codex/AGENTS.md
+// produces the bare `# AGENTS.md instructions\n\n<INSTRUCTIONS>` header. The
+// old `instructions for ` regex missed that bare form, so the whole global
+// AGENTS.md + environment_context rendered as a user prompt (debug bundle
+// 2026-10-27T17-09-56; 26 of 36 local-corpus preambles are bare). Requiring
+// the closing tag keeps a real prompt that merely opens with the heading.
 function isCodexAgentsMdPreambleText(text: string): boolean {
-  return /^\s*# AGENTS\.md instructions for /.test(text)
+  const trimmed = text.trim()
+  return /^# agents\.md instructions(?: for [^\n]*)?\n/i.test(trimmed) && /<\/instructions>$/i.test(trimmed)
 }
 
 function isCodexSubagentNotificationText(text: string): boolean {

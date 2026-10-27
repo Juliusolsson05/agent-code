@@ -4,7 +4,7 @@
 // listers dropped every `<`-prefixed text as "a Claude Code system wrapper".
 // That is false for `<stt …>` (a prompt the user dictated), loses the task
 // text inside `<orchestration-handoff>`, and does nothing about Codex's
-// `# AGENTS.md instructions for …` injection, which is why every Codex row
+// `# AGENTS.md instructions[ for …]` injection, which is why every Codex row
 // read the same. Each entry below is proven by a corpus record; a wrapper not
 // listed is treated as "not a prompt", and the fixture that surfaces it is
 // the signal to extend the list, never a heuristic.
@@ -18,7 +18,11 @@ export type UnwrappedUserText = {
 
 /** Injected by a provider or by Agent Code; never something the user meant as a prompt. */
 const NOT_A_PROMPT_PREFIXES: readonly string[] = [
-  '# AGENTS.md instructions for',
+  // No ` for`: Codex only appends ` for <dir>` to a PROJECT AGENTS.md; a global
+  // ~/.codex/AGENTS.md is written as a bare `# AGENTS.md instructions` header
+  // (codex-rs user_instructions.rs; 26 of 36 local-corpus preambles). The old
+  // `… for` prefix let the bare one through as the conversation's title.
+  '# AGENTS.md instructions',
   '<environment_context>',
   '<command-name>',
   '<local-command-caveat>',
