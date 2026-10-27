@@ -22,6 +22,11 @@ const NOT_A_PROMPT_PREFIXES: readonly string[] = [
   // ~/.codex/AGENTS.md is written as a bare `# AGENTS.md instructions` header
   // (codex-rs user_instructions.rs; 26 of 36 local-corpus preambles). The old
   // `… for` prefix let the bare one through as the conversation's title.
+  // Prefix-only on purpose, unlike the feed's start+end check in
+  // providers/codex/renderer/transcript/rollout.ts: Codex's own index
+  // (state_5.sqlite) stores the preamble and <environment_context> as ONE
+  // title string ending in `</environment_context>`, so requiring
+  // `</INSTRUCTIONS>` here would bring those titles back.
   '# AGENTS.md instructions',
   '<environment_context>',
   '<command-name>',

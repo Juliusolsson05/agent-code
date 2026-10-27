@@ -27,3 +27,13 @@ preamble renders as a user prompt (26 of 36 local-corpus preambles).
 Other injected user rows seen in the replay (`<hook_prompt>`,
 `<codex_internal_context>`, `<external_codex_apps_open…>`,
 `<goal-loop-continuation>`, `<local-command-*>`) are not investigated here.
+
+## Review disposition (one round, two Claude reviewers, both MERGE-READY)
+| Finding | Verdict | Disposition |
+|---|---|---|
+| Dropping the start marker or the `$` end anchor survives the feed tests | valid, low | Two keep-cases added; both mutations now fail |
+| Stale comments: header always `for <path>`, "both predicates are prefix matches" | valid | Rewritten |
+| Citation drift: rollout line 8 not 7; corpus is 26 of 44 | valid | Corrected |
+| The bare corpus-policy entry is untested (removal survives) | valid, low | Bare case added to the index-title test; removal now fails |
+| Draft-expectations script and decomposition doc still say `… for` | valid | Updated together |
+| Catalog is prefix-only while the feed needs both markers | intentional | Codex's index stores preamble + environment_context as one title ending in `</environment_context>`; WHY comment added in `unwrap.ts` |

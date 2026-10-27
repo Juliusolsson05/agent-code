@@ -91,6 +91,10 @@ describe('conversation corpus policy', () => {
     const agents = redactRecord({ title: '# AGENTS.md instructions for /Users/me/x\n\n<INSTRUCTIONS>' }, paths) as { title: string }
     expect(plain.title).toMatch(/^p:[0-9a-f]{8}:23$/)
     expect(agents.title.startsWith('# AGENTS.md instructions for')).toBe(true)
+    // Global ~/.codex/AGENTS.md has no ` for <dir>`; hashed whole, the catalog
+    // would read it back as a real first prompt.
+    const bare = redactRecord({ title: '# AGENTS.md instructions\n\n<INSTRUCTIONS>' }, paths) as { title: string }
+    expect(bare.title.startsWith('# AGENTS.md instructions')).toBe(true)
     // An exact app-authored constant survives whole, with no empty placeholder appended.
     expect((redactRecord({ title: 'Agent Code terminal session' }, paths) as { title: string }).title).toBe('Agent Code terminal session')
   })

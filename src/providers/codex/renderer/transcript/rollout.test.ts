@@ -92,9 +92,9 @@ describe('mapCodexRolloutToFeedEntries', () => {
   })
 
   // Recorded shape: debug bundle 2026-10-27T17-09-56 (Codex 0.164.0 rollout
-  // 01a1793b…, line 7). With a global ~/.codex/AGENTS.md Codex writes the
+  // 01a1793b…, line 8). With a global ~/.codex/AGENTS.md Codex writes the
   // header WITHOUT ` for <dir>` (UserInstructions.directory = None in
-  // codex-rs/core/src/context/user_instructions.rs); 26 of 36 AGENTS.md
+  // codex-rs/core/src/context/user_instructions.rs); 26 of 44 AGENTS.md
   // preambles in the local corpus are this bare form. Body trimmed to its
   // first real line; the wrapper bytes are verbatim.
   it('drops the bare (directory-less) AGENTS.md preamble Codex writes for global instructions', () => {
@@ -125,6 +125,19 @@ describe('mapCodexRolloutToFeedEntries', () => {
     const entries = mapCodexRolloutToFeedEntries(
       userMessage('# AGENTS.md instructions\n\nwhy does Codex inject these twice?'),
     )
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]?.type).toBe('user')
+  })
+
+  // Both halves of the marker pair are load-bearing (review A, #1538): the end
+  // marker alone would hide a pasted <INSTRUCTIONS> block, and an unanchored
+  // end would hide a prompt that keeps going after the quoted block.
+  it.each([
+    'fix this:\n<INSTRUCTIONS>\nold rules\n</INSTRUCTIONS>',
+    '# AGENTS.md instructions\n\n<INSTRUCTIONS>\nold rules\n</INSTRUCTIONS>\n\nwhy are these ignored?',
+  ])('keeps a real prompt that only partly matches the preamble markers: %s', text => {
+    const entries = mapCodexRolloutToFeedEntries(userMessage(text))
 
     expect(entries).toHaveLength(1)
     expect(entries[0]?.type).toBe('user')

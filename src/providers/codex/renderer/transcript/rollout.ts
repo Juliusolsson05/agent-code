@@ -53,8 +53,10 @@ type CodexMessageBlock =
 // Codex injects two synthetic user messages on the first turn of
 // every conversation, both meant for the model and not the human:
 //
-//   1. The AGENTS.md preamble — the project's AGENTS.md content
-//      wrapped in a header line "# AGENTS.md instructions for <abs path>".
+//   1. The AGENTS.md preamble — AGENTS.md content wrapped in a header
+//      line "# AGENTS.md instructions for <abs path>" (project file) or a
+//      bare "# AGENTS.md instructions" (global ~/.codex/AGENTS.md), then
+//      <INSTRUCTIONS>…</INSTRUCTIONS>.
 //   2. The <environment_context> shim — cwd / shell / timezone / date
 //      metadata for the model.
 //
@@ -71,10 +73,11 @@ type CodexMessageBlock =
 // message, so we still need to handle the single-block case too.
 // The check below ("every block is a bootstrap block") covers both.
 //
-// Both predicates are permissive prefix matches: leading whitespace
-// is tolerated, and we anchor on a marker that's extremely unlikely
-// to appear at the very start of a real user prompt. A user prompt
-// that quotes either string somewhere in the middle won't match.
+// The environment_context predicate is a permissive prefix match
+// (leading whitespace tolerated, anchored on a marker that's extremely
+// unlikely to open a real prompt). The AGENTS.md predicate is stricter:
+// start AND end marker, see below. A user prompt that quotes either
+// string somewhere in the middle won't match.
 function isCodexEnvironmentContextText(text: string): boolean {
   return /^\s*<environment_context\b/.test(text)
 }
@@ -88,7 +91,7 @@ function isCodexEnvironmentContextText(text: string): boolean {
 // produces the bare `# AGENTS.md instructions\n\n<INSTRUCTIONS>` header. The
 // old `instructions for ` regex missed that bare form, so the whole global
 // AGENTS.md + environment_context rendered as a user prompt (debug bundle
-// 2026-10-27T17-09-56; 26 of 36 local-corpus preambles are bare). Requiring
+// 2026-10-27T17-09-56; 26 of 44 local-corpus preambles are bare). Requiring
 // the closing tag keeps a real prompt that merely opens with the heading.
 function isCodexAgentsMdPreambleText(text: string): boolean {
   const trimmed = text.trim()
