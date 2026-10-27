@@ -6,6 +6,7 @@
 // browser, and mints a fresh ticket for every socket. The renderer only ever
 // sees HermesConnectionInfo (no token can be expressed in it).
 
+import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
@@ -32,6 +33,19 @@ import { runNativeSignIn, SignInCancelledError } from '@main/hermes/nativeSignIn
 import { openWs } from '@main/hermes/openWs.js'
 import { tailnetKindOfUrl } from '@shared/hermes/tailnet.js'
 import {
+  HERMES_PROBE_SCRIPT,
+  decideHermesLocation,
+  describeSshFailure,
+  parseHermesProbe,
+  sameSshRoute,
+  sshArgs,
+  sshCommandLine,
+  validateSshDraft,
+  type HermesDetection,
+  type HermesSshAccess,
+  type HermesSshDraft,
+} from '@shared/hermes/ssh.js'
+import {
   validateHermesConnectionName,
   type HermesConnectionDraft,
   type HermesConnectionInfo,
@@ -48,7 +62,11 @@ export type HermesServiceDeps = {
   fetchImpl?: FetchLike
   /** Socket factory; tests inject a fake. */
   openSocket?: (url: string, protocols: string[]) => Promise<WebSocketLike>
+  /** Runs the system `ssh` with `args`, `stdin` on its input (#1528). Tests inject a recording. */
+  runSsh?: SshRunner
 }
+
+export type SshRunner = (args: string[], stdin: string) => Promise<{ code: number | null; stdout: string; stderr: string; timedOut?: boolean }>
 
 type RuntimeState = {
   state: HermesConnectionState
@@ -136,6 +154,106 @@ export class HermesConnectionService extends EventEmitter {
 
   remove(id: string): Promise<void> {
     return this.serialized(() => this.removeNow(id))
+  }
+
+  /**
+   * Save (or, with null, forget) the connection's SSH access (#1528).
+   * Serialized with every other Settings edit for the same reason they are:
+   * the document is read-modify-written.
+   */
+  setSshAccess(id: string, draft: HermesSshDraft | null): Promise<HermesConnectionInfo> {
+    return this.serialized(async () => {
+      const existing = this.require(id)
+      let ssh: HermesSshAccess | undefined
+      if (draft) {
+        const checked = validateSshDraft(draft)
+        if (checked.error !== undefined) throw new Error(checked.error)
+        ssh = checked.access
+        // The draft states where Hermes runs (host, a container, or not
+        // decided); the form pre-fills it from the saved record, so nothing
+        // is carried over implicitly. One exception: re-saving the SAME
+        // container on the SAME route keeps the shell Detect found (`sh` in
+        // an image without bash), which validateSshDraft cannot know. Same
+        // ROUTE, not same destination: a different port or key can be a
+        // different machine (review of #1530).
+        const previous = existing.ssh
+        if (ssh.hermes?.kind === 'docker' && previous?.hermes?.kind === 'docker' && previous.hermes.container === ssh.hermes.container && sameSshRoute(previous, ssh)) {
+          ssh = { ...ssh, hermes: { ...ssh.hermes, shell: previous.hermes.shell } }
+        }
+      }
+      const { ssh: _old, ...rest } = existing
+      const next: StoredHermesConnection = ssh ? { ...rest, ssh } : rest
+      await this.persist(this.connections.map((entry) => (entry.id === id ? next : entry)))
+      this.changed()
+      return this.info(next)
+    })
+  }
+
+  /**
+   * Find where the `hermes` CLI lives on the server, over the saved SSH
+   * access, and save it when there is exactly one answer. Never throws for
+   * an SSH or detection failure: the sentence IS the result the Settings
+   * card shows (a rejected IPC would arrive as "Error invoking remote
+   * method…").
+   */
+  async detectHermes(id: string): Promise<HermesDetection> {
+    // find, not require: "never throws" includes a connection removed from
+    // another window while this card was still on screen.
+    const connection = this.connections.find((entry) => entry.id === id)
+    if (!connection) return { ok: false, message: 'This Hermes connection no longer exists.' }
+    const access = connection.ssh
+    if (!access) return { ok: false, message: 'Save SSH access for this connection first.' }
+    // BatchMode: a probe must never sit on an invisible prompt (host key,
+    // passphrase, password). It fails, and describeSshFailure says which
+    // step fixes it. ConnectTimeout bounds a dead host; the runner's own
+    // timeout bounds a hung remote command.
+    // ServerAlive*: a server that accepts the connection and then stops
+    // answering is noticed in ~10 s instead of waiting for the hard timeout.
+    const args = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=5', '-o', 'ServerAliveCountMax=2', ...sshArgs(access), access.destination, 'sh', '-s']
+    let run: Awaited<ReturnType<SshRunner>>
+    try {
+      run = await (this.deps.runSsh ?? runSystemSsh)(args, HERMES_PROBE_SCRIPT)
+    } catch (error) {
+      return { ok: false, message: `Could not run ssh: ${error instanceof Error ? error.message : String(error)}` }
+    }
+    if (run.timedOut) {
+      return { ok: false, message: 'The server did not finish answering within 30 seconds (a busy or stuck Docker can do this). Try again, or type the container by hand.' }
+    }
+    const probe = run.code === 0 ? parseHermesProbe(run.stdout) : null
+    if (!probe) {
+      return { ok: false, message: run.code === 0 ? 'The server answered, but not with a complete detection result. Try again, or type the container by hand.' : describeSshFailure(run.code, run.stderr) }
+    }
+    const decision = decideHermesLocation(probe)
+    if (decision.ok) {
+      // Saved under the serialized queue, and ONLY if the SSH record is the
+      // very object the probe started from (setSshAccess always replaces
+      // it). Comparing the destination alone let a probe that started
+      // before an edit in another window overwrite a newer port (possibly
+      // another machine) or a container the user had just typed (review of
+      // #1530). Any edit in between wins; the user can detect again.
+      await this.serialized(async () => {
+        const current = this.connections.find((entry) => entry.id === id)
+        if (!current?.ssh || current.ssh !== access) return
+        const next = { ...current, ssh: { ...current.ssh, hermes: decision.location } }
+        await this.persist(this.connections.map((entry) => (entry.id === id ? next : entry)))
+        this.changed()
+      })
+    }
+    return decision
+  }
+
+  /**
+   * The line a fresh terminal pane types to reach the server (`vps`) or a
+   * shell where `hermes` works (`hermes`). Built HERE from the stored,
+   * validated record, so a renderer can ask for a connection's terminal but
+   * never hand main a command line of its own.
+   */
+  shellCommand(id: string, target: 'vps' | 'hermes'): { ok: true; command: string; name: string } | { ok: false; error: string } {
+    const connection = this.require(id)
+    if (!connection.ssh) return { ok: false, error: `Set up SSH access for "${connection.name}" in Settings → Hermes.` }
+    const command = sshCommandLine(connection.ssh, target)
+    if (!command) return { ok: false, error: `Agent Code does not know where Hermes runs on "${connection.name}" yet. Run Detect in Settings → Hermes, or type the container.` }
+    return { ok: true, command, name: connection.name }
   }
 
   private async addNow(draft: HermesConnectionDraft): Promise<HermesConnectionInfo> {
@@ -489,6 +607,41 @@ export class HermesConnectionService extends EventEmitter {
     this.emit('changed', this.list())
   }
 }
+
+/**
+ * The system `ssh`, not a Node SSH library: it is what the terminals run, so
+ * a probe that works proves the terminal will, with the user's own
+ * ~/.ssh/config, agent, known_hosts and ProxyJump. A library would need its
+ * own copy of all of that and could disagree with the terminal.
+ */
+const runSystemSsh: SshRunner = (args, stdin) =>
+  new Promise((resolve, reject) => {
+    const child = spawn('ssh', args, { stdio: ['pipe', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+    let timedOut = false
+    let killer: ReturnType<typeof setTimeout> | null = null
+    // 30 s covers ConnectTimeout (10 s) plus a `docker exec` per container
+    // on a slow server; past that the server is not answering usefully.
+    // SIGKILL after a grace period: an ssh blocked in a ProxyCommand child
+    // can outlive SIGTERM, and then `close` never fires and the Settings
+    // card's Detect never settles.
+    const timer = setTimeout(() => {
+      timedOut = true
+      child.kill('SIGTERM')
+      killer = setTimeout(() => child.kill('SIGKILL'), 5_000)
+    }, 30_000)
+    const done = () => {
+      clearTimeout(timer)
+      if (killer) clearTimeout(killer)
+    }
+    child.stdout.setEncoding('utf8').on('data', (chunk: string) => { stdout += chunk })
+    child.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr += chunk })
+    child.on('error', (error) => { done(); reject(error) })
+    child.on('close', (code) => { done(); resolve({ code, stdout, stderr, timedOut }) })
+    child.stdin.on('error', () => undefined)
+    child.stdin.end(stdin)
+  })
 
 export function describeError(error: unknown, baseUrl?: string): string {
   // A start() failure arrives wrapped with its stage; the words are about the cause.

@@ -789,11 +789,17 @@ export function usePaneActions(
   closeNewAgentPlacement: () => void,
   sessionActions: SessionActions,
 ): {
+  /**
+   * Resolves the new session's id, or null when nothing was placed (no
+   * project, spawn failed, project closed mid-spawn). The id lets a caller
+   * act on the pane it just opened, e.g. Open VPS Terminal typing its ssh
+   * line into the fresh shell (#1528).
+   */
   splitFocused: (
     kind?: SessionKind,
     continuation?: SplitFocusedContinuation,
     options?: { hermesLane?: 'default' | 'none' },
-  ) => Promise<void>
+  ) => Promise<SessionId | null>
   startNewAgentPlacement: () => void
   createDetachedSession: (selection: SessionSpawnSelection, projectOverride?: { tabId: TabId; anchorSessionId: SessionId }, continuation?: SplitFocusedContinuation, placement?: { selectCreated: boolean }) => Promise<SessionId | null>
   // WHY `kind` is the full SessionKind here (unlike createLinkedAgent right
@@ -865,7 +871,7 @@ export function usePaneActions(
       kind: SessionKind = 'claude',
       continuation?: SplitFocusedContinuation,
       options?: { hermesLane?: 'default' | 'none' },
-    ) => {
+    ): Promise<SessionId | null> => {
       const resumeSessionId = continuation?.resumeSessionId
       const builtInMcpOverrides = continuation?.builtInMcpOverrides
       const providerRuntime = continuation?.providerRuntime
@@ -936,7 +942,7 @@ export function usePaneActions(
       // without needing a terminal-specific resolver to keep in sync.
       const target = resolveDispatchSpawnTarget(dispatchSnapshot)
       const tab = dispatchSnapshot.tabs.find(t => t.id === target.tabId)
-      if (!tab) return
+      if (!tab) return null
 
       // WHY a caller may override the visually focused project cwd: lifecycle commands can
       // target a selected related/orchestration child that is rendered inside a physical parent
@@ -956,7 +962,7 @@ export function usePaneActions(
             ? 'Could not create dispatch terminal: no project folder found.'
             : 'Could not create dispatch agent: no project folder found.',
         )
-        return
+        return null
       }
 
       let sessionId: SessionId
@@ -992,7 +998,7 @@ export function usePaneActions(
         })
       } catch (err) {
         showToast(spawnFailureToast(kind === 'terminal' ? 'terminal' : 'agent', err, cwd))
-        return
+        return null
       }
 
       // Did the session actually get FILED? The resolved project can be closed
@@ -1057,13 +1063,14 @@ export function usePaneActions(
         })
           .catch(() => undefined)
         await sessionActions.killSession(sessionId, 'spawn.unplaced')
-        return
+        return null
       }
       closeNewAgentPlacement()
       // A tile-tree branch followed this one until #992, and `direction`
       // parameterized it. The tree is gone, the stage is required, and the
       // argument went with it (#992 stage 4): every spawn is one flow — fill
       // the focused lane when it is empty, else pool.
+      return sessionId
     },
     [
       closeNewAgentPlacement,

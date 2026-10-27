@@ -1157,8 +1157,8 @@ export function getSettingsRegistry(
       category: 'providers',
       title: 'Hermes Connections',
       description:
-        'Your Hermes servers. Add the URL of a running `hermes serve`, sign in through your browser (password or Nous), and Hermes panes open a chat with that agent. Agent Code keeps the sign-in encrypted on this Mac.',
-      keywords: ['hermes', 'nous', 'vps', 'server', 'telegram', 'connection', 'remote', 'sign in', 'gateway'],
+        'Your Hermes servers. Add the URL of a running `hermes serve`, sign in through your browser (password or Nous), and Hermes panes open a chat with that agent. Agent Code keeps the sign-in encrypted on this Mac. Optional SSH access per server powers Open VPS Terminal and Open Hermes Terminal.',
+      keywords: ['hermes', 'nous', 'vps', 'server', 'telegram', 'connection', 'remote', 'sign in', 'gateway', 'ssh', 'terminal', 'docker'],
       // Main's connections.json + safeStorage are the truth; the row mirrors it.
       metadata: { scope: 'app', apply: 'new-session', storage: 'setup' },
       control: { type: 'hermes-connections' },

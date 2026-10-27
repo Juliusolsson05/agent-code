@@ -83,7 +83,7 @@ const laneSessions = (state: WorkspaceState) =>
   state.stage.lanes.map(lane => lane.selectedSessionId)
 
 async function runAndAnswer(context: CommandContext, button: string) {
-  let running!: void | Promise<void>
+  let running!: void | Promise<unknown>
   await act(async () => { running = command!.run(context) })
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: button }))

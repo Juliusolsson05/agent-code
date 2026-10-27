@@ -1,4 +1,6 @@
 // Hermes connection metadata as the renderer sees it (#1482).
+
+import type { HermesSshAccess } from './ssh.js'
 //
 // WHY no token, ever, in these types: credentials live in main only
 // (src/main/hermes/tokenStore.ts, safeStorage-encrypted). The renderer can
@@ -37,6 +39,11 @@ export type HermesConnectionInfo = {
   backend: { version: string; desktopContract: number | null; compatibility: HermesBackendCompatibility | null } | null
   /** The last failure in words the user can act on; null when healthy. */
   lastError: string | null
+  /**
+   * Optional SSH route to the same server (#1528). Safe to show: a
+   * destination, a port and a key PATH, never key material or a password.
+   */
+  ssh?: HermesSshAccess
 }
 
 export type HermesConnectionDraft = { name: string; baseUrl: string }
