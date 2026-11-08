@@ -1,5 +1,5 @@
 import { mkdir, rmdir, stat } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { reconcileExternalClaudeConfig } from './externalClaudeConfig'
 import { assertOwnedSkill, ownedSkillBytes, readRegular, replaceObserved } from './externalOperatorFiles'
 
@@ -37,30 +37,53 @@ export function createExternalClaudeIntegration(paths: ExternalClaudePaths, skil
     async reconcile(connection: { url: string; token: string } | null): Promise<void> {
       const oldSkill = await readRegular(skillPath)
       assertOwnedSkill(oldSkill, skillPath)
-      // Validate the config before any mutation (a dry run outside the lock),
-      // so an unmanaged entry is reported without having installed the skill
-      // first. The authoritative computation is repeated under the lock below.
-      reconcileExternalClaudeConfig(await readRegular(configPath), connection)
+      // Dry run outside the lock: report an unmanaged entry before installing
+      // the skill, and, in the common case where nothing changes (every app
+      // start, a deselected or disabled client), never touch Claude's lock at
+      // all. See withClaudeConfigLock for why holding that lock has a cost.
+      const observed = await readRegular(configPath)
+      const needsWrite = reconcileExternalClaudeConfig(observed, connection) !== observed
       if (connection) await replaceObserved(skillPath, oldSkill, skill)
+      if (needsWrite) await writeConfig(connection)
+      if (!connection && oldSkill !== null) await replaceObserved(skillPath, oldSkill, null)
+    },
+  }
+
+  async function writeConfig(connection: { url: string; token: string } | null) {
+    // A Claude process that could not get the lock falls back to an UNLOCKED
+    // read-then-write of its own (see below), and that write can land just
+    // after our rename and put back its copy without our entry. Re-reading
+    // after the rename and retrying makes that loss visible and self-healing
+    // instead of a `managed: true` that is quietly false. A loss after the
+    // final check is still possible in principle; the next reconcile (every
+    // app start and every Settings change) repairs it.
+    for (let attempt = 0; ; attempt++) {
       await withClaudeConfigLock(configPath, async () => {
         const existing = await readRegular(configPath)
         const next = reconcileExternalClaudeConfig(existing, connection)
         if (next !== existing) await replaceObserved(configPath, existing, next)
       })
-      if (!connection && oldSkill !== null) await replaceObserved(skillPath, oldSkill, null)
-    },
+      const after = await readRegular(configPath)
+      if (reconcileExternalClaudeConfig(after, connection) === after) return
+      if (attempt >= 2) throw new Error(`Claude kept rewriting its config during setup; retry: ${configPath}`)
+    }
   }
 }
 
-// WHY we take Claude's own lock instead of relying only on replaceObserved:
-// unlike ~/.codex/config.toml, ~/.claude.json is rewritten by every running
-// Claude process all the time (startup counters, tips, per-project state).
-// Claude saves through saveConfigWithLock (vendor utils/config.ts), which
-// holds a proper-lockfile lock — a DIRECTORY at `<file>.lock` — then re-reads
-// the file and applies its change on top of the fresh copy. If we hold the same
-// lock while we read-modify-rename, any Claude save that follows re-reads and
-// keeps our entry; without it, a Claude process could write back its stale
-// copy over ours a millisecond later.
+// WHY we take Claude's own lock, and why we hold it for as short a time as
+// possible: every running Claude process rewrites ~/.claude.json constantly
+// (startup counters, tips, per-project state) through saveConfigWithLock
+// (vendor utils/config.ts). That takes a proper-lockfile lock, a DIRECTORY
+// at `<file>.lock`, re-reads the file and applies its change to the fresh copy.
+// Holding that lock means no LOCKED Claude save interleaves with our
+// read-modify-rename.
+//
+// It is NOT a wait-for-us protocol: Claude calls lockSync, which does not
+// retry. A Claude save that runs into our lock throws and falls back to an
+// unlocked re-read + write. That fallback still starts from a fresh read, so
+// it normally keeps our entry, but its write can race our rename. Hence: take
+// the lock only when there is something to write, hold it across one read,
+// one transform and one rename, and verify afterwards (writeConfig above).
 //
 // We do not depend on proper-lockfile itself (only a transitive dependency
 // here); its on-disk protocol is just mkdir + mtime staleness, reproduced
@@ -76,7 +99,7 @@ async function withClaudeConfigLock<T>(file: string, run: () => Promise<T>): Pro
     try { await mkdir(lock); break } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         // Parent directory (CLAUDE_CONFIG_DIR) does not exist yet.
-        await mkdir(join(file, '..'), { recursive: true, mode: 0o700 }); continue
+        await mkdir(dirname(file), { recursive: true, mode: 0o700 }); continue
       }
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
       const held = await stat(lock).then(info => Date.now() - info.mtimeMs, () => 0)
@@ -85,5 +108,14 @@ async function withClaudeConfigLock<T>(file: string, run: () => Promise<T>): Pro
       await new Promise(resolve => setTimeout(resolve, 50))
     }
   }
-  try { return await run() } finally { await rmdir(lock).catch(() => {}) }
+  // We never refresh the mtime the way proper-lockfile does. If `run` stalls
+  // past the staleness window, a Claude process may legitimately treat our lock
+  // as abandoned, remove it and take its own. Removing the lock blindly in
+  // `finally` would then delete CLAUDE'S live lock. Only remove the directory
+  // we created, recognised by its creation-time identity (inode + birthtime).
+  const ours = await stat(lock, { bigint: true })
+  try { return await run() } finally {
+    const now = await stat(lock, { bigint: true }).catch(() => null)
+    if (now && now.ino === ours.ino && now.birthtimeNs === ours.birthtimeNs) await rmdir(lock).catch(() => {})
+  }
 }

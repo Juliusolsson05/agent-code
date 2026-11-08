@@ -62,10 +62,15 @@ export function reconcileExternalClaudeConfig(existing: string | null, connectio
     ? { type: 'http', url: connection.url, headers: { Authorization: `Bearer ${connection.token}` } }
     : undefined
   if (isDeepStrictEqual(current, desired)) return existing
-  // A missing file plus "disabled" must stay missing: creating ~/.claude.json
-  // only to say nothing would make Claude treat this as a first launch and
-  // still leave a file behind that the user never asked for.
-  if (existing === null && desired === undefined) return null
+  // We never CREATE Claude's global config. A missing file means Claude Code
+  // was never started with this config dir, or its file was lost. In the
+  // second case Claude offers to restore it from ~/.claude/backups on its next
+  // start, and a file holding only our server would suppress that offer.
+  // Disabling against a missing file is simply already done.
+  if (existing === null) {
+    if (desired === undefined) return null
+    throw new Error('Claude Code has no global config yet (.claude.json); start Claude Code once, then retry')
+  }
 
   const nextServers: Json = { ...servers }
   if (desired) nextServers[EXTERNAL_OPERATOR_SERVER_NAME] = desired

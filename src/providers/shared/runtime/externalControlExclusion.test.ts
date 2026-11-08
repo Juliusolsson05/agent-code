@@ -28,7 +28,20 @@ it('overrides inherited OpenCode control access while preserving unrelated confi
   excludeExternalControlFromOpencode(env)
   expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT)).toEqual({ model: 'configured/model', mcp: {
     'agent-code-control': { enabled: false }, other: { type: 'local', command: ['configured-tool'] },
-  } })
+  }, permission: { skill: { 'agent-code-computer-execution': 'deny' } } })
+})
+
+it('denies the operator skill to OpenCode last, keeping the user\'s other skill and permission rules', () => {
+  // #1539 installs the skill in ~/.claude/skills, which OpenCode scans. Its
+  // rules are last-match-wins, so a user "*": "allow" must stay BEFORE our deny.
+  const env = { OPENCODE_CONFIG_CONTENT: JSON.stringify({ permission: { bash: 'ask', skill: { 'agent-code-computer-execution': 'allow', '*': 'allow' } } }) }
+  excludeExternalControlFromOpencode(env)
+  const permission = JSON.parse(env.OPENCODE_CONFIG_CONTENT).permission
+  expect(permission.bash).toBe('ask')
+  expect(Object.entries(permission.skill)).toEqual([['*', 'allow'], ['agent-code-computer-execution', 'deny']])
+  const shorthand = { OPENCODE_CONFIG_CONTENT: JSON.stringify({ permission: { skill: 'ask' } }) }
+  excludeExternalControlFromOpencode(shorthand)
+  expect(JSON.parse(shorthand.OPENCODE_CONFIG_CONTENT).permission.skill).toEqual({ '*': 'ask', 'agent-code-computer-execution': 'deny' })
 })
 
 it('reserves the canonical skill path before installation through a symlinked Codex home', async () => {

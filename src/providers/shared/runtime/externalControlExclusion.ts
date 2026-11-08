@@ -85,5 +85,31 @@ export function excludeExternalControlFromOpencode(env: Record<string, string>):
   if (root.mcp !== undefined && (!root.mcp || typeof root.mcp !== 'object' || Array.isArray(root.mcp))) throw new Error('OPENCODE_CONFIG_CONTENT.mcp must be an object')
   // OpenCode explicitly accepts {enabled:false} for an MCP entry. The highest
   // precedence inline config overrides inherited remote/local definitions.
-  env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ ...root, mcp: { ...(root.mcp as object ?? {}), [EXTERNAL_OPERATOR_SERVER_NAME]: { enabled: false } } })
+  //
+  // The SKILL needs its own deny since #1539: OpenCode also scans
+  // ~/.claude/skills (unless OPENCODE_DISABLE_CLAUDE_CODE_SKILLS), which is
+  // exactly where Settings now installs the operator skill for the external
+  // Claude client. OpenCode 1.18.32's Skill.available drops any skill whose
+  // `evaluate("skill", name, permission)` is "deny", both from the system
+  // prompt list and from the skill tool. Rules resolve last-match-wins, so our
+  // name key is appended after whatever the inherited config already had,
+  // and a string `skill` rule (one action for every skill) becomes the "*"
+  // entry so its meaning is kept for all other skills.
+  // We do NOT set OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: that would hide every
+  // skill the user installed for Claude, not just ours.
+  env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
+    ...root,
+    mcp: { ...(root.mcp as object ?? {}), [EXTERNAL_OPERATOR_SERVER_NAME]: { enabled: false } },
+    permission: withSkillDenied(root.permission),
+  })
+}
+
+function withSkillDenied(permission: unknown): Record<string, unknown> {
+  const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
+  // A bare string is OpenCode's "this action for every permission" shorthand.
+  const base: Record<string, unknown> = typeof permission === 'string' ? { '*': permission } : isRecord(permission) ? permission : {}
+  const skill = base.skill
+  const skillRules: Record<string, unknown> = typeof skill === 'string' ? { '*': skill } : isRecord(skill) ? { ...skill } : {}
+  delete skillRules[EXTERNAL_OPERATOR_SKILL_NAME]
+  return { ...base, skill: { ...skillRules, [EXTERNAL_OPERATOR_SKILL_NAME]: 'deny' } }
 }

@@ -60,6 +60,27 @@ or key changes.
    read by the desktop app alone. A selected client is reached in both, and
    Settings says so.
 
+## Review round (one, per convention)
+
+Valid and fixed:
+- **OpenCode saw the skill.** Internal OpenCode agents scan `~/.claude/skills`.
+  Launches now add `permission.skill[name] = "deny"`, appended last because
+  rules are last-match-wins (OpenCode 1.18.32 `Skill.available` filters on
+  it), and the panel gets a name rule.
+- **The lock is not wait-for-us.** Claude's `lockSync` does not retry, so
+  holding the lock pushes Claude onto its unlocked fallback. Now the lock is
+  taken only when the dry run needs a write, the file is verified after the
+  rename (up to 3 attempts), and the comments say what actually happens.
+- **Releasing a lock that is no longer ours.** We only `rmdir` the lock
+  directory we created (same inode and birthtime).
+- **Never create `.claude.json`.** A file holding only our server would
+  suppress Claude's backup-restore offer. A missing file is now reported as a
+  per-client error.
+
+Not adopted: a symlinked `.claude.json` is still refused (same rule as Codex,
+never write through a link). It shows up as a per-client error, not a silent
+failure.
+
 ## Verification
 
 - `tsc -b` + control-sdk project clean. Targeted vitest (settings, exclusion,

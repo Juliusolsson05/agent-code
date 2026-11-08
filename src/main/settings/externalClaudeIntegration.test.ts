@@ -57,7 +57,7 @@ it('installs, rotates and removes only the user-scope operator entry and skill, 
   } finally { await rm(home, { recursive: true, force: true }) }
 })
 
-it('honours CLAUDE_CONFIG_DIR and never creates a config file just to say "disabled"', async () => {
+it('honours CLAUDE_CONFIG_DIR and never creates Claude\'s config file', async () => {
   const home = await mkdtemp(join(tmpdir(), 'external-claude-dir-'))
   try {
     const configDir = join(home, 'custom-claude')
@@ -66,6 +66,13 @@ it('honours CLAUDE_CONFIG_DIR and never creates a config file just to say "disab
     expect(integration.skillPath).toBe(join(configDir, 'skills', 'agent-code-computer-execution', 'SKILL.md'))
     await integration.reconcile(null)
     await expect(stat(integration.configPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    // A file holding only our server would stop Claude offering its backup
+    // restore for a lost .claude.json, so a missing file is reported instead.
+    await expect(integration.reconcile({ url: 'http://127.0.0.1:47653/mcp', token: tokenA })).rejects.toThrow('start Claude Code once')
+    await expect(stat(integration.configPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(stat(integration.skillPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    await mkdir(configDir, { recursive: true })
+    await writeFile(integration.configPath, '{}')
     await integration.reconcile({ url: 'http://127.0.0.1:47653/mcp', token: tokenA })
     expect(await server(integration.configPath)).toMatchObject({ type: 'http' })
   } finally { await rm(home, { recursive: true, force: true }) }
@@ -132,6 +139,10 @@ it('waits for a live Claude config lock, clears an abandoned one, and gives up o
     await mkdir(lock)
     await expect(integration.reconcile({ url: 'http://127.0.0.1:47653/mcp', token: tokenA })).rejects.toThrow('busy')
     expect(await readFile(integration.configPath, 'utf8')).toBe(claudeFile)
+    // Nothing to change (every app start while disabled): Claude's lock is not
+    // taken at all, because holding it pushes Claude onto its unlocked path.
+    await integration.reconcile(null)
+    expect((await stat(lock)).isDirectory()).toBe(true)
   } finally { await rm(home, { recursive: true, force: true }) }
 }, 10_000)
 
@@ -166,7 +177,7 @@ it('keeps the listener for one client when the other conflicts, and removes a de
     expect(await readFile(codex.configPath, 'utf8')).not.toContain('agent-code-control')
     await expect(stat(codex.skillPath)).rejects.toMatchObject({ code: 'ENOENT' })
 
-    await rm(claude.configPath)
+    await writeFile(claude.configPath, '{}')
     await configure({ enabled: true, clients: { codex: true } })
     expect(settings.status()).toMatchObject({ running: true, codex: { managed: true }, claude: { managed: true } })
     await configure({ enabled: true, clients: { claude: false } })

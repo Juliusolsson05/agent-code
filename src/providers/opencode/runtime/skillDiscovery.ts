@@ -1,6 +1,7 @@
 import { join, resolve } from 'node:path'
 import type { AgentSkillDiscovery, AgentSkillDiscoveryContext, AgentSkillRoot } from '@shared/types/agentSkills.js'
 import { ancestorsThrough, findAncestorWithMarker } from '@providers/shared/runtime/skillDiscovery.js'
+import { EXTERNAL_OPERATOR_SKILL_NAME } from '@providers/shared/runtime/externalControlExclusion.js'
 
 // Mirrors `truthy()` in OpenCode's core/src/flag/flag.ts. OpenCode lowercases
 // first, so `OPENCODE_DISABLE_EXTERNAL_SKILLS=TRUE` disables skills too; the
@@ -79,5 +80,10 @@ export async function discoverOpencodeSkillRoots(context: AgentSkillDiscoveryCon
     // `skills.urls` is a network pull; reproducing either here would be a second,
     // drifting implementation of OpenCode's config loader.
     notices: ['OpenCode skills added through `skills.paths` or `skills.urls` in opencode.json are not included.'],
+    // Agent Code's own OpenCode launches deny the external-operator skill
+    // (externalControlExclusion.ts permission.skill). It lives in
+    // ~/.claude/skills for the external Claude client since #1539, which
+    // OpenCode scans, so the panel must not list it as usable.
+    enablementRules: [{ name: EXTERNAL_OPERATOR_SKILL_NAME, enabled: false }],
   }
 }
