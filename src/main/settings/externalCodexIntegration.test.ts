@@ -41,7 +41,7 @@ it('refuses edited or symlinked destinations and stops the listener when managed
   const integration = createExternalCodexIntegration(home, 'skill content')
   let running = false
   const settings = createExternalControlSettings(join(home, 'app'), {
-    integration, start: async port => { running = true; return port }, stop: async () => { running = false }, copy() {},
+    integrations: [integration], start: async port => { running = true; return port }, stop: async () => { running = false }, copy() {},
   })
   const configure = (enabled: boolean) => settings.capabilities.find(x => x.descriptor.id === 'externalControl.configure')!.execute({ enabled }, {
     requestId: 'local', caller: { kind: 'application', id: 'window' }, owner: { kind: 'main', generation: 'one' },

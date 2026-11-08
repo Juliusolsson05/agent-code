@@ -1,6 +1,7 @@
 import { realpath, stat } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { asRecord } from '@shared/lib/asRecord.js'
+import { EXTERNAL_OPERATOR_SKILL_NAME } from '@providers/shared/runtime/externalControlExclusion.js'
 import type { AgentSkillDiscovery, AgentSkillDiscoveryContext, AgentSkillRoot } from '@shared/types/agentSkills.js'
 import {
   findAncestorWithMarker,
@@ -210,5 +211,9 @@ export async function discoverClaudeSkillRoots(context: AgentSkillDiscoveryConte
       if (relevant) roots.push(...await pluginRoots(installation.installPath, pluginName, notices))
     }
   }
-  return { roots, notices }
+  // Agent Code's own Claude launches turn the external-operator skill off
+  // (externalControlExclusion.ts skillOverrides). Since #1539 Settings installs
+  // that skill in ~/.claude/skills for the EXTERNAL Claude client, so without
+  // this rule the panel would list it as usable by the very agents it operates.
+  return { roots, notices, enablementRules: [{ name: EXTERNAL_OPERATOR_SKILL_NAME, enabled: false }] }
 }

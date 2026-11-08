@@ -26,6 +26,7 @@ import { ExternalControlMcpHost } from './externalControlMcp/host'
 import { registerOperatorControlTools } from './externalControlMcp/tools'
 import { createExternalControlSettings } from './settings/externalControl'
 import { createExternalCodexIntegration } from './settings/externalCodexIntegration'
+import { createExternalClaudeIntegration } from './settings/externalClaudeIntegration'
 import operatorSkillSource from '../../operator-skills/agent-code-computer-execution/SKILL.md?raw'
 
 import { app, BrowserWindow, clipboard, crashReporter, dialog, Menu, Notification, powerMonitor, shell, systemPreferences } from 'electron'
@@ -1226,7 +1227,13 @@ async function startApp(): Promise<void> {
   // order, and the external server starting a moment earlier changes nothing.
   let externalHost: ExternalControlMcpHost
   const externalSettings = createExternalControlSettings(STATE_DIR, {
-    integration: createExternalCodexIntegration(process.env.CODEX_HOME || join(app.getPath('home'), '.codex'), operatorSkillSource),
+    // Both external clients a person is likely to drive Agent Code from get the
+    // connection and operator skill (#1539). Same env overrides each CLI honours
+    // itself, so the files land where that client will actually read them.
+    integrations: [
+      createExternalCodexIntegration(process.env.CODEX_HOME || join(app.getPath('home'), '.codex'), operatorSkillSource),
+      createExternalClaudeIntegration({ claudeConfigDir: process.env.CLAUDE_CONFIG_DIR || undefined, home: app.getPath('home') }, operatorSkillSource),
+    ],
     start: (port, token) => externalHost.start(port, token),
     stop: () => externalHost.stop(), copy: text => clipboard.writeText(text),
   })

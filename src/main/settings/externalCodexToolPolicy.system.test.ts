@@ -20,7 +20,7 @@ it('starts the real MCP listener after recovering the observed approval config, 
     recordTransport: async () => {},
   })
   const settings = createExternalControlSettings(appDirectory, {
-    integration,
+    integrations: [integration],
     // Production settings and host are exercised unchanged; only port allocation
     // uses an ephemeral socket so this trial cannot collide with the user's app.
     start: (_port, token) => host.start(0, token), stop: () => host.stop(), copy() {},

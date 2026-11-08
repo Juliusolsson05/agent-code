@@ -22,7 +22,7 @@ manual or every command.
 Discover available tools before using them: clients may prefix the `ac_` names.
 If the control MCP is absent, use computer use for authorized work and report the
 missing connection if it prevents reliable progress. The app's Settings → Agents
-→ External operator MCP installs the global external Codex connection and this skill.
+→ External operator MCP installs the global connection and this skill for external Codex and Claude Code.
 Restart the external client after enabling it or rotating its key. Do not attach this
 external server to the agents being operated or edit their MCP configuration.
 

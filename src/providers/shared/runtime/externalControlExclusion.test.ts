@@ -11,7 +11,7 @@ it('applies the observed Claude/Codex launch exclusions without replacing unrela
   const claude = ['--resume', 'existing']
   excludeExternalControlFromClaude(claude)
   expect(claude.slice(0, 2)).toEqual(['--resume', 'existing'])
-  expect(JSON.parse(claude[3])).toEqual({ deniedMcpServers: [{ serverName: 'agent-code-control' }] })
+  expect(JSON.parse(claude[3])).toEqual({ deniedMcpServers: [{ serverName: 'agent-code-control' }], skillOverrides: { 'agent-code-computer-execution': 'off' } })
   const codex = ['--config', 'features.example=false']
   excludeExternalControlFromCodex(codex)
   expect(codex.slice(0, 6)).toEqual(['--config', 'features.example=false', '--config', 'mcp_servers.agent-code-control.enabled=false',
@@ -28,7 +28,20 @@ it('overrides inherited OpenCode control access while preserving unrelated confi
   excludeExternalControlFromOpencode(env)
   expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT)).toEqual({ model: 'configured/model', mcp: {
     'agent-code-control': { enabled: false }, other: { type: 'local', command: ['configured-tool'] },
-  } })
+  }, permission: { skill: { 'agent-code-computer-execution': 'deny' } } })
+})
+
+it('denies the operator skill to OpenCode last, keeping the user\'s other skill and permission rules', () => {
+  // #1539 installs the skill in ~/.claude/skills, which OpenCode scans. Its
+  // rules are last-match-wins, so a user "*": "allow" must stay BEFORE our deny.
+  const env = { OPENCODE_CONFIG_CONTENT: JSON.stringify({ permission: { bash: 'ask', skill: { 'agent-code-computer-execution': 'allow', '*': 'allow' } } }) }
+  excludeExternalControlFromOpencode(env)
+  const permission = JSON.parse(env.OPENCODE_CONFIG_CONTENT).permission
+  expect(permission.bash).toBe('ask')
+  expect(Object.entries(permission.skill)).toEqual([['*', 'allow'], ['agent-code-computer-execution', 'deny']])
+  const shorthand = { OPENCODE_CONFIG_CONTENT: JSON.stringify({ permission: { skill: 'ask' } }) }
+  excludeExternalControlFromOpencode(shorthand)
+  expect(JSON.parse(shorthand.OPENCODE_CONFIG_CONTENT).permission.skill).toEqual({ '*': 'ask', 'agent-code-computer-execution': 'deny' })
 })
 
 it('reserves the canonical skill path before installation through a symlinked Codex home', async () => {
@@ -52,9 +65,12 @@ it('merges other Claude launch settings into the single settings source without 
   const args: string[] = []
   // A caller fragment that tried to clear the denylist must not win: a second
   // --settings flag, or a later spread, would hand the operator MCP back.
-  excludeExternalControlFromClaude(args, { hooks: { Stop: [] }, deniedMcpServers: [] })
+  excludeExternalControlFromClaude(args, { hooks: { Stop: [] }, deniedMcpServers: [], skillOverrides: { other: 'name-only', 'agent-code-computer-execution': 'on' } })
   expect(args.filter(arg => arg === '--settings')).toHaveLength(1)
   const settings = JSON.parse(args[1]!)
   expect(settings.hooks).toEqual({ Stop: [] })
   expect(settings.deniedMcpServers).toEqual([{ serverName: 'agent-code-control' }])
+  // #1539: the operator skill now sits in ~/.claude/skills for the external
+  // client; an internal agent must never get it back, while other overrides stay.
+  expect(settings.skillOverrides).toEqual({ other: 'name-only', 'agent-code-computer-execution': 'off' })
 })
