@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Input } from '@renderer/components/ui/input'
 import { externalConnectionStatusSchema, type ExternalConnectionStatus } from '@control-sdk'
 import { Button } from '@renderer/components/ui/button'
+import { Switch } from '@renderer/components/ui/switch'
 
 export function ExternalControlRow() {
   const [status, setStatus] = useState<ExternalConnectionStatus | null>(null)
@@ -25,10 +26,10 @@ export function ExternalControlRow() {
     window.addEventListener('focus', focus)
     return () => { live = false; window.removeEventListener('focus', focus) }
   }, [])
-  const configure = async (enabled: boolean, rotateKey = false) => {
+  const configure = async (enabled: boolean, rotateKey = false, clients?: { codex?: boolean; claude?: boolean }) => {
     setBusy(true); setMessage('')
     try {
-      const result = await window.api.controlInvoke({ capabilityId: 'externalControl.configure', input: { enabled, port: Number(port), rotateKey } })
+      const result = await window.api.controlInvoke({ capabilityId: 'externalControl.configure', input: { enabled, port: Number(port), rotateKey, ...(clients ? { clients } : {}) } })
       if (!result.ok) throw new Error(result.error.message)
       const value = externalConnectionStatusSchema.parse(result.value)
       setStatus(value); setPort(String(value.port))
@@ -40,16 +41,27 @@ export function ExternalControlRow() {
     try {
       const result = await window.api.controlInvoke({ capabilityId: 'externalControl.copyConnection', input: { format } })
       if (!result.ok) throw new Error(result.error.message)
-      setMessage(format === 'codex' ? 'Copied. Paste into the external Codex app’s MCP configuration.' : 'Copied MCP connection configuration.')
+      setMessage(format === 'codex' ? 'Copied. Paste into the external Codex app’s MCP configuration.' : 'Copied MCP connection configuration (the mcpServers shape Claude Code and most MCP clients read).')
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)) }
     finally { setBusy(false) }
   }
   return <div className="flex flex-col gap-2 text-[12px]">
-    <div className="text-muted">{status ? status.running ? 'Running · global Codex connection installed' : status.enabled ? 'Enabled · connection needs attention' : 'Disabled' : 'Loading connection…'}</div>
+    <div className="text-muted">{status ? status.running ? `Running · global ${installedClients(status)} connection installed` : status.enabled ? 'Enabled · connection needs attention' : 'Disabled' : 'Loading connection…'}</div>
     <label className="flex items-center justify-between gap-2">Local port
       <Input aria-label="External control port" type="number" min={1024} max={65535} value={port} disabled={busy}
         onChange={event => setPort(event.target.value)} className="w-24" />
     </label>
+    {/* Per-client choice (#1539). Toggling re-runs configure with the current
+        enabled state, so unticking a client while running removes our files
+        from it immediately rather than at the next restart. */}
+    {status?.codex && <label className="flex items-center justify-between gap-2">Manage external Codex
+      <Switch aria-label="Manage external Codex" checked={status.codex.selected} disabled={busy}
+        onCheckedChange={next => void configure(status.enabled, false, { codex: next })} />
+    </label>}
+    {status?.claude && <label className="flex items-center justify-between gap-2">Manage external Claude Code
+      <Switch aria-label="Manage external Claude Code" checked={status.claude.selected} disabled={busy}
+        onCheckedChange={next => void configure(status.enabled, false, { claude: next })} />
+    </label>}
     <div className="flex flex-wrap gap-2">
       <Button variant="outline" disabled={busy || !status} onClick={() => void configure(!status?.enabled)}>{status?.enabled ? 'Disable' : 'Enable'}</Button>
       {(status?.enabled || status?.error) && <Button variant="outline" disabled={busy} onClick={() => void configure(status?.enabled ?? false)}>Apply Port / Retry</Button>}
@@ -60,8 +72,28 @@ export function ExternalControlRow() {
       </>}
     </div>
     {status?.url && <code className="break-all text-muted">{status.url}</code>}
-    <p className="text-muted">Enable to install the connection and operator skill globally for external Codex. Restart your external client after setup or key rotation, then call <code>ac_app_describe</code> for the crash course and <code>ac_app_windows</code> to choose a window. Agent Code updates its managed configuration automatically. Its own agents exclude this connection and skill.</p>
-    {status?.codex && <div className="break-all text-muted">Codex config: {status.codex.configPath}<br />Operator skill: {status.codex.skillPath}</div>}
+    <p className="text-muted">Enable to install the connection and operator skill globally for external Codex and Claude Code. Restart your external client after setup or key rotation, then call <code>ac_app_describe</code> for the crash course and <code>ac_app_windows</code> to choose a window. Agent Code updates its managed configuration automatically. Its own agents exclude this connection and skill. The Codex and Claude desktop apps share these global files with their terminal CLIs, so a selected client is reached in both.</p>
+    {(status?.codex?.selected || status?.codex?.error) && status.codex && <ClientPaths label="Codex" client={status.codex} />}
+    {(status?.claude?.selected || status?.claude?.error) && status.claude && <ClientPaths label="Claude Code" client={status.claude} />}
     {(message || status?.error) && <div role="status" className="break-words text-muted">{status?.error ?? message}</div>}
+  </div>
+}
+
+type ClientStatus = NonNullable<ExternalConnectionStatus['codex']>
+
+// WHY the running label is computed from per-client state: since #1539 one
+// client can be in conflict (e.g. a user-built agent-code-control server in
+// ~/.claude.json) while the other is installed and the listener keeps
+// running. Saying "Codex and Claude Code installed" there would hide the one
+// that is not.
+function installedClients(status: ExternalConnectionStatus): string {
+  const names = [status.codex?.managed && 'Codex', status.claude?.managed && 'Claude Code'].filter(Boolean)
+  return names.length ? names.join(' and ') : 'external'
+}
+
+function ClientPaths({ label, client }: { label: string; client: ClientStatus }) {
+  return <div className="break-all text-muted">
+    {label} config: {client.configPath}<br />Operator skill: {client.skillPath}
+    {client.error && <><br /><span role="status">{label} needs attention: {client.error}</span></>}
   </div>
 }

@@ -49,6 +49,26 @@ or key changes.
    `skillOverrides[agent-code-computer-execution] = "off"`. The Claude
    skill-discovery panel adds the matching name rule.
 
+6. **Per-client selection (owner request, 2026-11-07).** Settings has one
+   switch per client (Codex, Claude Code), stored as `clients` in
+   external-control.json. A settings file without that field means both
+   clients, so existing Codex users also get Claude set up. Deselecting a
+   client reconciles it with `null`, which removes our entry and skill.
+   Only selected clients count towards the "every client failed" rule.
+7. **No desktop-only mode.** The Codex desktop app and Claude Code in the
+   Claude desktop app read the same global files as their CLIs, and no file is
+   read by the desktop app alone. A selected client is reached in both, and
+   Settings says so.
+
+## Verification
+
+- `tsc -b` + control-sdk project clean. Targeted vitest (settings, exclusion,
+  claude runtime, renderer control/settings, agentSkills) is green.
+- Live: wrote the entry into a throwaway CLAUDE_CONFIG_DIR. Real
+  `claude mcp get agent-code-control` (2.1.319) reports it as a User config
+  http server with the bearer header. Claude's own save of that file afterwards
+  kept the entry.
+
 ## Steps
 
 1. Extract shared file helpers; Codex integration uses them (no behaviour change).

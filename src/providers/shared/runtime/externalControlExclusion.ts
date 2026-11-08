@@ -8,6 +8,9 @@ import { realpathSync } from 'node:fs'
 // managed agent the controls for its siblings and parent app. This policy does
 // not edit user files or disable unrelated MCP servers.
 export const EXTERNAL_OPERATOR_SERVER_NAME = 'agent-code-control'
+// Folder name = frontmatter name of operator-skills/agent-code-computer-execution.
+// Claude keys skillOverrides and Codex keys name rules by this value.
+export const EXTERNAL_OPERATOR_SKILL_NAME = 'agent-code-computer-execution'
 
 // Codex requires a transport even for a disabled entry. Supplying a disabled
 // HTTP placeholder handles both an absent global entry and our documented HTTP
@@ -18,7 +21,7 @@ export const DISABLED_CODEX_EXTERNAL_CONTROL = {
 } as const
 
 export function disabledExternalOperatorSkill(codexHome = process.env.CODEX_HOME || join(homedir(), '.codex')) {
-  const path = resolve(codexHome, 'skills', 'agent-code-computer-execution', 'SKILL.md')
+  const path = resolve(codexHome, 'skills', EXTERNAL_OPERATOR_SKILL_NAME, 'SKILL.md')
   // Internal agents can start BEFORE Settings installs the skill. Canonicalize
   // the deepest existing ancestor as well as an existing file: a symlinked
   // CODEX_HOME must yield the same exclusion before and after installation,
@@ -56,7 +59,23 @@ export function excludeExternalControlFromClaude(args: string[], settings: Recor
   // TLDR hooks would displace this denylist and quietly hand the external
   // operator MCP back to every agent. The deny is spread last so a caller's
   // fragment can never overwrite it.
-  args.push('--settings', JSON.stringify({ ...settings, deniedMcpServers: [{ serverName: EXTERNAL_OPERATOR_SERVER_NAME }] }))
+  //
+  // The operator SKILL needs its own deny since #1539: Settings now installs it
+  // in ~/.claude/skills for the external Claude client, and every internal
+  // Claude agent reads that same directory. `skillOverrides` (Claude Code
+  // 2.1.319 settings schema: "on" | "name-only" | "user-invocable-only" |
+  // "off") with "off" hides it from both the model and the slash menu.
+  // policySettings and flagSettings are consulted before user/project settings
+  // (the binary's `["policySettings","flagSettings"]` precedence list), so
+  // this launch-only value beats a user's own `"on"`. Older CLIs that predate
+  // the key ignore unknown settings keys; there the MCP deny above still
+  // removes the tools the skill describes, leaving a skill that can do nothing.
+  const overrides = settings.skillOverrides && typeof settings.skillOverrides === 'object' ? settings.skillOverrides : {}
+  args.push('--settings', JSON.stringify({
+    ...settings,
+    deniedMcpServers: [{ serverName: EXTERNAL_OPERATOR_SERVER_NAME }],
+    skillOverrides: { ...overrides, [EXTERNAL_OPERATOR_SKILL_NAME]: 'off' },
+  }))
 }
 
 export function excludeExternalControlFromOpencode(env: Record<string, string>): void {

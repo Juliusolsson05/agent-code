@@ -11,7 +11,7 @@ it('applies the observed Claude/Codex launch exclusions without replacing unrela
   const claude = ['--resume', 'existing']
   excludeExternalControlFromClaude(claude)
   expect(claude.slice(0, 2)).toEqual(['--resume', 'existing'])
-  expect(JSON.parse(claude[3])).toEqual({ deniedMcpServers: [{ serverName: 'agent-code-control' }] })
+  expect(JSON.parse(claude[3])).toEqual({ deniedMcpServers: [{ serverName: 'agent-code-control' }], skillOverrides: { 'agent-code-computer-execution': 'off' } })
   const codex = ['--config', 'features.example=false']
   excludeExternalControlFromCodex(codex)
   expect(codex.slice(0, 6)).toEqual(['--config', 'features.example=false', '--config', 'mcp_servers.agent-code-control.enabled=false',
@@ -52,9 +52,12 @@ it('merges other Claude launch settings into the single settings source without 
   const args: string[] = []
   // A caller fragment that tried to clear the denylist must not win: a second
   // --settings flag, or a later spread, would hand the operator MCP back.
-  excludeExternalControlFromClaude(args, { hooks: { Stop: [] }, deniedMcpServers: [] })
+  excludeExternalControlFromClaude(args, { hooks: { Stop: [] }, deniedMcpServers: [], skillOverrides: { other: 'name-only', 'agent-code-computer-execution': 'on' } })
   expect(args.filter(arg => arg === '--settings')).toHaveLength(1)
   const settings = JSON.parse(args[1]!)
   expect(settings.hooks).toEqual({ Stop: [] })
   expect(settings.deniedMcpServers).toEqual([{ serverName: 'agent-code-control' }])
+  // #1539: the operator skill now sits in ~/.claude/skills for the external
+  // client; an internal agent must never get it back, while other overrides stay.
+  expect(settings.skillOverrides).toEqual({ other: 'name-only', 'agent-code-computer-execution': 'off' })
 })
