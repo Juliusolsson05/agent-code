@@ -193,7 +193,7 @@ jobs:
       - name: Publish the dated preview
         # Created fresh each run (a same-day rerun updates it), so the
         # Releases page lists every preview at its own date.
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3
         with:
           tag_name: ${{ env.TAG }}
           target_commitish: ${{ env.HEAD_SHA }}
@@ -216,7 +216,7 @@ jobs:
         # replacement IS the rolling mechanism. ACCEPTED TRADE-OFF: each asset
         # is briefly missing between its delete and its re-upload, so a link
         # followed at that moment can 404 once.
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3
         with:
           tag_name: preview
           # Used only when the tag is first created: without it GitHub tags

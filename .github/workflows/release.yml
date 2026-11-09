@@ -372,7 +372,7 @@ jobs:
 
       - name: Create GitHub Release
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true' }}
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3
         with:
           tag_name: ${{ needs.validate-release.outputs.tag }}
           # The tag must name the commit that was BUILT (#1035 review). A
