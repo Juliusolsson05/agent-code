@@ -544,7 +544,12 @@ export type CommandDef = {
   keepPaletteOpen?: boolean
   when?: (ctx: CommandContext) => boolean
   getState?: (ctx: CommandContext) => CommandState | null
-  run: (ctx: CommandContext) => void | Promise<void>
+  // `Promise<unknown>`, not `Promise<void>`: the dispatcher only AWAITS a run
+  // (for errors and single-flight) and never reads its value. The creation
+  // commands return `workspace.splitFocused(…)` directly, and that now
+  // resolves the new session id (#1528); a void-only type would force every
+  // one of them into an async wrapper that changes nothing.
+  run: (ctx: CommandContext) => void | Promise<unknown>
   /**
    * Offer this command in the Sessions list right-click menu (#1180), which
    * runs it for the clicked row's agent through `ctx.target`.
@@ -605,5 +610,5 @@ export type ResolvedCommand = {
   keywords: string[]
   keepPaletteOpen: boolean
   state: CommandState | null
-  run: (ctx: CommandContext) => void | Promise<void>
+  run: (ctx: CommandContext) => void | Promise<unknown>
 }

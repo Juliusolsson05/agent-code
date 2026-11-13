@@ -58,9 +58,13 @@ describe('Dispatch terminal placement (#671)', () => {
       { spawnSessionId: 'aTerm' },
     )
 
+    let created: string | null = null
     await act(async () => {
-      await harness.actions.splitFocused('terminal')
+      created = await harness.actions.splitFocused('terminal')
     })
+    // The id of the session it FILED (#1528: Open VPS Terminal types its ssh
+    // line into exactly this pane).
+    expect(created).toBe('aTerm')
 
     const state = harness.getState()
 

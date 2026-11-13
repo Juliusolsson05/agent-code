@@ -9,11 +9,15 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
+import { isValidSshAccess, type HermesLocation, type HermesSshAccess } from '@shared/hermes/ssh.js'
+
 export type StoredHermesConnection = {
   id: string
   name: string
   baseUrl: string
   createdAt: number
+  /** Optional SSH route to the same server (#1528). Never a password or key: a destination, port and key PATH. */
+  ssh?: HermesSshAccess
 }
 
 export type HermesConnectionsDocument = { version: 1; connections: StoredHermesConnection[] }
@@ -41,9 +45,38 @@ function coerce(raw: unknown): HermesConnectionsDocument {
       name: record.name,
       baseUrl: record.baseUrl,
       createdAt: typeof record.createdAt === 'number' ? record.createdAt : 0,
+      ...(coerceSsh(record.ssh) ? { ssh: coerceSsh(record.ssh)! } : {}),
     })
   }
   return { version: 1, connections }
+}
+
+/**
+ * A malformed `ssh` block is dropped ALONE: the connection (its URL, its
+ * sign-in) is worth more than a hand-edited SSH typo, and the user re-enters
+ * SSH access in Settings. Re-validated with the same rules as the form, so a
+ * hand-edited `"-oProxyCommand=…"` destination never reaches a command line.
+ */
+function coerceSsh(raw: unknown): HermesSshAccess | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const record = raw as Record<string, unknown>
+  if (typeof record.destination !== 'string') return null
+  const access: HermesSshAccess = { destination: record.destination }
+  if (typeof record.port === 'number') access.port = record.port
+  if (typeof record.identityFile === 'string') access.identityFile = record.identityFile
+  const hermes = coerceLocation(record.hermes)
+  if (hermes) access.hermes = hermes
+  return isValidSshAccess(access) ? access : null
+}
+
+function coerceLocation(raw: unknown): HermesLocation | null {
+  if (!raw || typeof raw !== 'object') return null
+  const record = raw as Record<string, unknown>
+  if (record.kind === 'host') return { kind: 'host' }
+  if (record.kind === 'docker' && typeof record.container === 'string') {
+    return { kind: 'docker', container: record.container, shell: record.shell === 'sh' ? 'sh' : 'bash', sudo: record.sudo === true }
+  }
+  return null
 }
 
 export async function loadHermesConnections(file: string): Promise<LoadedHermesConnections> {

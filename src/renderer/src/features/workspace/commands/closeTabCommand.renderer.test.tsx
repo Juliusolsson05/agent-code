@@ -83,7 +83,7 @@ function mountCommand(state: WorkspaceState) {
 }
 
 async function runAndConfirm(context: CommandContext, button: string) {
-  let running!: void | Promise<void>
+  let running!: void | Promise<unknown>
   await act(async () => { running = command!.run(context) })
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: button }))
