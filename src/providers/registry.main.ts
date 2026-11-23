@@ -22,6 +22,14 @@ import { discoverPiSkillRoots } from '@providers/pi/runtime/skillDiscovery.js'
 import { resolvePiBridgeScript } from '@providers/pi/runtime/bridgeScript.js'
 import { loadPiHistoryChunk } from '@providers/pi/runtime/piHistory.js'
 import { resolvePiSessionFile } from 'pi-terminal-headless'
+import { AntigravitySession } from '@providers/antigravity/runtime/antigravitySession.js'
+import { deliverAntigravityPrompt } from '@providers/antigravity/runtime/promptDelivery.js'
+import { discoverAntigravitySkillRoots } from '@providers/antigravity/runtime/skillDiscovery.js'
+import {
+  antigravityTranscriptLocator,
+  loadAntigravityHistoryChunk,
+  parseAntigravityTranscriptLocator,
+} from '@providers/antigravity/runtime/antigravityHistory.js'
 
 import type { MainProviderConfig } from '@shared/types/providerConfig'
 import { AGENT_PROVIDER_KINDS, isAgentProviderKind } from '@shared/types/providerKind'
@@ -235,6 +243,30 @@ const hermesMain: MainProviderConfig = {
   deliverPrompt: deliverHermesPrompt,
 }
 
+const antigravityMain: MainProviderConfig = {
+  id: 'antigravity',
+  name: 'Antigravity',
+  discoverSkillRoots: discoverAntigravitySkillRoots,
+  // agy's personal skill folder is undocumented (skillDiscovery.ts); claiming
+  // a location agy may not read would show deployed skills that never load.
+  personalAgentSkills: {
+    supported: false,
+    reason: 'Antigravity reads project skills from .agents/skills; its personal skill folder is not documented, so Agent Code does not deploy personal skills to it.',
+  },
+  // One runtime: `agy acp` (ACP over stdio), structured, no PTY
+  // (STRUCTURED_ONLY_PROVIDER_KINDS pins the pane to the rendered feed).
+  createSession: (opts) => new AntigravitySession(opts),
+  getProjectDir: async (cwd) => cwd,
+  // No transcript FILE Agent Code reads: agy's store is private SQLite.
+  // History comes from the live session's rows, else from an agy replay
+  // (antigravityHistory.ts), addressed by `antigravity://session/<id>`.
+  resolveTranscriptPath: async () => null,
+  loadHistoryChunk: loadAntigravityHistoryChunk,
+  transcriptLocator: antigravityTranscriptLocator,
+  parseTranscriptLocator: parseAntigravityTranscriptLocator,
+  deliverPrompt: deliverAntigravityPrompt,
+}
+
 // Typed as Record<AgentProviderKind, …> (not Record<string, …>) so that
 // adding a kind to AGENT_PROVIDER_KINDS without registering a config here
 // is a COMPILE error, not a runtime "Unknown provider" surprise. That is
@@ -246,6 +278,7 @@ const mainProviders: Record<AgentProviderKind, MainProviderConfig> = {
   grok: grokMain,
   pi: piMain,
   hermes: hermesMain,
+  antigravity: antigravityMain,
 }
 
 // Accepts a bare string (callers pass IPC args / persisted `kind` values)

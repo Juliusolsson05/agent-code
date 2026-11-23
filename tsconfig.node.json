@@ -46,6 +46,8 @@
       "opencode-terminal-headless/*": ["./packages/opencode-terminal-headless/src/*"],
       "pi-terminal-headless": ["./packages/pi-terminal-headless/src/index.ts"],
       "pi-terminal-headless/*": ["./packages/pi-terminal-headless/src/*"],
+      "antigravity-acp-headless": ["./packages/antigravity-acp-headless/src/index.ts"],
+      "antigravity-acp-headless/*": ["./packages/antigravity-acp-headless/src/*"],
       "agent-transcript-parser": ["./packages/agent-transcript-parser/src/index.ts"],
       "agent-transcript-parser/*": ["./packages/agent-transcript-parser/src/*"],
       "agent-voice-dictation": ["./packages/agent-voice-dictation/src/index.ts"],
@@ -98,6 +100,7 @@
     "packages/opencode-headless/src/**/*",
     "packages/opencode-terminal-headless/src/**/*",
     "packages/pi-terminal-headless/src/**/*",
+    "packages/antigravity-acp-headless/src/**/*",
     "packages/workflow-mcp/src/**/*"
   ],
   "exclude": [

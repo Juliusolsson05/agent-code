@@ -6,6 +6,7 @@ import { OPENCODE_RENDER_SHAPES } from '@providers/opencode/renderer/shapes'
 import { GROK_RENDER_SHAPES } from '@providers/grok/renderer/shapes'
 import { PI_RENDER_SHAPES } from '@providers/pi/renderer/shapes'
 import { HERMES_RENDER_SHAPES } from '@providers/hermes/renderer/shapes'
+import { ANTIGRAVITY_RENDER_SHAPES } from '@providers/antigravity/renderer/shapes'
 
 // Registry-level aggregation of the per-provider shape catalogs (Phase 3/4,
 // PR #555). Importing every provider here is what registries do —
@@ -26,6 +27,7 @@ const RENDER_SHAPE_CATALOGS_BY_PROVIDER: Record<AgentProviderKind, Readonly<Reco
   grok: GROK_RENDER_SHAPES,
   pi: PI_RENDER_SHAPES,
   hermes: HERMES_RENDER_SHAPES,
+  antigravity: ANTIGRAVITY_RENDER_SHAPES,
 }
 
 export const ALL_RENDER_SHAPE_CATALOGS: readonly Readonly<

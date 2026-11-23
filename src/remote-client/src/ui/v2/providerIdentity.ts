@@ -4,6 +4,7 @@ import { OPENCODE_IDENTITY } from '@providers/opencode/renderer/identity'
 import { GROK_IDENTITY } from '@providers/grok/renderer/identity'
 import { PI_IDENTITY } from '@providers/pi/renderer/identity'
 import { HERMES_IDENTITY } from '@providers/hermes/renderer/identity'
+import { ANTIGRAVITY_IDENTITY } from '@providers/antigravity/renderer/identity'
 
 // Provider badge vocabulary for the v2 phone chrome: the SAME identity
 // descriptors every desktop surface uses (glyph + shortLabel). The v1 list
@@ -32,6 +33,8 @@ export function providerBadge(kind: string): ProviderBadge {
       return PI_IDENTITY
     case 'hermes':
       return HERMES_IDENTITY
+    case 'antigravity':
+      return ANTIGRAVITY_IDENTITY
     default:
       return FALLBACK
   }

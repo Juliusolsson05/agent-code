@@ -32,7 +32,7 @@
  * will fail to compile until every kind has a config. That compile
  * error is the intended checklist.
  */
-export const AGENT_PROVIDER_KINDS = ['claude', 'codex', 'opencode', 'grok', 'pi', 'hermes'] as const
+export const AGENT_PROVIDER_KINDS = ['claude', 'codex', 'opencode', 'grok', 'pi', 'hermes', 'antigravity'] as const
 
 /** A provider that runs an actual agent (has transcripts, conditions, …). */
 export type AgentProviderKind = (typeof AGENT_PROVIDER_KINDS)[number]
@@ -170,6 +170,25 @@ export const CHAT_SURFACE_PROVIDER_KINDS = ['hermes'] as const satisfies readonl
 
 export function isChatSurfaceProviderKind(value: unknown): boolean {
   return typeof value === 'string' && (CHAT_SURFACE_PROVIDER_KINDS as readonly string[]).includes(value)
+}
+
+/**
+ * Providers whose ONLY runtime is structured (no PTY) but whose pane is the
+ * coding feed, not a chat.
+ *
+ * Antigravity runs as `agy acp` (Agent Client Protocol over stdio): there is
+ * no native terminal to attach, exactly like OpenCode's structured runtime,
+ * yet the pane is the ordinary rendered coding feed (tool rows, thinking,
+ * permissions), unlike Hermes' chat surface. WHY a provider property resolved
+ * at read time, like the sets above: every gate that would otherwise mount
+ * AgentTerminalLeaf (agentDisplayMode, the view-mode picker, the durable
+ * override guard) sees only a kind, and a spawn path that forgot a per-pane
+ * flag would paint an empty terminal.
+ */
+export const STRUCTURED_ONLY_PROVIDER_KINDS = ['antigravity'] as const satisfies readonly AgentProviderKind[]
+
+export function isStructuredOnlyProviderKind(value: unknown): boolean {
+  return typeof value === 'string' && (STRUCTURED_ONLY_PROVIDER_KINDS as readonly string[]).includes(value)
 }
 
 /**

@@ -3,6 +3,7 @@ import { constants } from 'node:fs'
 
 import { parseOpencodeTranscriptFile, type OpencodeStore } from 'opencode-terminal-headless'
 import { readPiBranch } from 'pi-terminal-headless'
+import { liveAntigravityRows, parseAntigravityTranscriptLocator } from '@providers/antigravity/runtime/antigravityHistory.js'
 
 import { streamJsonl } from '@shared/runtime/streamJsonl.js'
 import { codexExecScriptCalls, decodeDoubleQuotedLiteral, parseExecCommandArgument } from '@shared/codex/execScript.js'
@@ -81,6 +82,10 @@ type TranscriptSource =
   // file, so it is read as the active branch (the conversation pi itself
   // would resume), never streamed in line order like other JSONL.
   | { kind: 'pi'; path: string }
+  // An Antigravity conversation has no file Agent Code reads (agy's store is
+  // private SQLite); its locator `antigravity://session/<id>` names the rows
+  // the LIVE pane holds (antigravityHistory.ts).
+  | { kind: 'antigravity'; path: string; sessionId: string }
 
 type PreparedTranscript = {
   ok: true
@@ -270,6 +275,17 @@ async function prepareTranscript(
     }
   }
 
+  const antigravitySessionId = parseAntigravityTranscriptLocator(path)
+  if (antigravitySessionId) {
+    if (requestedProvider !== 'auto' && requestedProvider !== 'antigravity') {
+      return { ok: false, error: 'unsupported_provider', message: `${path} is an Antigravity conversation, not a ${requestedProvider} transcript.` }
+    }
+    if (!liveAntigravityRows(antigravitySessionId)) {
+      return { ok: false, error: 'file_not_readable', message: 'This Antigravity conversation is not open in Agent Code; open or resume the agent to read it.' }
+    }
+    return { ok: true, source: { kind: 'antigravity', path, sessionId: antigravitySessionId }, provider: 'antigravity' }
+  }
+
   try {
     await access(path, constants.R_OK)
   } catch {
@@ -321,6 +337,10 @@ async function* transcriptRecords(source: TranscriptSource): AsyncGenerator<Json
     case 'jsonl':
       yield* streamJsonl<JsonRecord>(source.path)
       return
+    case 'antigravity': {
+      for (const row of liveAntigravityRows(source.sessionId) ?? []) yield row as unknown as JsonRecord
+      return
+    }
     case 'pi': {
       // The branch can only be resolved with the whole tree in hand, so the
       // file is read once; the walk then yields back to the event loop every
@@ -380,6 +400,9 @@ function recordTimestamp(provider: AgentTranscriptProvider, raw: JsonRecord): nu
     // which is the moment the message itself was created.
     case 'pi':
       return finiteNumber(asRecord(raw.message)?.timestamp) ?? parseIsoTimestamp(stringField(raw, 'timestamp'))
+    // Rows carry the epoch ms they were committed at.
+    case 'antigravity':
+      return finiteNumber(raw.timestamp)
   }
 }
 
@@ -413,6 +436,8 @@ function extractItems(
     // Kept total so the switch fails to compile, not silently, if that changes.
     case 'hermes':
       return []
+    case 'antigravity':
+      return extractAntigravityItems(raw, timestamp)
   }
 }
 
@@ -1064,6 +1089,45 @@ function extractPiItems(raw: JsonRecord, timestamp: number | undefined): AgentTr
     return items
   }
   return []
+}
+
+// Antigravity records are the committed rows of antigravity-acp-headless
+// (AntigravityRow), one per conversation segment.
+//
+// - user / assistant rows → user_message / assistant_message. `final` stays
+//   false per row: a row cannot see whether a tool call follows it, and the
+//   reader already treats the last assistant message as the answer when no
+//   row claimed it (see streamReadTranscript).
+// - thought rows are dropped like every provider's reasoning.
+// - tool rows are classified by ACP's standard tool `kind` first (execute,
+//   edit, delete, move are actions; read, search, fetch are reads), because
+//   agy's tool names (run_command {CommandLine}, read_file {Path}) are not the
+//   names the shared classifier knows; the output is the raw tool output item.
+function extractAntigravityItems(raw: JsonRecord, timestamp: number | undefined): AgentTranscriptItem[] {
+  const role = stringField(raw, 'role')
+  const text = stringField(raw, 'text')
+  if (role === 'user') return text ? [{ kind: 'user_message', timestamp, text }] : []
+  if (role === 'assistant') return text ? [{ kind: 'assistant_message', timestamp, text, final: false }] : []
+  if (role !== 'tool') return []
+  const tool = asRecord(raw.tool)
+  if (!tool) return []
+  const name = stringField(tool, 'name') ?? 'tool'
+  const input = asRecord(tool.input)
+  const kind = stringField(tool, 'kind')
+  const items: AgentTranscriptItem[] = []
+  if (kind === 'execute') {
+    const command = stringField(input, 'CommandLine') ?? stringField(input, 'command') ?? stringField(input, 'cmd') ?? stringField(tool, 'title') ?? ''
+    items.push({ kind: 'shell_command', timestamp, command })
+  } else if (kind === 'edit' || kind === 'delete' || kind === 'move') {
+    const target = stringField(input, 'TargetFile') ?? stringField(input, 'Path') ?? stringField(input, 'path') ?? stringField(tool, 'title')
+    items.push({ kind: 'tool_write', timestamp, tool: name, target, summary: target ? `${name}: ${target}` : name })
+  } else {
+    const target = stringField(input, 'Path') ?? stringField(input, 'path') ?? stringField(tool, 'title')
+    items.push({ kind: 'tool_read', timestamp, tool: name, target, excerpt: target ? `${name}: ${target}` : undefined })
+  }
+  const output = stringField(tool, 'output')
+  if (output) items.push({ kind: 'tool_read', timestamp, tool: RAW_TOOL_OUTPUT, excerpt: output })
+  return items
 }
 
 // OpenCode records are whole messages, `{ info, parts }`, exactly as
