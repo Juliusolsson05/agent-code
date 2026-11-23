@@ -21,6 +21,7 @@ describe('provider switch choices', () => {
       'Grok',
       'Pi',
       'Hermes',
+      'Antigravity',
     ])
     // Pi's single choice carries the terminal runtime (it has no other).
     expect(AGENT_PROVIDER_CHOICES.find(choice => choice.kind === 'pi')?.providerRuntime).toBe('terminal')
