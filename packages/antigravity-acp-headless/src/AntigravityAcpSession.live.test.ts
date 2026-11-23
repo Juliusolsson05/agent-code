@@ -36,8 +36,10 @@ function startAgy(cwd: string): ChildProcessWithoutNullStreams {
 
 describe.skipIf(!LIVE)('AntigravityAcpSession against real agy', () => {
   it('runs, asks permission, commits rows and replays them identically', async () => {
-    // The project must be one agy already trusts, or agy asks in its TUI
-    // first; ANTIGRAVITY_LIVE_CWD names one (the sign-in folder works).
+    // Any folder works: agy acp opens sessions in folders the user never
+    // trusted in agy's TUI, and does not add them to its trusted list
+    // (recorded on 1.5.15). ANTIGRAVITY_LIVE_CWD pins a folder to inspect
+    // afterwards; otherwise a fresh temp dir is used and removed.
     const cwd = process.env.ANTIGRAVITY_LIVE_CWD ?? mkdtempSync(join(tmpdir(), 'agy-live-'))
     if (!process.env.ANTIGRAVITY_LIVE_CWD) dirs.push(cwd)
     writeFileSync(join(cwd, 'live-note.txt'), 'antigravity-live-ok\n')

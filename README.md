@@ -20,7 +20,7 @@
 ---
 
 Agent Code is a **harness orchestrator, not a model orchestrator**. It runs the
-real Claude Code, Codex, OpenCode, Pi and Grok CLIs side by side in one
+real Claude Code, Codex, OpenCode, Pi, Grok and Antigravity CLIs side by side in one
 open-source desktop IDE, and builds the workspace around them that none of
 them ship on their own.
 
@@ -31,7 +31,7 @@ them ship on their own.
 ## Harness orchestrator, not model orchestrator
 
 <p align="center">
-  <img src="docs/screenshots/harness-vs-model-orchestrator.svg" alt="Left: a model orchestrator such as OpenCode or Pi is one reimplemented harness pointed at many models. Right: Agent Code runs the real Claude Code, Codex, OpenCode, Pi and Grok harnesses and puts one IDE on top of all of them." />
+  <img src="docs/screenshots/harness-vs-model-orchestrator.svg" alt="Left: a model orchestrator such as OpenCode or Pi is one reimplemented harness pointed at many models. Right: Agent Code runs the real Claude Code, Codex, OpenCode, Pi, Grok and Antigravity harnesses and puts one IDE on top of all of them." />
 </p>
 
 A harness is everything between you and the model: the system prompt, the tool
@@ -152,6 +152,9 @@ program from the outside — the terminal screen, the model stream, the transcri
 files on disk and the process — and expose it as an API. Agent Code reconciles
 those observations into one conversation and renders it in React, without
 replacing the agent loop underneath.
+Antigravity is the exception to the PTY shape: Agent Code runs `agy acp` and
+speaks the Agent Client Protocol with it through `antigravity-acp-headless`, so
+there is no terminal to attach.
 
 [`agent-transcript-parser`](https://github.com/Juliusolsson05/agent-transcript-parser)
 translates transcripts between harnesses, which is what makes switching,
@@ -161,7 +164,10 @@ duplicating and rewinding a session possible. See
 ## Getting started
 
 Requires Node 22.12+ (CI builds on 24 — see `.nvmrc`), plus `claude` and `codex`
-on `PATH`, and any other harness CLI you want to use. The headless runtimes live
+on `PATH`, and any other harness CLI you want to use. To use Antigravity, install
+`agy` (`curl -fsSL https://antigravity.google/cli/install.sh | bash`) and run
+`agy` once in a terminal to sign in with your Google account; Agent Code never
+handles that sign-in. The headless runtimes live
 as git submodules, so clone with them included:
 
 ```bash
@@ -229,6 +235,8 @@ Its per-session wire log is bounded (claude-code-headless rotation, #1273).
   — headless Pi control layer
 - [`grok-code-headless`](https://github.com/Juliusolsson05/grok-code-headless)
   — headless Grok control layer
+- [`antigravity-acp-headless`](packages/antigravity-acp-headless)
+  — Antigravity (`agy acp`) client over the Agent Client Protocol
 - [`agent-transcript-parser`](https://github.com/Juliusolsson05/agent-transcript-parser)
   — transcript conversion and rewind across harnesses
 - [`workflow-mcp`](https://github.com/Juliusolsson05/workflow-mcp)
