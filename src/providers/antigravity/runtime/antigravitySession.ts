@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { constants as osConstants } from 'node:os'
 import { spawn as spawnProcess, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import {
   AntigravityAcpSession,
@@ -66,6 +67,18 @@ export class AntigravitySession extends EventEmitter implements AgentSession {
   private providerSessionId: string | null = null
   private unregisterHistory: (() => void) | null = null
   private historyGeneration = 0
+  /**
+   * Offset for history generations. The package numbers resets from 1 per
+   * instance, but a pane OUTLIVES its session: Reload Agent and recovery build
+   * a new AntigravitySession for the same pane, and the renderer drops a reset
+   * whose generation is not above the last it applied (historyBoundary.ts
+   * decideHistoryBoundary). A dropped reset leaves the old dedup set in place,
+   * so the replayed rows — same keys — were discarded as duplicates and the
+   * reloaded pane came up EMPTY (seen live in the dev app). Wall-clock micros
+   * keep generations rising across lifetimes; Hermes uses the same base.
+   */
+  private readonly generationBase = Date.now() * 1000
+  private spawnFailed = false
 
   private readonly cwd: string
   private readonly binary: string
@@ -108,6 +121,7 @@ export class AntigravitySession extends EventEmitter implements AgentSession {
     child.stderr.on('data', () => {})
     child.on('exit', (code, signal) => this.onExit(code, signal))
     child.on('error', error => {
+      this.spawnFailed = true
       this.emit('jsonl-error', Object.assign(new Error(`Could not start agy: ${error.message}`), { code: 'spawn-failed' }))
       this.onExit(null, null)
     })
@@ -182,7 +196,7 @@ export class AntigravitySession extends EventEmitter implements AgentSession {
       if (kind === 'reset') this.historyGeneration += 1
       this.emit('history-boundary', {
         type: kind,
-        generation: this.historyGeneration,
+        generation: this.generationBase + this.historyGeneration,
         snapshotByteLength: 0,
         complete: kind === 'caught-up',
         ...(kind === 'reset' && conversationChanged ? { conversationChanged: true } : {}),
@@ -207,18 +221,36 @@ export class AntigravitySession extends EventEmitter implements AgentSession {
 
   resize(_cols: number, _rows: number): void {}
 
-  async deliverPromptText(text: string): Promise<void> {
+  /**
+   * Hand a prompt to agy. Resolves `{ turnStarted: false }` at once when a
+   * turn is already running: the prompt is queued in order behind it (ACP runs
+   * one session/prompt at a time), and deliverAntigravityPrompt reports that
+   * as a `queue` acceptance. WHY not wait for the queued prompt to be written:
+   * that happens only when the running turn ends, possibly much later, and
+   * SessionManager holds the pane's delivery slot for as long as this promise
+   * is pending, so every other delivery to the pane would fail with
+   * delivery-in-flight in the meantime.
+   */
+  async deliverPromptText(text: string): Promise<{ turnStarted: boolean }> {
     const acp = this.acp
     if (!acp || this.exited || !this.providerSessionId) throw new AntigravityNotReadyError('agy is not running')
+    const queued = acp.isTurnActive()
     const { accepted, finished } = acp.prompt(text)
-    // The turn's outcome arrives as semantic events; an unobserved rejection
-    // here must not crash main.
-    finished.catch(() => undefined)
+    // The turn's outcome arrives as semantic events. A QUEUED prompt that never
+    // ran because agy stopped first is said once, so it is not lost silently.
+    finished.catch(error => {
+      if (queued) this.emit('transcript-diagnostic', { kind: 'antigravity-queued-prompt-dropped', message: error instanceof Error ? error.message : String(error) })
+    })
+    if (queued) {
+      accepted.catch(() => undefined)
+      return { turnStarted: false }
+    }
     try {
       await accepted
     } catch (error) {
       throw new AntigravityNotReadyError(error instanceof Error ? error.message : String(error))
     }
+    return { turnStarted: true }
   }
 
   async resolveCondition(action: ConditionCustomAction): Promise<{ ok: true; state?: unknown } | { ok: false; reason: string }> {
@@ -256,10 +288,12 @@ export class AntigravitySession extends EventEmitter implements AgentSession {
     void this.acp?.stop()
     this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
     this.emit('process-state', { active: false })
-    if (!this.stopping && code !== 0) {
+    // A spawn failure already reported itself as spawn-failed.
+    if (!this.stopping && !this.spawnFailed && code !== 0) {
       this.emit('jsonl-error', Object.assign(new Error(`agy exited (${signal ?? code ?? 'unknown'}). If this keeps happening, run \`agy\` in a terminal to check its sign-in.`), { code: 'agy-exited' }))
     }
-    this.emit('exit', { exitCode: code ?? 1, ...(signal ? { signal: 1 } : {}) })
+    const signalNumber = signal ? (osConstants.signals as Record<string, number>)[signal] : undefined
+    this.emit('exit', { exitCode: code ?? 1, ...(signalNumber !== undefined ? { signal: signalNumber } : {}) })
   }
 
   async stop(): Promise<void> {

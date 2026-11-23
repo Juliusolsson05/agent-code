@@ -46,9 +46,21 @@ export async function replayAntigravityConversation(sessionId: string, cwd: stri
   const binary = deps.binary ?? 'agy'
   const child = (deps.spawn ?? ((bin, args, options) => spawn(bin, args, { ...options, stdio: ['pipe', 'pipe', 'pipe'] })))(binary, ['acp'], { cwd })
   child.stderr.on('data', () => {})
-  const exited = new Promise<void>(resolve => child.once('exit', () => resolve()))
+  // WHY an 'error' listener: Node reports a spawn failure (agy not installed,
+  // a stale tool path, EACCES) as an 'error' EVENT on the child, and never
+  // emits 'exit' for it. With no listener, EventEmitter rethrows that event as
+  // an uncaught exception — in Electron main — and the 2 s exit wait below ran
+  // in full. `failed` turns it into this replay's rejection (callers already
+  // map a rejection to `unreadable`), and a failed spawn also counts as
+  // exited. Pinned by antigravityHistory.system.test.ts. Same shape as the
+  // catalog's discover() in main/conversations/sources/antigravity.ts.
+  const failed = new Promise<never>((_, reject) => child.once('error', reject))
+  const exited = new Promise<void>(resolve => {
+    child.once('exit', () => resolve())
+    child.once('error', () => resolve())
+  })
   try {
-    return await readAntigravityConversation(child.stdout, child.stdin, { sessionId, cwd })
+    return await Promise.race([readAntigravityConversation(child.stdout, child.stdin, { sessionId, cwd }), failed])
   } finally {
     child.kill()
     await Promise.race([exited, new Promise(resolve => setTimeout(resolve, 2000))])

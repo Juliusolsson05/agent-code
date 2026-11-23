@@ -25,8 +25,11 @@ export async function deliverAntigravityPrompt(io: PromptDeliveryIo): Promise<Pr
     }
   }
   try {
-    await io.session.deliverPromptText(io.prompt)
-    return { ok: true, acceptance: { kind: 'transport', acceptedAt: Date.now() } }
+    const result = await io.session.deliverPromptText(io.prompt)
+    // A prompt queued behind a running turn starts no turn of its own yet;
+    // `queue` tells the composer not to paint it as sending (#889).
+    const queued = Boolean(result && typeof result === 'object' && result.turnStarted === false)
+    return { ok: true, acceptance: { kind: queued ? 'queue' : 'transport', acceptedAt: Date.now() } }
   } catch (err) {
     const code = err instanceof Error ? (err as { code?: unknown }).code : undefined
     if (code === 'antigravity-not-ready') {
