@@ -22,6 +22,7 @@ import { discoverPiSkillRoots } from '@providers/pi/runtime/skillDiscovery.js'
 import { resolvePiBridgeScript } from '@providers/pi/runtime/bridgeScript.js'
 import { loadPiHistoryChunk } from '@providers/pi/runtime/piHistory.js'
 import { resolvePiSessionFile } from 'pi-terminal-headless'
+import { getToolPath } from '@main/setup/toolchain.js'
 import { AntigravitySession } from '@providers/antigravity/runtime/antigravitySession.js'
 import { deliverAntigravityPrompt } from '@providers/antigravity/runtime/promptDelivery.js'
 import { discoverAntigravitySkillRoots } from '@providers/antigravity/runtime/skillDiscovery.js'
@@ -261,7 +262,9 @@ const antigravityMain: MainProviderConfig = {
   // History comes from the live session's rows, else from an agy replay
   // (antigravityHistory.ts), addressed by `antigravity://session/<id>`.
   resolveTranscriptPath: async () => null,
-  loadHistoryChunk: loadAntigravityHistoryChunk,
+  // A non-live pane's history is replayed by a short-lived agy: the same
+  // binary the setup gate resolved (a manual path override included).
+  loadHistoryChunk: request => loadAntigravityHistoryChunk(request, { binary: getToolPath('antigravity', 'agy') }),
   transcriptLocator: antigravityTranscriptLocator,
   parseTranscriptLocator: parseAntigravityTranscriptLocator,
   deliverPrompt: deliverAntigravityPrompt,

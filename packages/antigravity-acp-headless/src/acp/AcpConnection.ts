@@ -51,13 +51,20 @@ export class AcpConnection {
   private closed = false
   private readonly pending = new Map<string | number, Pending>()
 
+  private readonly listeners: Array<[Readable | Writable, string, (...args: never[]) => void]> = []
+
   constructor(private readonly input: Readable, private readonly output: Writable, private readonly options: AcpConnectionOptions) {
     input.setEncoding('utf8')
-    input.on('data', (chunk: string) => this.onData(chunk))
-    input.on('end', () => this.close('stream ended'))
-    input.on('close', () => this.close('stream closed'))
-    input.on('error', () => this.close('stream error'))
-    output.on('error', () => this.close('write error'))
+    this.listen(input, 'data', (chunk: string) => this.onData(chunk))
+    this.listen(input, 'end', () => this.close('stream ended'))
+    this.listen(input, 'close', () => this.close('stream closed'))
+    this.listen(input, 'error', () => this.close('stream error'))
+    this.listen(output, 'error', () => this.close('write error'))
+  }
+
+  private listen(stream: Readable | Writable, event: string, handler: (...args: never[]) => void): void {
+    stream.on(event, handler as (...args: unknown[]) => void)
+    this.listeners.push([stream, event, handler])
   }
 
   get isClosed(): boolean {
@@ -96,6 +103,15 @@ export class AcpConnection {
   close(reason: string): void {
     if (this.closed) return
     this.closed = true
+    // Detach and drop the buffer: after a close (an oversized frame, a write
+    // error) no further line may reach rows or conditions, and a frame that
+    // tripped the size cap must not keep growing in memory.
+    for (const [stream, event, handler] of this.listeners.splice(0)) stream.off(event, handler as (...args: unknown[]) => void)
+    // Keep one no-op error listener: a late stream error with no listener at
+    // all would be thrown as an uncaught exception in main.
+    this.input.on('error', () => {})
+    this.output.on('error', () => {})
+    this.buffer = ''
     for (const [, pending] of this.pending) {
       if (pending.timer) clearTimeout(pending.timer)
       pending.reject(new AcpError('closed', `ACP connection closed (${reason})`))
@@ -113,13 +129,14 @@ export class AcpConnection {
   }
 
   private onData(chunk: string): void {
+    if (this.closed) return
     this.buffer += chunk
     if (this.buffer.length > MAX_FRAME_BYTES && !this.buffer.includes('\n')) {
       this.close('frame too large')
       return
     }
     let newline = this.buffer.indexOf('\n')
-    while (newline !== -1) {
+    while (newline !== -1 && !this.closed) {
       const line = this.buffer.slice(0, newline).trim()
       this.buffer = this.buffer.slice(newline + 1)
       if (line) this.onLine(line)

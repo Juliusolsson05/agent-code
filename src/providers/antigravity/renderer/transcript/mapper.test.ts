@@ -83,7 +83,8 @@ describe('mapAntigravityRowToFeedEntries', () => {
       type: 'user',
       uuid: 'ag:sess-1:0',
       parentUuid: null,
-      timestamp: new Date(T0).toISOString(),
+      // The row's own time (when its content started), whatever clock made it.
+      timestamp: new Date((user as AntigravityRow).timestamp).toISOString(),
       sessionId: 'sess-1',
       message: { role: 'user', content: [{ type: 'text', text: 'list the files' }] },
     }])
@@ -128,9 +129,9 @@ describe('mapAntigravityRowToFeedEntries', () => {
     expect(entriesOf(failed!)[1]!.message.content[0]).toMatchObject({ type: 'tool_result', tool_use_id: 'call-x', content: 'failed', is_error: true })
   })
 
-  it('an unfinished tool (turn cancelled mid-call) maps to its call only, with no result entry', () => {
+  it('a tool cut off by a cancelled turn is closed as cancelled, with a result entry saying so', () => {
     // A live turn that ends while the tool is still pending: the assembler
-    // commits the open tool at endTurn with its non-terminal status.
+    // closes it as cancelled, so the feed does not show it running forever.
     const rows: AntigravityRow[] = []
     const assembler = new TurnAssembler('sess-3', { row: row => rows.push(row), semantic: () => {} }, () => T0)
     assembler.setLive(true)
@@ -138,10 +139,11 @@ describe('mapAntigravityRowToFeedEntries', () => {
     assembler.apply({ sessionUpdate: 'tool_call', toolCallId: 'call-sleep', name: 'run_command', kind: 'execute', status: 'pending', rawInput: { CommandLine: 'sleep 100' } })
     assembler.endTurn('cancelled')
     const tool = rows.find(row => row.role === 'tool')!
-    expect(tool.tool).toMatchObject({ status: 'pending', output: null })
+    expect(tool.tool).toMatchObject({ status: 'cancelled', output: null, isError: false })
     const entries = entriesOf(tool)
-    expect(entries.map(entry => entry.uuid)).toEqual([tool.key])
+    expect(entries.map(entry => entry.uuid)).toEqual([tool.key, `${tool.key}:result`])
     expect(entries[0]!.message.content[0]).toMatchObject({ type: 'tool_use', id: 'call-sleep' })
+    expect(entries[1]!.message.content[0]).toMatchObject({ type: 'tool_result', tool_use_id: 'call-sleep', content: 'cancelled', is_error: false })
   })
 
   it('a live turn and its later replay map to the same uuids, so a reload dedupes instead of duplicating', () => {

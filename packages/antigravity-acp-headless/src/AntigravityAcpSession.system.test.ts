@@ -90,6 +90,40 @@ describe('AntigravityAcpSession', () => {
     expect(order).toEqual(['reset', 'ag:old:0', 'ag:old:1', 'caught-up'])
   })
 
+  it('falls back to a new conversation when agy refuses the load, without publishing the failed replay', async () => {
+    const agy = fakeAgy((frame, send) => {
+      if (frame.method === 'initialize') send({ jsonrpc: '2.0', id: frame.id, result: INIT })
+      if (frame.method === 'session/load') {
+        send(update('gone', { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'partial' } }))
+        send({ jsonrpc: '2.0', id: frame.id, error: { code: -32602, message: 'session not found' } })
+      }
+      if (frame.method === 'session/new') send({ jsonrpc: '2.0', id: frame.id, result: { sessionId: 'new-1' } })
+    })
+    const session = new AntigravityAcpSession({ input: agy.input, output: agy.output, cwd: '/work', resumeSessionId: 'gone' })
+    const order: string[] = []
+    session.on('history', ({ kind, conversationChanged }) => order.push(`${kind}${conversationChanged ? ':changed' : ''}`))
+    session.on('row', row => order.push(row.key))
+    expect(await session.start()).toEqual({ sessionId: 'new-1', resumed: false })
+    expect(order).toEqual(['reset:changed', 'caught-up'])
+    expect(session.getRows()).toEqual([])
+  })
+
+  it('fails a turn locally when agy ignores the cancel', async () => {
+    const agy = fakeAgy((frame, send) => {
+      if (frame.method === 'initialize') send({ jsonrpc: '2.0', id: frame.id, result: INIT })
+      if (frame.method === 'session/new') send({ jsonrpc: '2.0', id: frame.id, result: { sessionId: 's' } })
+      // session/prompt and session/cancel: never answered.
+    })
+    const session = new AntigravityAcpSession({ input: agy.input, output: agy.output, cwd: '/work', cancelGraceMs: 30 })
+    await session.start()
+    const { accepted, finished } = session.prompt('stuck')
+    await accepted
+    session.cancel()
+    await expect(finished).rejects.toThrow(/did not stop the turn/)
+    expect(session.isTurnActive()).toBe(false)
+    expect(agy.sent.some(frame => frame.method === 'session/cancel')).toBe(true)
+  })
+
   it('cancels a running turn with session/cancel and answers open permission asks as cancelled', async () => {
     const agy = fakeAgy((frame, send) => {
       if (frame.method === 'initialize') send({ jsonrpc: '2.0', id: frame.id, result: INIT })

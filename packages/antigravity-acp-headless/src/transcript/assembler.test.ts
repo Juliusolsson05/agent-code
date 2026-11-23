@@ -99,6 +99,35 @@ describe('TurnAssembler', () => {
     live.assembler.apply({ sessionUpdate: 'tool_call', ...shell, status: 'pending' })
     live.assembler.endTurn('cancelled')
     expect(live.events.some(event => event.type === 'api_error' && event.errorType === 'cancelled')).toBe(true)
-    expect(live.rows.find(row => row.role === 'tool')?.tool?.status).toBe('pending')
+    // A tool still open when the turn ends will never finish: it is closed as
+    // cancelled, not left 'pending' (it would show as running forever).
+    expect(live.rows.find(row => row.role === 'tool')?.tool?.status).toBe('cancelled')
+  })
+
+  it('closes the live turn when the prompt request fails, so the next turn can stream', () => {
+    const live = collect()
+    live.assembler.setLive(true)
+    live.assembler.beginTurn('go')
+    live.assembler.apply({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'thinking' } })
+    live.assembler.failTurn('Individual quota reached')
+    const types = live.events.map(event => event.type)
+    // Without turn_stopped/turn_completed the fold keeps this turn live and
+    // drops every later turn (allowReplaceOfLiveTurn is false).
+    expect(types.slice(-4)).toEqual(['api_error', 'turn_stopped', 'turn_completed', 'stream_phase'])
+  })
+
+  it('stamps replayed rows in conversation order before anything live', () => {
+    let clock = 1_000_000_000_000
+    const rows: AntigravityRow[] = []
+    const assembler = new TurnAssembler('s', { row: row => rows.push(row), semantic: () => {} }, () => clock)
+    assembler.setLive(false)
+    for (const update of REPLAY) assembler.apply(update)
+    assembler.flush()
+    assembler.setLive(true)
+    clock += 5
+    assembler.beginTurn('next')
+    const sorted = [...rows].sort((a, b) => a.timestamp - b.timestamp).map(row => row.ordinal)
+    expect(sorted).toEqual([...rows].sort((a, b) => a.ordinal - b.ordinal).map(row => row.ordinal))
+    expect(rows.find(row => row.text === 'next')!.timestamp).toBeGreaterThan(Math.max(...rows.filter(row => row.text !== 'next').map(row => row.timestamp)))
   })
 })

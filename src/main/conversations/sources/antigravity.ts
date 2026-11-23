@@ -6,7 +6,14 @@ import type { ConversationPrompt } from '@shared/conversations/types.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { getToolPath } from '@main/setup/toolchain.js'
 import { liveAntigravityRows, replayAntigravityConversation } from '@providers/antigravity/runtime/antigravityHistory.js'
-import { ConversationPromptsUnreadable, type ConversationSource, type SourceConversation, type SourceScope } from './types.js'
+import { ConversationPromptsUnreadable, type ConversationSource, type PromptReadOptions, type SourceConversation, type SourceScope } from './types.js'
+
+// The catalog waits for every source (service.ts), so a stalled agy (not
+// signed in, mid self-update, offline) must not hold the whole picker. A
+// listing that fails or times out is not retried for UNAVAILABLE_TTL_MS, so
+// reopening the picker does not start another agy each time.
+const LIST_DEADLINE_MS = 8_000
+const UNAVAILABLE_TTL_MS = 60_000
 
 // Antigravity conversation discovery through agy's own ACP server:
 // session/list in a short-lived `agy acp` (the catalog), session/load replay
@@ -24,7 +31,9 @@ import { ConversationPromptsUnreadable, type ConversationSource, type SourceConv
 export class AntigravityConversationSource implements ConversationSource {
   readonly provider = 'antigravity' as const
 
-  constructor(private readonly deps: { binary?: () => string } = {}) {}
+  private unavailableUntil = 0
+
+  constructor(private readonly deps: { binary?: () => string; now?: () => number; listDeadlineMs?: number } = {}) {}
 
   private binary(): string {
     return this.deps.binary?.() ?? getToolPath('antigravity', 'agy')
@@ -32,17 +41,28 @@ export class AntigravityConversationSource implements ConversationSource {
 
   async discover(scope: SourceScope): Promise<SourceConversation[]> {
     const span = performanceService.span('conversations.antigravity.discover', { scope: scope.scope })
+    const now = this.deps.now ?? Date.now
+    if (now() < this.unavailableUntil) {
+      span.end({ mode: 'acp', rows: 0, unavailable: true, cached: true })
+      return []
+    }
     let listings
     try {
       const child = spawn(this.binary(), ['acp'], { stdio: ['pipe', 'pipe', 'pipe'] })
       child.stderr.on('data', () => {})
       const failed = new Promise<never>((_, reject) => child.once('error', reject))
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('agy did not list conversations in time')), this.deps.listDeadlineMs ?? LIST_DEADLINE_MS)
+      })
       try {
-        listings = await Promise.race([listAntigravityConversations(child.stdout, child.stdin), failed])
+        listings = await Promise.race([listAntigravityConversations(child.stdout, child.stdin), failed, deadline])
       } finally {
+        clearTimeout(timer)
         child.kill()
       }
     } catch {
+      this.unavailableUntil = now() + UNAVAILABLE_TTL_MS
       span.end({ mode: 'acp', rows: 0, unavailable: true })
       return []
     }
@@ -77,10 +97,20 @@ export class AntigravityConversationSource implements ConversationSource {
     return rows
   }
 
-  /** Every user prompt, newest first: from the live pane, else an agy replay. */
-  async prompts(nativeId: string, cwd: string): Promise<ConversationPrompt[]> {
+  /**
+   * Every user prompt, newest first: from the live pane, else an agy replay.
+   *
+   * WHY search gets no replay: catalog search asks up to 150 rows at once
+   * (service.ts SEARCH_PROMPT_ROWS) with a bounded `need`, and each replay is
+   * a whole agy process plus a full session/load. Search matches Antigravity
+   * rows by their title (agy's generated one) instead; View Prompts, which
+   * asks for one conversation with need 'all', still replays it.
+   */
+  async prompts(nativeId: string, cwd: string, options?: PromptReadOptions): Promise<ConversationPrompt[]> {
+    const live = liveAntigravityRows(nativeId)
+    if (!live && options?.need !== 'all') return []
     try {
-      const rows = liveAntigravityRows(nativeId) ?? await replayAntigravityConversation(nativeId, cwd, { binary: this.binary() })
+      const rows = live ?? await replayAntigravityConversation(nativeId, cwd, { binary: this.binary() })
       return rows
         .filter(row => row.role === 'user' && typeof row.text === 'string' && row.text.trim().length > 0)
         .map(row => ({ text: row.text!, timestamp: row.timestamp }))

@@ -28,7 +28,7 @@ export type AntigravitySessionDeps = {
   spawn?: (binary: string, args: string[], options: { cwd: string; env: Record<string, string> }) => ChildProcessWithoutNullStreams
   mcpProxyScript?: string
   scriptRunner?: string
-  conversationExists?: (sessionId: string) => boolean
+  conversationExists?: (sessionId: string, env: Record<string, string>) => boolean
 }
 
 export interface AntigravitySession {
@@ -98,7 +98,7 @@ export class AntigravitySession extends EventEmitter implements AgentSession {
       spawn: deps.spawn ?? ((binary, args, spawnOptions) => spawnProcess(binary, args, { ...spawnOptions, stdio: ['pipe', 'pipe', 'pipe'] })),
       mcpProxyScript: deps.mcpProxyScript ?? resolveAntigravityMcpProxyScript(),
       scriptRunner: deps.scriptRunner ?? resolveAntigravityScriptRunner(),
-      conversationExists: deps.conversationExists ?? (id => antigravityConversationExists(id)),
+      conversationExists: deps.conversationExists ?? ((id, env) => antigravityConversationExists(id, env)),
     }
   }
 
@@ -126,8 +126,12 @@ export class AntigravitySession extends EventEmitter implements AgentSession {
       this.onExit(null, null)
     })
 
-    // A resume of a conversation agy no longer holds starts fresh (see class doc).
-    const resume = this.resumeSessionId && this.deps.conversationExists(this.resumeSessionId) ? this.resumeSessionId : null
+    // A conversation whose store file is plainly gone is not even tried; any
+    // other resume goes to session/load, and the package falls back to a new
+    // conversation if agy refuses it. The check reads the PANE's environment
+    // (GEMINI_CLI_HOME may differ from main's), and it is only a shortcut:
+    // agy's answer is what decides.
+    const resume = this.resumeSessionId && this.deps.conversationExists(this.resumeSessionId, env) ? this.resumeSessionId : null
     const acp = new AntigravityAcpSession({
       input: child.stdout,
       output: child.stdin,
@@ -147,7 +151,15 @@ export class AntigravitySession extends EventEmitter implements AgentSession {
       throw new Error(`agy acp did not start: ${error instanceof Error ? error.message : String(error)}. Run \`agy\` once in a terminal to sign in.`)
     }
     if (this.acp !== acp || this.exited) return
-    this.bindIdentity(started.sessionId, this.resumeSessionId && !started.resumed ? 'antigravity-conversation-missing' : null)
+    const fellBack = Boolean(this.resumeSessionId && !started.resumed)
+    this.bindIdentity(started.sessionId, fellBack ? 'antigravity-conversation-missing' : null)
+    if (fellBack && !resume) {
+      // Skipped the load (the shortcut above), so the package sent no reset:
+      // the pane still shows the conversation it asked for, and this one is
+      // different. The package sends this itself when agy refused the load.
+      this.emit('history-boundary', { type: 'reset', generation: this.generationBase + ++this.historyGeneration, snapshotByteLength: 0, complete: false, conversationChanged: true, file: antigravityTranscriptLocator(started.sessionId) })
+      this.emit('history-boundary', { type: 'caught-up', generation: this.generationBase + this.historyGeneration, snapshotByteLength: 0, complete: true, file: antigravityTranscriptLocator(started.sessionId) })
+    }
     this.emit('process-state', { active: false })
     this.emit('input-readiness', { ready: true, reason: 'ready' })
     this.emit('started', {})
@@ -207,7 +219,19 @@ export class AntigravitySession extends EventEmitter implements AgentSession {
     acp.on('activity', ({ active, status }) => this.emit('process-state', { active, status }))
     acp.on('conditions', snapshot => this.emit('conditions', snapshot as unknown as AgentSessionEvents['conditions'][0]))
     acp.on('error', ({ code, message }) => this.emit('transcript-diagnostic', { kind: 'antigravity-acp-error', code, message }))
-    acp.on('closed', ({ reason }) => this.emit('transcript-diagnostic', { kind: 'antigravity-acp-closed', reason }))
+    acp.on('closed', ({ reason }) => {
+      this.emit('transcript-diagnostic', { kind: 'antigravity-acp-closed', reason })
+      // The protocol died but agy may still be running (an oversized frame, a
+      // write error). A pane that looks ready while every prompt fails is
+      // worse than an exited one: end agy so the normal exit path runs.
+      if (!this.stopping && !this.exited) {
+        try {
+          this.child?.kill()
+        } catch {
+          // already gone
+        }
+      }
+    })
   }
 
   /** Structured runtime: no PTY. Esc (the app's universal interrupt) cancels the turn. */
@@ -285,6 +309,11 @@ export class AntigravitySession extends EventEmitter implements AgentSession {
   private onExit(code: number | null, signal: NodeJS.Signals | null): void {
     if (this.exited) return
     this.exited = true
+    // An exited pane no longer owns the conversation: the user may continue
+    // it in agy's own TUI (`agy --conversation`), and history / catalog reads
+    // must then replay it fresh instead of serving these stale rows.
+    this.unregisterHistory?.()
+    this.unregisterHistory = null
     void this.acp?.stop()
     this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
     this.emit('process-state', { active: false })
