@@ -13,6 +13,14 @@ import { createPiTranscriptEntryMapper, extractPiProviderSessionId, isPiTypedUse
 import { piComposerSubmit } from '@providers/pi/renderer/composerSubmit'
 import { PI_CONDITION_POLICY } from '@providers/pi/renderer/conditions/policy'
 import { PI_SEMANTIC_FOLD_POLICY } from '@providers/pi/renderer/semanticFoldPolicy'
+import { ANTIGRAVITY_IDENTITY } from '@providers/antigravity/renderer/identity'
+import { ANTIGRAVITY_VIEWS } from '@providers/antigravity/renderer/conditions/views'
+import { renderAntigravityOperation } from '@providers/antigravity/renderer/rows/dispatch'
+import { createAntigravityTranscriptEntryMapper, extractAntigravityProviderSessionId, isAntigravityTypedUserPrompt } from '@providers/antigravity/renderer/transcript/mapper'
+import { antigravityComposerSubmit } from '@providers/antigravity/renderer/composerSubmit'
+import { ANTIGRAVITY_CONDITION_POLICY } from '@providers/antigravity/renderer/conditions/policy'
+import { ANTIGRAVITY_SEMANTIC_FOLD_POLICY } from '@providers/antigravity/renderer/semanticFoldPolicy'
+import { ANTIGRAVITY_LEDGER_POLICY } from '@providers/antigravity/renderer/ledgerPolicy'
 import { claudeUsageLimitNotice } from '@providers/claude/renderer/adapters/usageLimitNotice'
 import { codexUsageLimitNotice } from '@providers/codex/renderer/adapters/usageLimitNotice'
 import type { ConditionView } from '@shared/conditions-core/view'
@@ -458,6 +466,33 @@ const grokCapabilities: RendererProviderCapabilities = {
   ledgerPolicy: GROK_LEDGER_POLICY,
 }
 
+const antigravityCapabilities: RendererProviderCapabilities = {
+  id: 'antigravity',
+  name: 'Antigravity',
+  ...ANTIGRAVITY_IDENTITY,
+  conditionViews: ANTIGRAVITY_VIEWS,
+  renderOperation: renderAntigravityOperation,
+  classifyDurableEntry: () => null,
+  // agy's own subagents (/agents, /teamwork) are not observable over ACP yet,
+  // and Agent Code's create_agent reaches agy as a plain MCP tool call the
+  // shared orchestration adapters do not parse. False until a capture backs it.
+  isSpawnTool: () => false,
+  createTranscriptEntryMapper: () => createAntigravityTranscriptEntryMapper(),
+  extractProviderSessionId: extractAntigravityProviderSessionId,
+  isTypedUserPrompt: isAntigravityTypedUserPrompt,
+  typedUserPromptText: text => text,
+  composerSubmit: antigravityComposerSubmit,
+  // ACP prompts carry images (agy advertises promptCapabilities.image), but
+  // the composer→main path for images is Claude-specific today; text first.
+  supportsImageAttachments: false,
+  // The user row is committed when the session cuts it at prompt time, right
+  // after acceptance; the echo bridges the IPC gap and reconciles by text.
+  usesOptimisticUserEcho: true,
+  conditionPolicy: ANTIGRAVITY_CONDITION_POLICY,
+  semanticFoldPolicy: ANTIGRAVITY_SEMANTIC_FOLD_POLICY,
+  ledgerPolicy: ANTIGRAVITY_LEDGER_POLICY,
+}
+
 const piCapabilities: RendererProviderCapabilities = {
   id: 'pi',
   name: 'Pi',
@@ -516,6 +551,7 @@ const rendererProviderCapabilities: Record<AgentProviderKind, RendererProviderCa
   grok: grokCapabilities,
   pi: piCapabilities,
   hermes: hermesCapabilities,
+  antigravity: antigravityCapabilities,
 }
 
 export function getRendererProviderCapabilities(id: string): RendererProviderCapabilities {

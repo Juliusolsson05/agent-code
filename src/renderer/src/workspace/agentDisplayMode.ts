@@ -1,6 +1,6 @@
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import type { AgentViewModeOverride, SessionKind } from '@renderer/workspace/types'
-import { effectiveProviderRuntime, isAgentProviderKind, isChatSurfaceProviderKind } from '@shared/types/providerKind'
+import { effectiveProviderRuntime, isAgentProviderKind, isChatSurfaceProviderKind, isStructuredOnlyProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind, AgentProviderRuntime } from '@shared/types/providerKind'
 import type {
   RenderedViewLeaseFeature,
@@ -50,6 +50,8 @@ export function providerHasNoNativeTerminal(
   providerRuntime: AgentProviderRuntime | null | undefined,
 ): boolean {
   if (isChatSurfaceProviderKind(kind)) return true
+  // Antigravity (agy over ACP) has no PTY at all; see STRUCTURED_ONLY_PROVIDER_KINDS.
+  if (isStructuredOnlyProviderKind(kind)) return true
   return kind === 'opencode' && effectiveProviderRuntime(kind, providerRuntime) !== 'terminal'
 }
 
@@ -57,7 +59,7 @@ function normalizeAgentViewModeForKind(
   kind: AgentProviderKind,
   mode: AgentViewMode,
 ): AgentViewMode {
-  if (kind !== 'opencode' && !isChatSurfaceProviderKind(kind)) return mode
+  if (kind !== 'opencode' && !isChatSurfaceProviderKind(kind) && !isStructuredOnlyProviderKind(kind)) return mode
   // WHY ordinary OpenCode is pinned to Agent mode:
   // Claude/Codex "Terminal" means "attach xterm to the real provider PTY."
   // The ordinary OpenCode choice is still HTTP/SSE and has no PTY, so mounting

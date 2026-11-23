@@ -48,6 +48,8 @@ export const alias = [
   { find: 'opencode-terminal-headless', replacement: resolve(root, 'packages/opencode-terminal-headless/src/index.ts') },
   { find: /^pi-terminal-headless\/(.+)$/, replacement: `${resolve(root, 'packages/pi-terminal-headless/src')}/$1` },
   { find: 'pi-terminal-headless', replacement: resolve(root, 'packages/pi-terminal-headless/src/index.ts') },
+  { find: /^antigravity-acp-headless\/(.+)$/, replacement: `${resolve(root, 'packages/antigravity-acp-headless/src')}/$1` },
+  { find: 'antigravity-acp-headless', replacement: resolve(root, 'packages/antigravity-acp-headless/src/index.ts') },
   { find: /^agent-transcript-parser\/(.+)$/, replacement: `${resolve(root, 'packages/agent-transcript-parser/src')}/$1` },
   { find: 'agent-transcript-parser', replacement: resolve(root, 'packages/agent-transcript-parser/src/index.ts') },
   { find: /^agent-voice-dictation\/(.+)$/, replacement: `${resolve(root, 'packages/agent-voice-dictation/src')}/$1/index.ts` },
@@ -90,6 +92,9 @@ const unitTestIncludes = [
   'testing/unit/**/*.test.ts',
   'src/**/*.test.ts',
   'src/**/*.test.tsx',
+  // antigravity-acp-headless lives in this repository rather than in a submodule
+  // with its own CI, so its tests run here, in the same tier split.
+  'packages/antigravity-acp-headless/src/**/*.test.ts',
 ] as const
 
 // Every tier suffix, in BOTH extensions.
@@ -127,6 +132,7 @@ export const systemTestIncludes = [
   // new cross-boundary tests should use the shared `.system.test.ts` suffix.
   'src/**/*.integration.test.ts',
   'src/**/*.integration.test.tsx',
+  'packages/antigravity-acp-headless/src/**/*.system.test.ts',
 ] as const
 
 export default defineConfig({

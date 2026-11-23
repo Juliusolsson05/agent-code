@@ -52,6 +52,11 @@ const headlessAlias = [
   // Unix socket for its bridge extension and tails Pi's session files.
   { find: /^pi-terminal-headless\/(.+)$/, replacement: `${resolve(__dirname, 'packages/pi-terminal-headless/src')}/$1` },
   { find: 'pi-terminal-headless', replacement: resolve(__dirname, 'packages/pi-terminal-headless/src/index.ts') },
+  // Google's Antigravity CLI (agy) over ACP. Main-only: it speaks JSON-RPC to
+  // an `agy acp` child the app spawns. It lives in this repository (not a
+  // submodule) until it earns its own repo.
+  { find: /^antigravity-acp-headless\/(.+)$/, replacement: `${resolve(__dirname, 'packages/antigravity-acp-headless/src')}/$1` },
+  { find: 'antigravity-acp-headless', replacement: resolve(__dirname, 'packages/antigravity-acp-headless/src/index.ts') },
   { find: /^agent-transcript-parser\/(.+)$/, replacement: `${resolve(__dirname, 'packages/agent-transcript-parser/src')}/$1` },
   { find: 'agent-transcript-parser', replacement: resolve(__dirname, 'packages/agent-transcript-parser/src/index.ts') },
   // `agent-voice-dictation` is a git submodule like the other local packages,
@@ -93,6 +98,7 @@ const headlessExclude = [
   'opencode-headless',
   'opencode-terminal-headless',
   'pi-terminal-headless',
+  'antigravity-acp-headless',
   'agent-transcript-parser',
   'agent-voice-dictation',
   // Compile the submodule from source so a recursive clone does not have a
@@ -153,6 +159,17 @@ function copyMainRuntimeResourcesPlugin(): Plugin {
       // same entry exists in scripts/copy-packaged-resources.mjs.
       from: resolve(__dirname, 'packages/pi-terminal-headless/src/bridge/extension.ts'),
       to: resolve(__dirname, 'out/main/runtime/pi/bridge.ts'),
+    },
+    {
+      // WHY Antigravity's MCP proxy is copied as plain .mjs and not bundled:
+      // agy starts it itself, as the stdio MCP server Agent Code names in
+      // session/new, in a process of its own run by Agent Code's Electron in
+      // node mode, so it must be a standalone file on a real path. It imports
+      // only Node built-ins by contract (antigravity-acp-headless
+      // src/mcpProxy.mjs). `out/main/runtime/**` is asarUnpack'ed. The same
+      // entry exists in scripts/copy-packaged-resources.mjs.
+      from: resolve(__dirname, 'packages/antigravity-acp-headless/src/mcpProxy.mjs'),
+      to: resolve(__dirname, 'out/main/runtime/antigravity/mcpProxy.mjs'),
     },
   ]
 

@@ -30,6 +30,12 @@ const staticResources = [
     from: 'packages/pi-terminal-headless/src/bridge/extension.ts',
     to: 'out/main/runtime/pi/bridge.ts',
   },
+  {
+    // Antigravity's stdio MCP proxy, started by agy itself — see the matching
+    // entry in electron.vite.config.ts for why it is a plain .mjs copy.
+    from: 'packages/antigravity-acp-headless/src/mcpProxy.mjs',
+    to: 'out/main/runtime/antigravity/mcpProxy.mjs',
+  },
 ]
 
 // WHY fileURLToPath and not `new URL(import.meta.url).pathname`:

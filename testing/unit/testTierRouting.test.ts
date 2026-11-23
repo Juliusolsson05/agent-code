@@ -12,10 +12,15 @@ describe('root test-tier routing', () => {
     // exclusion: a new submodule must be safe by default. Reintroducing a
     // packages/**/*.test.ts sweep would make its live and process tests inherit
     // Agent Code's environment and parallelism before anyone reviewed them.
+    // antigravity-acp-headless is the one package listed by name: it is NOT a
+    // submodule (it lives in this repository and has no CI of its own), its
+    // suites were written for this runner, and it is still a named entry, not
+    // a sweep, so the next package is excluded by default as before.
     expect(unitTestIncludes).toEqual([
       'testing/unit/**/*.test.ts',
       'src/**/*.test.ts',
       'src/**/*.test.tsx',
+      'packages/antigravity-acp-headless/src/**/*.test.ts',
     ])
   })
 

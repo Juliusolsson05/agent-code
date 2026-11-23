@@ -708,7 +708,7 @@ export function getSettingsRegistry(
       // the words people search after reading a README or skills.sh.
       keywords: [
         'skills', 'skill', 'install', 'installed', 'add', 'npx', 'skills.sh', 'github', 'repository',
-        'update', 'claude', 'codex', 'opencode', 'pi', 'personal', 'packages', 'agents', 'external',
+        'update', 'claude', 'codex', 'opencode', 'pi', 'antigravity', 'personal', 'packages', 'agents', 'external',
         'npx skills add', '--skill',
       ],
       metadata: { scope: 'app', apply: 'new-session', storage: 'external-files' },
@@ -721,7 +721,7 @@ export function getSettingsRegistry(
       description: 'Apply personal development rules to every supported agent provider.',
       keywords: [
         'conventions', 'rules', 'instructions', 'agents', 'claude', 'codex',
-        'opencode', 'pi', 'skills', 'commits', 'git', 'testing', 'development practices',
+        'opencode', 'pi', 'antigravity', 'skills', 'commits', 'git', 'testing', 'development practices',
       ],
       // Personal provider skills are machine-wide and are guaranteed for newly
       // spawned agents. A live provider may cache skill discovery, so calling
@@ -742,7 +742,7 @@ export function getSettingsRegistry(
       title: 'Custom Skills',
       description: 'Create and manage portable personal Agent Skills authored in Agent Code.',
       keywords: [
-        'custom', 'skills', 'instructions', 'agents', 'claude', 'codex', 'opencode', 'pi',
+        'custom', 'skills', 'instructions', 'agents', 'claude', 'codex', 'opencode', 'pi', 'antigravity',
         'personal', 'manage', 'editor',
       ],
       metadata: { scope: 'app', apply: 'new-session', storage: 'external-files' },
@@ -1144,7 +1144,7 @@ export function getSettingsRegistry(
       title: 'Providers',
       description:
         'Choose which coding agents Agent Code offers. Detected CLIs start on; turning a provider off hides it from pickers, switching, and usage — running sessions keep running. Reset returns a provider to detection.',
-      keywords: ['provider', 'providers', 'enable', 'disable', 'claude', 'codex', 'opencode', 'grok', 'pi', 'hermes', 'usage', 'hide'],
+      keywords: ['provider', 'providers', 'enable', 'disable', 'claude', 'codex', 'opencode', 'grok', 'pi', 'antigravity', 'hermes', 'antigravity', 'usage', 'hide'],
       // Main's setup.json is the truth (storage: 'setup'); the row mirrors it.
       metadata: { scope: 'app', apply: 'new-session', storage: 'setup' },
       control: { type: 'providers-enablement' },

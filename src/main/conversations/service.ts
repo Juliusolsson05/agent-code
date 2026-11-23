@@ -20,6 +20,7 @@ import { CodexConversationSource } from './sources/codex.js'
 import { defaultOpencodeDataDir, OpencodeConversationSource } from './sources/opencode.js'
 import { GrokConversationSource } from './sources/grok.js'
 import { PiConversationSource } from './sources/pi.js'
+import { AntigravityConversationSource } from './sources/antigravity.js'
 import type { ConversationSource, SourceConversation } from './sources/types.js'
 import { LruMap } from '@shared/lib/lruMap.js'
 
@@ -241,6 +242,7 @@ export function createConversationService(deps: { ledger: ConversationLedger | n
       new OpencodeConversationSource({ dataDir: defaultOpencodeDataDir() }),
       new GrokConversationSource(),
       new PiConversationSource(),
+      new AntigravityConversationSource(),
     ],
     ledger: deps.ledger,
     listWorktrees: deps.listWorktrees,

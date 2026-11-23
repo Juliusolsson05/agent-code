@@ -1,0 +1,13 @@
+{
+  "name": "antigravity-acp-headless",
+  "version": "0.0.1",
+  "description": "Agent Code's adapter for Google's Antigravity CLI (agy): drives `agy acp` over the Agent Client Protocol and folds its session updates into the transcript, live-stream and condition shapes Agent Code consumes",
+  "type": "module",
+  "private": true,
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

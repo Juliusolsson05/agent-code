@@ -117,6 +117,7 @@ import {
 import type { JsonlProviderStreamState } from '@renderer/workspace/providerSessionIdentity'
 import { SemanticEventBackpressureQueue } from '@renderer/workspace/hook/ipc/semanticEventBackpressure'
 import { PI_IDENTITY_ENVELOPE_TYPE } from '@providers/pi/renderer/transcript/mapper'
+import { ANTIGRAVITY_IDENTITY_ENVELOPE_TYPE, ANTIGRAVITY_ROW_TYPE } from '@providers/antigravity/renderer/transcript/mapper'
 
 // Codex rollout is delivered as many small IPC bursts, but `turn_context`
 // is only one line near the beginning of the task. The bundle that
@@ -2024,8 +2025,11 @@ export function useIpcSubscriptions(
           // the silent binary-provider fallthrough #394 warns about.
           const record = raw as Record<string, unknown>
           const shapeSaysPi = record.type === PI_IDENTITY_ENVELOPE_TYPE || (typeof record.line === 'number' && 'parentId' in record)
+          // An Antigravity row and Antigravity's identity envelope have types of
+          // their own (antigravity-acp-headless AntigravityRow), for the same reason.
+          const shapeSaysAntigravity = record.type === ANTIGRAVITY_IDENTITY_ENVELOPE_TYPE || record.type === ANTIGRAVITY_ROW_TYPE
           const routedKind: AgentProviderKind =
-            mappingKind ?? (shapeSaysCodex ? 'codex' : shapeSaysPi ? 'pi' : 'claude')
+            mappingKind ?? (shapeSaysCodex ? 'codex' : shapeSaysPi ? 'pi' : shapeSaysAntigravity ? 'antigravity' : 'claude')
           if (entryType === 'queue-operation' && routedKind === 'claude') {
             const op = raw as { operation?: string; content?: string; timestamp?: string }
             claudeQueue = applyQueueOperation(claudeQueue, {
