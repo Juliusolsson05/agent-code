@@ -137,6 +137,9 @@ describe('Antigravity conversation source prompts', () => {
 
   it('a conversation agy cannot replay (agy missing) is unreadable, not "no prompts"', async () => {
     const source = new AntigravityConversationSource({ binary: () => join(sandbox(), 'not-installed', 'agy') })
-    await expect(source.prompts('closed-conv', process.cwd())).rejects.toBeInstanceOf(ConversationPromptsUnreadable)
+    // Search (a bounded `need`) never replays a closed conversation: one agy
+    // per row would start dozens of processes per keystroke.
+    expect(await source.prompts('closed-conv', process.cwd(), { need: 3 })).toEqual([])
+    await expect(source.prompts('closed-conv', process.cwd(), { need: 'all' })).rejects.toBeInstanceOf(ConversationPromptsUnreadable)
   })
 })

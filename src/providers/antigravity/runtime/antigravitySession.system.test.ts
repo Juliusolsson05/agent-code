@@ -191,7 +191,8 @@ describe('AntigravitySession start', () => {
     const replays = { 'conv-7': [text('user_message_chunk', 'earlier prompt'), text('agent_message_chunk', 'earlier answer')] }
     const { session, events, agy, conversationExists } = await launch(agyScript({ replays }), { resumeSessionId: 'conv-7' }, ['conv-7'])
 
-    expect(conversationExists).toHaveBeenCalledWith('conv-7')
+    // Checked against the PANE's environment, not main's.
+    expect(conversationExists).toHaveBeenCalledWith('conv-7', expect.objectContaining({ PATH: expect.any(String) }))
     expect(agy().methods()).toEqual(['initialize', 'session/load'])
     expect(agy().sent[1]!.params).toEqual({ sessionId: 'conv-7', cwd: '/work/project', mcpServers: [] })
     const order = events
@@ -219,7 +220,7 @@ describe('AntigravitySession start', () => {
   it('resuming a conversation agy no longer holds starts a new one and says so before binding it', async () => {
     const { session, events, agy, conversationExists } = await launch(agyScript({ newSessionId: 'fresh-1' }), { resumeSessionId: 'gone-conv' })
 
-    expect(conversationExists).toHaveBeenCalledWith('gone-conv')
+    expect(conversationExists).toHaveBeenCalledWith('gone-conv', expect.any(Object))
     expect(agy().methods()).toEqual(['initialize', 'session/new'])
     const changed = named(events, 'provider-session-changed')
     expect(changed.map(event => event.args[0])).toEqual([{
@@ -228,7 +229,15 @@ describe('AntigravitySession start', () => {
       reason: 'antigravity-conversation-missing',
     }])
     expect(indexOf(events, event => event.name === 'provider-session-changed')).toBeLessThan(indexOf(events, isIdentity('fresh-1')))
-    expect(named(events, 'history-boundary')).toEqual([])
+    // The pane still showed the conversation it asked for: a conversation-
+    // changed reset clears it for the new one.
+    expect(named(events, 'history-boundary').map(event => {
+      const { generation: _generation, ...rest } = event.args[0] as Record<string, unknown>
+      return rest
+    })).toEqual([
+      { type: 'reset', snapshotByteLength: 0, complete: false, conversationChanged: true, file: 'antigravity://session/fresh-1' },
+      { type: 'caught-up', snapshotByteLength: 0, complete: true, file: 'antigravity://session/fresh-1' },
+    ])
     expect(session.getProviderSessionId()).toBe('fresh-1')
     expect(session.getTranscriptFile()).toBe('antigravity://session/fresh-1')
   })

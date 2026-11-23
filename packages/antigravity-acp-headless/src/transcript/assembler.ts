@@ -57,8 +57,8 @@ export type AntigravityRow = {
 
 export type AntigravitySemanticEvent = Record<string, unknown> & { type: string; source: 'antigravity-acp'; ts: number }
 
-type OpenSegment = { kind: 'user' | 'assistant' | 'thought'; ordinal: number; text: string; blockId: string; blockIndex: number }
-type OpenTool = AntigravityToolSnapshot & { ordinal: number; blockIndex: number; committed: boolean }
+type OpenSegment = { kind: 'user' | 'assistant' | 'thought'; ordinal: number; text: string; blockId: string; blockIndex: number; openedAt: number }
+type OpenTool = AntigravityToolSnapshot & { ordinal: number; blockIndex: number; committed: boolean; openedAt: number }
 
 const TERMINAL_TOOL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'canceled', 'error'])
 
@@ -121,6 +121,15 @@ export class TurnAssembler {
   private blockCounter = 0
   private turnText = ''
   private live = false
+  /**
+   * Timestamp base for REPLAYED rows. WHY not the time they are replayed: the
+   * feed orders committed rows by timestamp (rendering/model/order.ts), and a
+   * resume replays the whole conversation in one burst — every row would
+   * carry the resume moment and sort after live content that preceded it.
+   * Replayed rows instead get a base well in the past plus their ordinal, so
+   * they keep conversation order and sort before anything live.
+   */
+  private replayBase = 0
 
   constructor(private sessionId: string, private readonly sink: AssemblerSink, private readonly now: () => number = Date.now) {}
 
@@ -138,6 +147,17 @@ export class TurnAssembler {
   /** Replays (session/load) build rows only; live turns also stream events. */
   setLive(live: boolean): void {
     this.live = live
+    if (!live) this.replayBase = this.now() - 24 * 60 * 60 * 1000
+  }
+
+  /**
+   * When a row's content STARTED. WHY the open time and not the commit time:
+   * a tool commits when it finishes, possibly after text that started later
+   * (parallel tools, a tool closed at turn end), and the feed sorts by
+   * timestamp; stamping at commit would paint it below the text that followed.
+   */
+  private stamp(ordinal: number): number {
+    return this.live ? this.now() : this.replayBase + ordinal
   }
 
   /**
@@ -152,7 +172,8 @@ export class TurnAssembler {
     this.blockCounter = 0
     this.turnText = ''
     if (promptText.trim().length > 0) {
-      this.segment = { kind: 'user', ordinal: this.ordinal++, text: promptText, blockId: '', blockIndex: -1 }
+      const ordinal = this.ordinal++
+      this.segment = { kind: 'user', ordinal, text: promptText, blockId: '', blockIndex: -1, openedAt: this.stamp(ordinal) }
       this.closeSegment()
     }
     if (this.live) {
@@ -165,9 +186,16 @@ export class TurnAssembler {
   /** The prompt request returned: the turn is over. */
   endTurn(stopReason: string | null): void {
     this.closeSegment()
-    this.commitOpenTools()
+    // A tool still open at the end of a turn will never finish: agy stopped
+    // it (cancel) or moved on. Committed as running it would spin forever,
+    // and its later updates are ignored once committed.
+    this.commitOpenTools(stopReason === 'cancelled' ? 'cancelled' : 'failed')
     const turnId = this.turnId
     if (this.live && turnId) {
+      // turn_stopped before turn_completed, as Hermes does: the fold closes
+      // the live turn on it, so the next turn can take the slot
+      // (allowReplaceOfLiveTurn is false for this provider).
+      this.emit({ type: 'turn_stopped', turnId, stopReason: stopReason ?? 'end_turn' })
       if (stopReason === 'cancelled') {
         this.emit({ type: 'api_error', turnId, message: 'Turn cancelled.', errorType: 'cancelled' })
       } else if (stopReason === 'refusal') {
@@ -184,10 +212,15 @@ export class TurnAssembler {
   /** The prompt request failed outright (auth, quota, transport). */
   failTurn(message: string): void {
     this.closeSegment()
-    this.commitOpenTools()
+    this.commitOpenTools('failed')
     const turnId = this.turnId
     if (this.live && turnId) {
       this.emit({ type: 'api_error', turnId, message, errorType: 'request-failed' })
+      // Without these the live turn stays open in the fold, and with
+      // allowReplaceOfLiveTurn false every later turn's events would be
+      // dropped: the pane would never stream again (review finding).
+      this.emit({ type: 'turn_stopped', turnId, stopReason: 'error' })
+      this.emit({ type: 'turn_completed', turnId, fullText: this.turnText, confidence: 'high' })
       this.emit({ type: 'stream_phase', turnId, phase: 'idle' })
     }
     this.turnId = null
@@ -223,7 +256,8 @@ export class TurnAssembler {
     if (this.segment?.kind !== kind) {
       this.closeSegment()
       const blockIndex = this.blockCounter++
-      this.segment = { kind, ordinal: this.ordinal++, text: '', blockId: `ag-block-${this.turnCounter}-${blockIndex}`, blockIndex }
+      const ordinal = this.ordinal++
+      this.segment = { kind, ordinal, text: '', blockId: `ag-block-${this.turnCounter}-${blockIndex}`, blockIndex, openedAt: this.stamp(ordinal) }
       if (this.live && this.turnId && kind !== 'user') {
         this.emit({ type: 'block_started', turnId: this.turnId, blockId: this.segment.blockId, blockIndex, kind: kind === 'thought' ? 'reasoning' : 'text' })
         this.emit({ type: 'stream_phase', turnId: this.turnId, phase: kind === 'thought' ? 'thinking' : 'responding' })
@@ -255,7 +289,7 @@ export class TurnAssembler {
       ordinal: segment.ordinal,
       role: segment.kind,
       text: segment.text,
-      timestamp: this.now(),
+      timestamp: segment.openedAt,
     })
   }
 
@@ -267,6 +301,7 @@ export class TurnAssembler {
       // A tool call ends the text segment before it, like a new kind does.
       this.closeSegment()
       const blockIndex = this.blockCounter++
+      const ordinal = this.ordinal++
       tool = {
         toolCallId,
         name: typeof update.name === 'string' ? update.name : typeof update.title === 'string' ? update.title : 'tool',
@@ -276,9 +311,10 @@ export class TurnAssembler {
         status: typeof update.status === 'string' ? update.status : 'pending',
         output: null,
         isError: false,
-        ordinal: this.ordinal++,
+        ordinal,
         blockIndex,
         committed: false,
+        openedAt: this.stamp(ordinal),
       }
       this.tools.set(toolCallId, tool)
       if (this.live && this.turnId) {
@@ -299,8 +335,16 @@ export class TurnAssembler {
     if (TERMINAL_TOOL_STATUSES.has(tool.status)) this.commitTool(tool)
   }
 
-  private commitOpenTools(): void {
-    for (const tool of this.tools.values()) if (!tool.committed) this.commitTool(tool)
+  /** Commit every unfinished tool; at a turn's end they are given a final status. */
+  private commitOpenTools(finalStatus?: 'cancelled' | 'failed'): void {
+    for (const tool of this.tools.values()) {
+      if (tool.committed) continue
+      if (finalStatus && !TERMINAL_TOOL_STATUSES.has(tool.status)) {
+        tool.status = finalStatus
+        tool.isError = finalStatus === 'failed'
+      }
+      this.commitTool(tool)
+    }
   }
 
   private commitTool(tool: OpenTool): void {
@@ -312,7 +356,7 @@ export class TurnAssembler {
       }
       this.emit({ type: 'block_completed', turnId: this.turnId, blockId: tool.toolCallId, blockIndex: tool.blockIndex, kind: 'tool_use', toolName: tool.name, toolUseId: tool.toolCallId })
     }
-    const { ordinal, blockIndex: _blockIndex, committed: _committed, ...snapshot } = tool
+    const { ordinal, blockIndex: _blockIndex, committed: _committed, openedAt, ...snapshot } = tool
     this.sink.row({
       type: 'antigravity-row',
       sessionId: this.sessionId,
@@ -320,7 +364,7 @@ export class TurnAssembler {
       ordinal,
       role: 'tool',
       tool: snapshot,
-      timestamp: this.now(),
+      timestamp: openedAt,
     })
   }
 

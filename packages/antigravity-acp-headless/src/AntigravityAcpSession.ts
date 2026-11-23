@@ -83,6 +83,8 @@ export type AntigravityAcpSessionOptions = {
   model?: string | null
   clientInfo?: { name: string; version: string }
   now?: () => number
+  /** How long agy gets to honour session/cancel before the turn is failed locally. */
+  cancelGraceMs?: number
 }
 
 export class AntigravityPromptError extends Error {
@@ -106,11 +108,16 @@ export class AntigravityAcpSession extends EventEmitter {
   private readonly rows: AntigravityRow[] = []
   private readonly permissions = new Map<string, { request: AcpIncomingRequest; info: AntigravityPermissionRequest }>()
   private activity: AntigravityActivity = { active: false, status: 'starting' }
+  private holdingRows = false
+  private abandonTurn: ((error: Error) => void) | null = null
+  private cancelTimer: ReturnType<typeof setTimeout> | null = null
+  private readonly cancelGraceMs: number
   private turnQueue: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: AntigravityAcpSessionOptions) {
     super()
     this.now = options.now ?? Date.now
+    this.cancelGraceMs = options.cancelGraceMs ?? 10_000
     this.assembler = new TurnAssembler('', {
       row: row => this.storeRow(row),
       semantic: event => this.emit('semantic', event),
@@ -157,25 +164,46 @@ export class AntigravityAcpSession extends EventEmitter {
     const mcpServers = [...(this.options.mcpServers ?? [])]
     const resumeId = this.options.resumeSessionId ?? null
     let result: unknown
+    let resumed = false
     if (resumeId) {
       // session/load replays the whole conversation as session/update
-      // notifications BEFORE its response arrives; they fold into rows only.
+      // notifications BEFORE its response arrives. The replayed rows are
+      // HELD until the load succeeds: publishing the reset first and then
+      // failing would leave the pane wiped (review finding).
       this.sessionId = resumeId
       this.assembler.reset(resumeId)
       this.assembler.setLive(false)
-      this.emit('history', { kind: 'reset', conversationChanged: false })
+      this.holdingRows = true
       try {
         result = await this.connection.request('session/load', { sessionId: resumeId, cwd: this.options.cwd, mcpServers }, 120_000)
-      } finally {
         this.assembler.flush()
+        resumed = true
+      } catch (error) {
+        // A closed connection is fatal; anything agy ANSWERED (unknown or
+        // deleted conversation) falls back to a new conversation below.
+        if (!(error instanceof AcpError) || error.code !== 'remote') throw error
+        this.rows.length = 0
+      } finally {
+        this.holdingRows = false
       }
-      this.emit('history', { kind: 'caught-up', conversationChanged: false })
-    } else {
+      if (resumed) {
+        this.emit('history', { kind: 'reset', conversationChanged: false })
+        for (const row of this.rows) this.emit('row', row)
+        this.emit('history', { kind: 'caught-up', conversationChanged: false })
+      }
+    }
+    if (!resumed) {
       result = await this.connection.request('session/new', { cwd: this.options.cwd, mcpServers }, 120_000)
       const sessionId = isRecord(result) && typeof result.sessionId === 'string' ? result.sessionId : null
       if (!sessionId) throw new AcpError('protocol', 'agy acp did not return a session id')
       this.sessionId = sessionId
       this.assembler.reset(sessionId)
+      if (resumeId) {
+        // The pane still shows the conversation it asked for; this is a
+        // DIFFERENT one, so its rows and live turns must go (conversationChanged).
+        this.emit('history', { kind: 'reset', conversationChanged: true })
+        this.emit('history', { kind: 'caught-up', conversationChanged: false })
+      }
     }
     this.assembler.setLive(true)
 
@@ -185,16 +213,18 @@ export class AntigravityAcpSession extends EventEmitter {
         .catch(error => this.emit('error', { code: 'set-model-failed', message: (error as Error).message }))
     }
     this.setActivity({ active: false, status: 'idle' })
-    this.emit('ready', { sessionId: this.sessionId!, resumed: Boolean(resumeId), models: isRecord(result) ? result.models : undefined })
-    return { sessionId: this.sessionId!, resumed: Boolean(resumeId) }
+    this.emit('ready', { sessionId: this.sessionId!, resumed, models: isRecord(result) ? result.models : undefined })
+    return { sessionId: this.sessionId!, resumed }
   }
 
   /**
    * Run one prompt. Resolves with ACP's stop reason when the TURN ends.
    *
-   * `accepted` resolves as soon as the prompt has been handed to agy (the
-   * request is written in order behind any running turn) — that is the
-   * delivery acknowledgement callers need, not the end of the turn.
+   * `accepted` resolves when the session/prompt request is WRITTEN to agy —
+   * at once when idle, or only when the running turn ends for a queued
+   * prompt (callers that must not wait, like AntigravitySession, check
+   * isTurnActive() first). Esc cancels only the running turn; a queued
+   * prompt still runs after it, as in agy's own TUI.
    *
    * WHY prompts are queued, not refused, during a turn: ACP allows one
    * session/prompt at a time per session; a prompt typed during a turn should
@@ -222,8 +252,12 @@ export class AntigravityAcpSession extends EventEmitter {
       this.setActivity({ active: true, status: 'working' })
       const request = this.connection.request('session/prompt', { sessionId: this.sessionId, prompt: [{ type: 'text', text }] }, null)
       accept()
+      // Settled early only when agy ignores a cancel (see cancel()).
+      const abandoned = new Promise<never>((_, reject) => {
+        this.abandonTurn = reject
+      })
       try {
-        const result = await request
+        const result = await Promise.race([request, abandoned])
         const stopReason = isRecord(result) && typeof result.stopReason === 'string' ? result.stopReason : null
         this.assembler.endTurn(stopReason)
         return stopReason
@@ -233,6 +267,9 @@ export class AntigravityAcpSession extends EventEmitter {
         this.emit('error', { code: 'prompt-failed', message })
         throw new AntigravityPromptError('rejected', message)
       } finally {
+        this.abandonTurn = null
+        if (this.cancelTimer) clearTimeout(this.cancelTimer)
+        this.cancelTimer = null
         this.turnActive = false
         this.clearPermissions('cancelled')
         if (!this.closed) this.setActivity({ active: false, status: 'idle' })
@@ -243,11 +280,26 @@ export class AntigravityAcpSession extends EventEmitter {
     return { accepted, finished }
   }
 
-  /** Stop the running turn (the app's Esc). Pending permission asks are cancelled too. */
+  /**
+   * Stop the running turn (the app's Esc). Pending permission asks are
+   * cancelled too.
+   *
+   * WHY a deadline: session/cancel is a notification, and an agy stuck in a
+   * tool can ignore it. The prompt request has no timeout (turns can run for
+   * hours), so without this the turn — and every prompt queued behind it —
+   * would never settle until the pane was killed. After the grace period the
+   * turn is failed locally; agy may still answer later, which is ignored.
+   */
   cancel(): void {
     if (!this.sessionId || !this.turnActive) return
     this.clearPermissions('cancelled')
     this.connection.notify('session/cancel', { sessionId: this.sessionId })
+    if (this.cancelTimer) return
+    this.cancelTimer = setTimeout(() => {
+      this.cancelTimer = null
+      this.abandonTurn?.(new AntigravityPromptError('rejected', 'agy did not stop the turn after a cancel; reload the agent if it stays stuck.'))
+    }, this.cancelGraceMs)
+    this.cancelTimer.unref?.()
   }
 
   /** Answer an open permission request with one of ITS options. */
@@ -356,7 +408,7 @@ export class AntigravityAcpSession extends EventEmitter {
     let index = this.rows.length
     while (index > 0 && this.rows[index - 1]!.ordinal > row.ordinal) index -= 1
     this.rows.splice(index, 0, row)
-    this.emit('row', row)
+    if (!this.holdingRows) this.emit('row', row)
   }
 
   private setActivity(next: AntigravityActivity): void {
@@ -368,6 +420,8 @@ export class AntigravityAcpSession extends EventEmitter {
   private onClose(reason: string): void {
     if (this.closed) return
     this.closed = true
+    if (this.cancelTimer) clearTimeout(this.cancelTimer)
+    this.cancelTimer = null
     this.permissions.clear()
     this.setActivity({ active: false, status: 'exited' })
     this.emit('closed', { reason })
