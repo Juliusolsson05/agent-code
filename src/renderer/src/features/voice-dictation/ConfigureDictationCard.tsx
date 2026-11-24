@@ -3,8 +3,10 @@ import { Button } from '@renderer/components/ui/button'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 
-// Dismissible "Configure Voice Dictation" card shown above the tab bar
-// when dictation is unconfigured — regardless of whether the user has
+// Dismissible "Configure Voice Dictation" card shown below the tab bar
+// and settings bar (never above them: app/shell/AppChrome.tsx keeps the
+// tab bar as the window's first row for the macOS traffic lights and
+// window drag) when dictation is unconfigured — regardless of whether the user has
 // toggled it on. The card exists so packaged-app users learn a
 // discoverable path from "app just opened" to "dictation works",
 // without us dropping an Accessibility permission prompt on first launch

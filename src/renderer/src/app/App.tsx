@@ -4,7 +4,6 @@ import { useSidekickSpotlightActive } from '@renderer/features/sidekick/state/si
 import { useControlRegistration } from '@renderer/control/registerRendererHost'
 import { WorkspaceProvider } from '@renderer/workspace/WorkspaceContext'
 import { useKeybinds } from '@renderer/workspace/tile-tree/useKeybinds'
-import { TabBar } from '@renderer/workspace/tile-tree/TabBar'
 import { useRenderedLeaseHygiene } from '@renderer/workspace/hook/effects/useRenderedLeaseHygiene'
 import { useThemeSync } from '@renderer/features/settings/hooks/useThemeSync'
 import { useAiWorkspaceOpenRequests } from '@renderer/features/global-editor/hooks/useAiWorkspaceOpenRequests'
@@ -24,12 +23,9 @@ import { SidePanels } from '@renderer/app/surfaces/SidePanels'
 import { MainSurface } from '@renderer/app/shell/MainSurface'
 import { AgentTerminalOwnershipProvider } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { BrowserPocketHost } from '@renderer/features/browser-pocket/ui/BrowserPocketHost'
-import { RestoreBanner } from '@renderer/app/shell/RestoreBanner'
-import { ConfigureDictationCard } from '@renderer/features/voice-dictation/ConfigureDictationCard'
+import { AppChrome } from '@renderer/app/shell/AppChrome'
 import { DictationGuideModal } from '@renderer/features/voice-dictation/DictationGuideModal'
-import { SettingsBar } from '@renderer/app/shell/SettingsBar'
 import { SetupGate } from '@renderer/features/setup/ui/SetupGate'
-import { CliUpdateBanner } from '@renderer/features/cli-updates/CliUpdateBanner'
 import { useCliUpdateSync } from '@renderer/features/cli-updates/store'
 import { useProviderEnablementSync } from '@renderer/features/providers/store'
 import { useUserMcpSync } from '@renderer/features/mcp/store'
@@ -43,8 +39,11 @@ import { useUserMcpSync } from '@renderer/features/mcp/store'
 //   2. Instantiate the workspace hook (owns all tab/pane state + IPC)
 //      and provide it via WorkspaceContext.
 //   3. Register global keybinds.
-//   4. Render the layout shell: banner → tab bar → settings bar →
-//      main surface + side panels → overlays → modals.
+//   4. Render the layout shell: tab bar → settings bar → banners →
+//      main surface + side panels → overlays → modals. The first three
+//      are AppChrome; the tab bar MUST stay the window's first row (the
+//      macOS traffic lights and window drag live there — AppChrome.tsx
+//      has the WHY).
 //
 // Every modal/overlay/panel mounts via app/surfaces/registry.tsx.
 // ADDING A SURFACE MUST NOT EDIT THIS FILE — write a wrapper in the
@@ -119,20 +118,15 @@ export default function App() {
     <WorkspaceProvider workspace={workspace}>
       {workspace.runtimeServices}
       <div className="relative h-screen flex flex-col bg-canvas text-ink font-code min-h-0">
+        {/* SetupGate renders a portaled dialog (or null), never a row in
+            this column, so it does not push the chrome down. */}
         <SetupGate />
-        <RestoreBanner />
-        {/* CLI updater banner. Sits above the tab bar next to
-            RestoreBanner because both surfaces communicate "durable
-            degraded state for this run" — the exact use case
-            RestoreBanner's header comment names. Renders as null when
-            neither CLI has anything to report. */}
-        <CliUpdateBanner />
-        {/* Voice dictation configuration nudge — soft banner that
-            disappears once a Deepgram key exists or the user dismisses
-            it. Renders null unless the API key is unconfigured. */}
-        <ConfigureDictationCard />
-        <TabBar workspace={workspace} onNewTabRequest={onNewTabRequest} />
-        <SettingsBar />
+        {/* Tab bar, settings bar, then the banner stack (restore, CLI
+            update, dictation nudge). Banners used to render ABOVE the tab
+            bar, under the macOS traffic lights, where they also killed
+            window dragging from the top edge. Keep nothing in flow above
+            this — AppChrome.tsx has the full WHY. */}
+        <AppChrome workspace={workspace} onNewTabRequest={onNewTabRequest} />
         <AgentTerminalOwnershipProvider>
           <div className="flex-1 min-h-0 min-w-0 flex overflow-hidden">
             {/* Sidekick Spotlight (#1493 follow-up): the Sidekick column, a

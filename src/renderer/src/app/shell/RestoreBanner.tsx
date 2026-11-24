@@ -5,16 +5,22 @@ import { useSwapFocus } from '@renderer/lib/useSwapFocus'
 import { useWorkspaceLayoutContext } from '@renderer/workspace/WorkspaceContext'
 import { WORKSPACE_READ_ONLY_PREFIX } from '@shared/types/session'
 
-// WHY render this above TabBar instead of as a toast:
+// WHY render this as a persistent banner in the window chrome instead
+// of as a toast:
 //
 // The state being communicated is durable for the lifetime of the app
 // run, not a transient event — autosave is disabled until the user
 // restarts the app, so dismissing a toast would orphan the warning
 // while the underlying disk-protection invariant is still in effect.
-// A persistent banner above the tab bar matches how Electron desktop
+// A persistent banner in the chrome matches how Electron desktop
 // apps surface "this run is degraded" state (e.g. update available),
 // and the user sees it on every interaction instead of having to
 // remember a toast they swatted at boot.
+//
+// WHERE in the chrome: just BELOW the tab bar and settings bar, never
+// above them. It used to sit above the tab bar, which put its text under
+// the macOS traffic lights and took away the window's top drag strip
+// whenever it showed. AppChrome.tsx owns the order and has the WHY.
 //
 // WHY the banner auto-collapses to a corner chip after 60 s (packaged-
 // UX fix): the original banner permanently blocks the top ~24 px of the

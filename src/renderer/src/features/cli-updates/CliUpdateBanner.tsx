@@ -5,7 +5,10 @@ import { dismissKey, useCliUpdateStore } from '@renderer/features/cli-updates/st
 
 // Renderer-side banner for the CLI auto-updater.
 //
-// Sits just above the tab bar, in the same slot as RestoreBanner. That
+// Sits just below the tab bar and settings bar, in the same slot as
+// RestoreBanner (it used to sit ABOVE the tab bar, under the macOS
+// traffic lights, where it also blocked dragging the window by its top
+// edge — app/shell/AppChrome.tsx owns the order and has the WHY). That
 // slot is explicitly documented as "for durable degraded state" — the
 // exact shape of "your CLI is currently updating" and "your CLI update
 // failed". Toasts are the wrong primitive here: an updating banner needs
