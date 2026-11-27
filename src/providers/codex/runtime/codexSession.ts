@@ -39,6 +39,8 @@ import { addCodexBuiltInMcpLaunchConfig } from '@providers/shared/runtime/builtI
 import { addCodexUserMcpLaunchConfig, type CodexShellPolicyStyle } from '@providers/shared/runtime/userMcpLaunch.js'
 import type { ResolvedUserMcpServer } from '@shared/userMcp/types.js'
 import { forwardCodexRolloutEntries } from '@providers/codex/runtime/codexHeadlessForwarding.js'
+import { resolveCodexProxyDecision } from '@providers/codex/runtime/codexProxyPolicy.js'
+import { mergeNoProxy } from '@providers/shared/runtime/proxyEnv.js'
 
 
 /** Allocate a per-session run directory and return the path of its
@@ -144,6 +146,12 @@ export type CodexPromptEvidenceDiagnostic = {
   reason: string
 }
 
+export type CodexProxyDiagnostic = {
+  type: 'codex-proxy-skipped' | 'codex-proxy-fallback'
+  reason: string
+  detail: string
+}
+
 export type CodexSessionEvents = {
   // Declared for AgentSession contract parity (grok Stage 4): a durable-history
   // generation boundary. This provider never emits it today; it exists so the
@@ -169,7 +177,7 @@ export type CodexSessionEvents = {
   'transcript-diagnostic': [CodexRolloutDiagnostic | {
     type: 'provider-request-observation'
     observation: CodexSemanticProviderRequestEvent
-  } | CodexPromptEvidenceDiagnostic]
+  } | CodexPromptEvidenceDiagnostic | CodexProxyDiagnostic]
   // process-state carries the optional spinner-derived status string
   // (e.g. "working… 12s") so the renderer can show provider-specific
   // verbiage in its activity indicator. Without this, the renderer
@@ -371,51 +379,71 @@ export class CodexSession extends EventEmitter {
     addCodexUserMcpLaunchConfig(this.userMcpServers, args, cleanEnv, this.userMcpCodexShellPolicy)
     excludeExternalControlFromCodex(args, cleanEnv.CODEX_HOME)
     if (this.useProxy) {
-      // Mirror the Claude proxy's on-disk layout so a single
-      // bundle-inspection tool can read either provider's
-      // proxy-events.jsonl without branching:
-      //   ~/.config/agent-code/proxy/<project-segment>/<session-segment>/<timestamp>/proxy-events.jsonl
-      //
-      // The path discipline is identical to what
-      // claude-code-headless' createProxyServer does (see ProxyServer
-      // in proxy/proxyServer.ts createWorkDir). Codex's
-      // ResponsesProxy doesn't own that allocation today (the
-      // testing harness used to construct it without disk
-      // persistence at all), so we compute it here and pass it as
-      // an explicit `eventsFile` option.
-      //
-      // sessionKey naming mirrors Claude exactly: `resume-<id>` when
-      // resuming a known thread, else `shell-<sessionId>` so a fresh
-      // session still produces a stable folder name. Both segments
-      // are sanitised before joining so a path-traversal attempt via
-      // a malformed cwd or session id can't escape the proxy root.
-      const eventsFile = await allocateProxyEventsFile({
-        cwd: this.cwd,
-        sessionKey: this.resumeSessionId
-          ? `resume-${this.resumeSessionId}`
-          // Fresh sessions do not have an upstream-stable provider id yet, but
-          // the app-local pane id is stable for the lifetime of the process and
-          // is the only identifier the renderer has when a user saves a bundle
-          // before Codex writes session_meta. Match Claude's `shell-<id>`
-          // convention so manual bundles can request exact fresh-session proxy
-          // evidence instead of falling back to "latest run in this project".
-          : (this.shellSessionId
-              ? `shell-${this.shellSessionId}`
-              : `shell-${new Date().toISOString().replace(/[:.]/g, '-')}`),
-      })
-      if (!this.isStartAttemptActive(attempt)) return
-      const proxy = await ResponsesProxy.create({ eventsFile })
-      if (!this.isStartAttemptActive(attempt)) {
-        // WHY stop can win while create() is awaiting a listening socket. The
-        // returned proxy did not exist when stop snapshotted the attempt, so the
-        // continuation that receives it must close it locally and must never
-        // publish it into fields now owned by a later generation.
-        try { await proxy.stop() } catch { /* best-effort */ }
-        return
+      // WHY proxy setup is pre-checked and fail-open (#1552):
+      //   ResponsesProxy is an observational enhancement; Codex's rollout
+      //   tailer and PTY work without it. Pre-checking corporate proxy env,
+      //   config.toml model_provider/openai_base_url, and auth.json avoids
+      //   misrouting ChatGPT/keyring/custom-provider users, and catching any
+      //   startup error guarantees a proxy failure never aborts Codex spawn.
+      try {
+        const decision = await resolveCodexProxyDecision(cleanEnv)
+        if (!this.isStartAttemptActive(attempt)) return
+        if (!decision.useProxy) {
+          console.warn(
+            `[codexSession] skipping local proxy for session ${this.shellSessionId ?? '<unknown>'}: ${decision.detail}`,
+          )
+          this.emit('transcript-diagnostic', {
+            type: 'codex-proxy-skipped',
+            reason: decision.reason,
+            detail: decision.detail,
+          })
+        } else {
+          // Mirror the Claude proxy's on-disk layout so a single
+          // bundle-inspection tool can read either provider's
+          // proxy-events.jsonl without branching.
+          const eventsFile = await allocateProxyEventsFile({
+            cwd: this.cwd,
+            sessionKey: this.resumeSessionId
+              ? `resume-${this.resumeSessionId}`
+              : (this.shellSessionId
+                  ? `shell-${this.shellSessionId}`
+                  : `shell-${new Date().toISOString().replace(/[:.]/g, '-')}`),
+          })
+          if (!this.isStartAttemptActive(attempt)) return
+          const proxy = await ResponsesProxy.create({
+            eventsFile,
+            ...(decision.upstreamBaseUrl ? { upstreamBaseUrl: decision.upstreamBaseUrl } : {}),
+            ...(decision.authMode ? { authMode: decision.authMode } : {}),
+          })
+          if (!this.isStartAttemptActive(attempt)) {
+            // WHY stop can win while create() is awaiting a listening socket. The
+            // returned proxy did not exist when stop snapshotted the attempt, so the
+            // continuation that receives it must close it locally and must never
+            // publish it into fields now owned by a later generation.
+            try { await proxy.stop() } catch { /* best-effort */ }
+            return
+          }
+          attempt.proxyServer = proxy
+          this.proxyServer = proxy
+          const mergedNoProxy = mergeNoProxy(cleanEnv)
+          cleanEnv.NO_PROXY = mergedNoProxy
+          cleanEnv.no_proxy = mergedNoProxy
+          args.push('--config', `openai_base_url=${JSON.stringify(proxy.info.proxyBaseUrl)}`)
+        }
+      } catch (err) {
+        attempt.proxyServer = null
+        this.proxyServer = null
+        const detail = err instanceof Error ? err.message : String(err)
+        console.warn(
+          `[codexSession] proxy startup failed for session ${this.shellSessionId ?? '<unknown>'}; falling back to direct spawn:`,
+          err,
+        )
+        this.emit('transcript-diagnostic', {
+          type: 'codex-proxy-fallback',
+          reason: 'proxy-start-failed',
+          detail,
+        })
       }
-      attempt.proxyServer = proxy
-      this.proxyServer = proxy
-      args.push('--config', `openai_base_url=${JSON.stringify(proxy.info.proxyBaseUrl)}`)
     }
     // From here on we have a listening proxy (if useProxy was set) but
     // no PTY, no CodexHeadless, and therefore no exit/stop plumbing.

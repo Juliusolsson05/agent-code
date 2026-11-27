@@ -28,6 +28,10 @@ import type {
   PromptReadinessOutcome,
 } from '@shared/types/session.js'
 import { unwrapClaudePastedContent } from '@shared/claude/pastedContent.js'
+import {
+  buildClaudeProxyEnv,
+  evaluateClaudeProxyCompatibility,
+} from '@providers/claude/runtime/claudeProxyPolicy.js'
 import { ClaudeCodeHeadless, createProxyServer } from 'claude-code-headless'
 import type {
   ClaudeCondition,
@@ -277,162 +281,113 @@ export class ClaudeSession extends EventEmitter {
     }
 
     // Two spawn paths:
-    //   useProxy=false → plain node-pty spawn, screen-driven semantics.
-    //   useProxy=true  → start per-session mitmproxy, spawn `claude` with the
-    //                    proxy env built inline below (HTTPS_PROXY +
-    //                    additive NODE_EXTRA_CA_CERTS), route transport events
-    //                    into the adapter.
+    //   effectiveUseProxy=false → plain node-pty spawn, screen-driven semantics.
+    //   effectiveUseProxy=true  → start per-session mitmproxy, spawn `claude`
+    //                             with the proxy env built by
+    //                             buildClaudeProxyEnv (HTTPS_PROXY + merged
+    //                             NO_PROXY + additive/merged NODE_EXTRA_CA_CERTS),
+    //                             route transport events into the adapter.
     //
-    // The proxy branch builds its env inline rather than calling the
-    // claude-code-headless `spawnClaudeWithProxy` helper. We used to call the
-    // helper for the no-arg case and inline only for --resume /
-    // --dangerously-skip-permissions, but the two had drifted (the helper also
-    // injected trust-store-REPLACING CA vars — see #281 — and silently dropped
-    // options.env). Both cases now share one inline env so resume args and CA
-    // policy live in exactly one place.
+    // WHY proxy startup is fail-open (#1552):
+    //   mitmproxy is strictly an observational enhancement for richer live
+    //   streaming; Claude Code operates normally without it via screen + JSONL
+    //   semantics. Hard-aborting Claude spawn when mitmdump is missing, fails
+    //   to bind, or cannot read a user's NODE_EXTRA_CA_CERTS turns a diagnostic
+    //   layer into a single point of failure. Likewise, environments with an
+    //   existing corporate proxy, Bedrock/Vertex/Foundry backend, or plain-HTTP/
+    //   loopback ANTHROPIC_BASE_URL are skipped up front so we never break
+    //   connectivity or clobber user network config.
+    let effectiveUseProxy = false
+    let spawnEnv: Record<string, string> = cleanEnv
+
     if (this.useProxy) {
-      // WHY proxy runtime storage must not live under `cwd`:
-      //
-      // Passing the workspace cwd into createProxyServer made the proxy layer
-      // create timestamped runtime directories in whatever project the user had
-      // open. That polluted repos with `proxy-events.jsonl`, mitmproxy CA
-      // state, and other runtime artifacts. Agent Code owns the storage policy
-      // and passes its concrete app-state root into the reusable package.
-      // Resolve which mitmdump binary the proxy runtime should
-      // spawn. Order of preference:
-      //
-      //   1. process.env.CLAUDE_HEADLESS_MITMDUMP (or the legacy
-      //      CC_PROXY_TEST_MITMDUMP alias) — debug / instrumented
-      //      builds. Must win over everything else so contributors can
-      //      point this at a hand-built mitmdump without first un-
-      //      installing the bundled helper.
-      //   2. Bundled artifact unpacked from the packaged app (#119).
-      //      Resolves lazily; first call extracts the .app into
-      //      userData, subsequent calls return the cached path.
-      //   3. Setup-cached PATH path (e.g. user's Homebrew mitmdump).
-      //   4. claude-code-headless' own fallback chain (homebrew /
-      //      /usr/local lookup) when we pass nothing.
-      //
-      // WHY we check the env var here even though claude-code-headless
-      // also checks it: the package's check only runs when its caller
-      // (us) does NOT pass `mitmDumpPath`. If we eagerly resolved the
-      // bundled helper and passed it through, the env override would
-      // be silently shadowed — exactly the contract violation flagged
-      // in the runtimeTools.ts module header. We short-circuit here so
-      // bundled resolution and setup-cached lookup are both skipped
-      // whenever the env override is set; the package then sees no
-      // `mitmDumpPath`, falls into its own fallback chain, and uses
-      // the env override.
-      //
-      // WHY we resolve here and not inside claude-code-headless:
-      //   The reusable package must stay Electron-agnostic — it must
-      //   not know about app.asar.unpacked or app.getPath('userData').
-      //   Agent Code main owns the bundled-helper policy; the package
-      //   just spawns whatever path it's handed.
-      const envOverrideSet = Boolean(
-        process.env.CLAUDE_HEADLESS_MITMDUMP || process.env.CC_PROXY_TEST_MITMDUMP,
-      )
-      const bundledMitmDump = envOverrideSet
-        ? null
-        : await resolveBundledTool('mitmdump')
-      const setupMitmDump =
-        envOverrideSet || bundledMitmDump
-          ? null
-          : getToolPath('mitmdump', '') || null
-      const mitmDumpPath = bundledMitmDump ?? setupMitmDump ?? undefined
+      const compatibility = evaluateClaudeProxyCompatibility(cleanEnv)
+      if (!compatibility.allow) {
+        console.warn(
+          `[claudeSession] skipping local proxy for session ${this.shellSessionId ?? '<unknown>'}: ${compatibility.detail}`,
+        )
+        this.emit('transcript-diagnostic', {
+          kind: 'claude-proxy-skipped',
+          reason: compatibility.reason,
+          detail: compatibility.detail,
+        })
+      } else {
+        let createdProxy: ProxyServer | null = null
+        try {
+          // Resolve which mitmdump binary the proxy runtime should spawn.
+          // Order of preference:
+          //   1. process.env.CLAUDE_HEADLESS_MITMDUMP (or CC_PROXY_TEST_MITMDUMP)
+          //   2. Bundled artifact unpacked from the packaged app (#119)
+          //   3. Setup-cached PATH path (e.g. Homebrew mitmdump)
+          //   4. claude-code-headless' own fallback chain when we pass nothing.
+          const envOverrideSet = Boolean(
+            process.env.CLAUDE_HEADLESS_MITMDUMP || process.env.CC_PROXY_TEST_MITMDUMP,
+          )
+          const bundledMitmDump = envOverrideSet
+            ? null
+            : await resolveBundledTool('mitmdump')
+          const setupMitmDump =
+            envOverrideSet || bundledMitmDump
+              ? null
+              : getToolPath('mitmdump', '') || null
+          const mitmDumpPath = bundledMitmDump ?? setupMitmDump ?? undefined
 
-      const proxy = await createProxyServer({
-        storageRoot: PROXY_EVENTS_DIR,
-        // WHY the shared constant and not an inline join: `--set confdir=<this>`
-        // is the argv token the mitmproxy reaper uses to recognise processes
-        // Agent Code started (see mitmproxyReaper.ts). Spawning with the same
-        // constant we later search for makes the identification exact by
-        // construction instead of by two strings that happen to agree.
-        confDir: MITMPROXY_SHARED_CONF_DIR,
+          createdProxy = await createProxyServer({
+            storageRoot: PROXY_EVENTS_DIR,
+            // WHY the shared constant and not an inline join: `--set confdir=<this>`
+            // is the argv token the mitmproxy reaper uses to recognise processes
+            // Agent Code started (see mitmproxyReaper.ts).
+            confDir: MITMPROXY_SHARED_CONF_DIR,
+            cwd: this.cwd,
+            sessionKey: this.resumeSessionId
+              ? `resume-${this.resumeSessionId}`
+              : (this.shellSessionId ? `shell-${this.shellSessionId}` : undefined),
+            ...(mitmDumpPath ? { mitmDumpPath } : {}),
+          })
+          await createdProxy.start()
+          this.proxyServer = createdProxy
+          spawnEnv = await buildClaudeProxyEnv(cleanEnv, createdProxy.info)
+          effectiveUseProxy = true
+        } catch (err) {
+          // Ensure any partially-created or started proxy process is stopped
+          // before falling back to direct spawn so we never leak a bound port
+          // or orphaned mitmdump child.
+          if (createdProxy && !this.proxyServer) {
+            this.proxyServer = createdProxy
+          }
+          await this.teardownProxy()
+          spawnEnv = cleanEnv
+          effectiveUseProxy = false
+          const detail = err instanceof Error ? err.message : String(err)
+          console.warn(
+            `[claudeSession] proxy startup failed for session ${this.shellSessionId ?? '<unknown>'}; falling back to direct spawn:`,
+            err,
+          )
+          this.emit('transcript-diagnostic', {
+            kind: 'claude-proxy-fallback',
+            reason: 'proxy-start-failed',
+            detail,
+          })
+        }
+      }
+    }
+
+    // From here on we may have a live mitmdump child (when effectiveUseProxy is
+    // true) but no PTY, no ClaudeCodeHeadless, and therefore no exit/stop
+    // plumbing. Wrap the spawn so a failure rolls back every acquired resource
+    // (#495 A9; same shape as codexSession's guarded spawn).
+    try {
+      await this.appendPrivateMcpConfig(args, spawnEnv)
+      this.pty = ptySpawn(this.binary, args, {
+        name: 'xterm-256color',
+        cols: this.cols,
+        rows: this.rows,
         cwd: this.cwd,
-        sessionKey: this.resumeSessionId
-          ? `resume-${this.resumeSessionId}`
-          : (this.shellSessionId ? `shell-${this.shellSessionId}` : undefined),
-        ...(mitmDumpPath ? { mitmDumpPath } : {}),
+        env: spawnEnv,
       })
-      await proxy.start()
-      this.proxyServer = proxy
-
-      // ONE env for both the no-arg and resume/dangerous spawns. Built inline
-      // (no longer via spawnClaudeWithProxy) so CA policy lives in exactly one
-      // place. The helper and this block had drifted, and BOTH injected the
-      // proxy CA as trust-store-REPLACING single-cert files (SSL_CERT_FILE /
-      // CURL_CA_BUNDLE / REQUESTS_CA_BUNDLE). That is the #281 bug: each of
-      // those vars replaces the *entire* root store with just the mitmproxy
-      // CA, so every host the proxy PASSES THROUGH (npmjs, PyPI, Azure,
-      // GitHub, …) presents its real cert and is then rejected — breaking npm,
-      // pip, az, curl and git for any tool that reads those vars. It is not a
-      // missing-tool problem; it is an actively harmful replace, and chasing it
-      // per-tool (adding npm_config_cafile, GIT_SSL_CAINFO, AZURE_*, …) is an
-      // unwinnable allowlist.
-      //
-      // The proxy only MITMs api.anthropic.com (allow_hosts in proxyServer.ts);
-      // everything else is a clean TLS passthrough with a real cert, so
-      // non-Claude tools need NO CA help whatsoever. The universal, list-free
-      // fix is to inject ONLY NODE_EXTRA_CA_CERTS — which is ADDITIVE: it
-      // augments the real root store instead of replacing it. Claude (node)
-      // then trusts the mitmproxy cert for api.anthropic.com while still
-      // trusting real certs for every other host, and every other tool keeps
-      // its normal trust and just works. Verified: node→anthropic authorized
-      // (issuer mitmproxy), node→npmjs authorized (issuer Google), npm ping OK.
-      //
-      // Trade-off: a NON-node tool that needs to reach api.anthropic.com
-      // THROUGH the proxy would no longer trust the mitm cert. That host is
-      // only ever spoken to by Claude itself (node), so this is acceptable; we
-      // deliberately do NOT maintain a per-tool CA-var allowlist.
-      //
-      // cleanEnv already carries TERM/COLORTERM/CLAUDE_CODE_ENTRYPOINT and any
-      // options.env overrides, so unifying onto it also fixes the old fast path
-      // silently dropping options.env.
-      const proxyEnv: Record<string, string> = { ...cleanEnv }
-      proxyEnv.HTTPS_PROXY = proxy.info.proxyUrl
-      proxyEnv.https_proxy = proxy.info.proxyUrl
-      proxyEnv.HTTP_PROXY = proxy.info.proxyUrl
-      proxyEnv.http_proxy = proxy.info.proxyUrl
-      proxyEnv.NODE_EXTRA_CA_CERTS = proxy.info.caCertPath
-      proxyEnv.NO_PROXY = 'localhost,127.0.0.1,::1'
-      proxyEnv.no_proxy = proxyEnv.NO_PROXY
-      // From here on we have a live mitmdump child but no PTY, no
-      // ClaudeCodeHeadless, and therefore no exit/stop plumbing. Any
-      // throw between proxy.start() above and the end of start() leaks
-      // the proxy process — nothing else would ever call stop() on it.
-      // Wrap the spawn so a failure rolls the proxy back (#495 A9; same
-      // shape as codexSession's guarded spawn).
-      try {
-        await this.appendPrivateMcpConfig(args, proxyEnv)
-        this.pty = ptySpawn(this.binary, args, {
-          name: 'xterm-256color',
-          cols: this.cols,
-          rows: this.rows,
-          cwd: this.cwd,
-          env: proxyEnv,
-        })
-      } catch (err) {
-        await this.rollbackStart()
-        throw err
-      }
-    } else {
-      // No proxy in this branch, so rollbackStart is near-vacuous today —
-      // kept anyway so both spawn paths share one failure contract and a
-      // future resource acquired before this point is covered by default.
-      try {
-        await this.appendPrivateMcpConfig(args, cleanEnv)
-        this.pty = ptySpawn(this.binary, args, {
-          name: 'xterm-256color',
-          cols: this.cols,
-          rows: this.rows,
-          cwd: this.cwd,
-          env: cleanEnv,
-        })
-      } catch (err) {
-        await this.rollbackStart()
-        throw err
-      }
+    } catch (err) {
+      await this.rollbackStart()
+      throw err
     }
 
     this.headless = new ClaudeCodeHeadless({
@@ -456,11 +411,9 @@ export class ClaudeSession extends EventEmitter {
       allowMissingTranscript: this.resumeSessionId === null,
       // Enabling proxy on the headless instance is what flips the
       // semantic source of truth from screen to proxy inside
-      // ClaudeCodeHeadless. Even without this, subscribing to
-      // semantic events would still yield screen-sourced deltas
-      // (source='screen', confidence='fallback') — but consumers
-      // that opted into proxy specifically want the richer stream.
-      proxy: this.useProxy
+      // ClaudeCodeHeadless. Use `effectiveUseProxy` (not `this.useProxy`) so a
+      // skipped or fail-open direct spawn still receives screen-sourced deltas.
+      proxy: effectiveUseProxy
         ? {
             // Sidecar Haiku filtering — see ClaudeProxyAdapter for
             // the full rationale, and docs/design/ghost-system.md
