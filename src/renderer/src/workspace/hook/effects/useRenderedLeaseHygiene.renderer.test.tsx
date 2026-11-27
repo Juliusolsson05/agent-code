@@ -21,13 +21,16 @@ function Harness({ workspace }: { workspace: Workspace }) {
   return null
 }
 
-function fakeWorkspace() {
+function fakeWorkspace(agentViewMode: 'agent' | 'terminal' = 'agent') {
   const picker = { uuid: 'u', index: 0 }
   const runtimes = {
     lane: { ...emptyRuntime(), assistantPicker: picker },
     sk: { ...emptyRuntime(), assistantPicker: picker },
   }
-  useAppStore.setState({ workspaceRuntimes: runtimes as never })
+  useAppStore.setState({
+    settings: { ...original.settings, agentViewMode },
+    workspaceRuntimes: runtimes as never,
+  })
   return {
     runtimes,
     state: {
@@ -73,5 +76,36 @@ describe('rendered lease hygiene under Sidekick Spotlight', () => {
     useAppStore.setState({ settingsPageOpen: true })
     render(<Harness workspace={workspace} />)
     expect(workspace.pickerCancel).toHaveBeenCalledWith('sk')
+  })
+
+  it('under default Terminal mode, cancels terminal-surfaced pickers but spares Antigravity (STRUCTURED_ONLY)', () => {
+    const picker = { uuid: 'u', index: 0 }
+    const runtimes = {
+      claudePane: { ...emptyRuntime(), assistantPicker: picker },
+      agPane: { ...emptyRuntime(), assistantPicker: picker },
+    }
+    useAppStore.setState({
+      settings: { ...original.settings, agentViewMode: 'terminal' },
+      workspaceRuntimes: runtimes as never,
+    })
+    const workspace = {
+      runtimes,
+      state: {
+        sessions: {
+          claudePane: { kind: 'claude', cwd: '/repo' },
+          agPane: { kind: 'antigravity', cwd: '/repo' },
+        },
+      },
+      readerMode: null,
+      spotlight: null,
+      pickerCancel: vi.fn(),
+      setCodeBlockPicker: vi.fn(),
+      releaseRenderedViewLease: vi.fn(),
+      releaseAllRenderedViewLeases: vi.fn(),
+    } as unknown as Workspace & { pickerCancel: ReturnType<typeof vi.fn> }
+
+    render(<Harness workspace={workspace} />)
+    expect(workspace.pickerCancel).toHaveBeenCalledWith('claudePane')
+    expect(workspace.pickerCancel).not.toHaveBeenCalledWith('agPane')
   })
 })
