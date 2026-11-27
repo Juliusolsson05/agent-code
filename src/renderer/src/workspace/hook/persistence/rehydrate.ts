@@ -1,4 +1,6 @@
 import { tldrIdentityForSession } from '@renderer/features/tldr/identity'
+import { useAppStore } from '@renderer/app-state/store'
+import { shouldUseProxyForSession } from '@renderer/workspace/agentDisplayMode'
 import {
   DEFAULT_PROVIDER,
   isAgentProviderKind,
@@ -697,7 +699,12 @@ export async function rehydrateWorkspace(
             cwd: meta.cwd,
             resumeSessionId,
             dangerousMode: isAgentSessionKind(kind) ? refs.dangerousAgentsRef.current : undefined,
-            useProxy: isAgentSessionKind(kind) ? refs.useProxyStreamingRef.current : undefined,
+            useProxy: shouldUseProxyForSession({
+              kind,
+              useProxyStreaming: refs.useProxyStreamingRef.current,
+              globalMode: useAppStore.getState().settings.agentViewMode,
+              override: meta.agentViewModeOverride,
+            }),
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
             builtInMcpDomains,
             // User MCP choices ride the same path as the built-in domains

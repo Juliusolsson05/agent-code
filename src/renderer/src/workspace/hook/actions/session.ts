@@ -14,6 +14,9 @@ import type { AgentProviderRuntime } from '@shared/types/providerKind'
 import { SESSION_START_FAILED_MESSAGE, type SessionRecoverFailureCode } from '@shared/types/session'
 import { useCallback, useRef } from 'react'
 
+import { useAppStore } from '@renderer/app-state/store'
+import { shouldUseProxyForSession } from '@renderer/workspace/agentDisplayMode'
+
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import { clearLiveEntryWindowSession } from '@renderer/session-runtime/liveEntryWindow'
@@ -450,9 +453,17 @@ export function useSessionActions(
         (isAgentSessionKind(kind) ? refs.dangerousAgentsRef.current : undefined)
       // Agent providers both accept `useProxy`; terminals ignore it.
       // Claude uses MITM proxy streaming, Codex uses a local Responses
-      // proxy via `openai_base_url`.
-      const useProxy =
-        isAgentSessionKind(kind) ? refs.useProxyStreamingRef.current : undefined
+      // proxy via `openai_base_url`. Hard terminal-mode panes skip the proxy
+      // because they render the raw provider PTY directly (#1552).
+      const predecessorOverride = opts?.predecessorSessionId
+        ? refs.stateRef.current.sessions[opts.predecessorSessionId]?.agentViewModeOverride
+        : undefined
+      const useProxy = shouldUseProxyForSession({
+        kind,
+        useProxyStreaming: refs.useProxyStreamingRef.current,
+        globalMode: useAppStore.getState().settings.agentViewMode,
+        override: predecessorOverride,
+      })
       const builtInMcpOverrides = spawnMcpOverrides(opts)
       const builtInMcpDomains =
         isAgentProviderKind(kind)
@@ -786,7 +797,12 @@ export function useSessionActions(
             ...(meta.hermesLaneKey ? { hermesLaneKey: meta.hermesLaneKey } : {}),
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
             dangerousMode: isAgentSessionKind(kind) ? refs.dangerousAgentsRef.current : undefined,
-            useProxy: isAgentSessionKind(kind) ? refs.useProxyStreamingRef.current : undefined,
+            useProxy: shouldUseProxyForSession({
+              kind,
+              useProxyStreaming: refs.useProxyStreamingRef.current,
+              globalMode: useAppStore.getState().settings.agentViewMode,
+              override: meta.agentViewModeOverride,
+            }),
           })
           if (!recovery.ok) {
             readyError = new Error(recovery.message)
@@ -1773,7 +1789,12 @@ export function useSessionActions(
             cwd: meta.cwd,
             resumeSessionId,
             dangerousMode,
-            useProxy: isAgentSessionKind(kind) ? refs.useProxyStreamingRef.current : undefined,
+            useProxy: shouldUseProxyForSession({
+              kind,
+              useProxyStreaming: refs.useProxyStreamingRef.current,
+              globalMode: useAppStore.getState().settings.agentViewMode,
+              override: meta.agentViewModeOverride,
+            }),
             builtInMcpDomains,
             ...(isAgentProviderKind(kind) ? { userMcpOverrides: userMcpOverridesFrom(builtInMcpOverrides) } : {}),
             ...(meta.remoteConnectionId ? { remoteConnectionId: meta.remoteConnectionId } : {}),
