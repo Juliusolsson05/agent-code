@@ -422,7 +422,11 @@ export class AntigravityAcpSession extends EventEmitter {
     this.closed = true
     if (this.cancelTimer) clearTimeout(this.cancelTimer)
     this.cancelTimer = null
+    const hadPermissions = this.permissions.size > 0
     this.permissions.clear()
+    if (hadPermissions) {
+      this.emit('conditions', { provider: 'antigravity', conditions: {}, ts: this.now() })
+    }
     this.setActivity({ active: false, status: 'exited' })
     this.emit('closed', { reason })
   }

@@ -160,6 +160,8 @@ function discover() {
   return discovery
 }
 
+process.stdout.on('error', () => process.exit(0))
+
 function send(message) {
   process.stdout.write(JSON.stringify(message) + '\n')
 }

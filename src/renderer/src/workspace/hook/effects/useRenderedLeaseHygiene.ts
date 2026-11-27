@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useAppStore } from '@renderer/app-state/hooks'
+import { getEffectiveAgentSurfaceForSession } from '@renderer/workspace/agentDisplayMode'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 // workspace/hook/effects/ — effects owned by the workspace layer that
@@ -24,18 +25,31 @@ export function useRenderedLeaseHygiene(workspace: Workspace): void {
 
   useEffect(() => {
     if (agentViewMode !== 'terminal') return
-    // WHY hard Terminal mode force-clears rendered interaction state:
+    // WHY hard Terminal mode force-clears rendered interaction state ONLY on
+    // sessions whose effective surface is actually 'terminal':
     // Hybrid leases are intentionally allowed to mount TileLeaf for a feature,
     // but Terminal mode is the user's explicit "do not mount Agent Code's
-    // rendered agent surface" setting. If a picker lease survives the setting
-    // transition, switching back to Hybrid later can resurrect a stale picker
-    // that was invisible while Terminal mode was active. Clearing at the app
-    // boundary keeps the mode switch semantic: Terminal is an immediate hard
-    // reset of rendered-only affordances, not a pause button for them.
+    // rendered agent surface" setting. Clearing leases on terminal-surfaced
+    // panes prevents stale pickers from resurrecting if the user later switches
+    // back to Hybrid. However, PTY-less providers (Antigravity over ACP,
+    // Hermes, structured OpenCode) and panes explicitly overridden to 'agent'
+    // stay on the rendered surface even when global agentViewMode is 'terminal'
+    // (#1548 review) — clearing their pickers would immediately cancel Copy
+    // Assistant / Copy Code Block on every rendered pane under the default mode.
     for (const sessionId of Object.keys(workspace.runtimes)) {
       const runtime = workspace.runtimes[sessionId]
-      if (runtime?.assistantPicker) workspace.pickerCancel(sessionId)
-      if (runtime?.codeBlockPicker) workspace.setCodeBlockPicker(sessionId, null)
+      if (!runtime) continue
+      const meta = workspace.state.sessions[sessionId]
+      const surface = getEffectiveAgentSurfaceForSession({
+        kind: meta?.kind,
+        providerRuntime: meta?.providerRuntime,
+        globalMode: agentViewMode,
+        override: meta?.agentViewModeOverride,
+        runtime,
+      })
+      if (surface !== 'terminal') continue
+      if (runtime.assistantPicker) workspace.pickerCancel(sessionId)
+      if (runtime.codeBlockPicker) workspace.setCodeBlockPicker(sessionId, null)
       workspace.releaseAllRenderedViewLeases(sessionId)
     }
   }, [agentViewMode, workspace, leaseSignals])

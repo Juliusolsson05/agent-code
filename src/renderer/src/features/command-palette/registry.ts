@@ -6,7 +6,7 @@ import { buildDefaultKeybindings } from '@renderer/features/command-keybindings/
 import type { CommandBindingDefault } from '@renderer/features/command-keybindings/defaults'
 import { displayKeybinding } from '@renderer/features/command-keybindings/normalize'
 import { resolveEffectiveKeybindings } from '@renderer/features/command-keybindings/resolve'
-import { commandAllowedByRenderedViewPolicy } from '@renderer/workspace/agentDisplayMode'
+import { commandAllowedByRenderedViewPolicy, resolveConfiguredAgentViewMode } from '@renderer/workspace/agentDisplayMode'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type {
   CommandContext,
@@ -147,7 +147,7 @@ function renderedViewAvailable(command: CommandDef, ctx: CommandContext): boolea
     policy: command.renderedViewPolicy,
     kind,
     providerRuntime: meta?.providerRuntime,
-    mode: ctx.flags.agentViewMode,
+    mode: resolveConfiguredAgentViewMode(ctx.flags.agentViewMode, meta?.agentViewModeOverride),
     runtime,
   })
 }

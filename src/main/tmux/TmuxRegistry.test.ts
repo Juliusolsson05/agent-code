@@ -55,11 +55,11 @@ describe('parsePaneForegroundListing', () => {
 // tmux scrolls its scrollback via copy-mode and still forwards SGR mouse wheel
 // events to alt-screen mouse-tracking TUIs.
 describe('TMUX_SESSION_FLAGS', () => {
-  it('enables tmux mouse support and OSC 52 clipboard so wheel scrolling works in terminal panes (#1549)', () => {
+  it('enables tmux mouse support without mutating server-scoped clipboard options (#1549)', () => {
     const flags = new Map(TMUX_SESSION_FLAGS)
     expect(flags.get('status')).toBe('off')
     expect(flags.get('mouse')).toBe('on')
-    expect(flags.get('set-clipboard')).toBe('on')
+    expect(flags.has('set-clipboard')).toBe(false)
     expect(flags.get('aggressive-resize')).toBe('on')
   })
 })

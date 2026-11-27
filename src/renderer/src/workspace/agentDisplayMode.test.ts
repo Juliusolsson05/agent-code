@@ -113,6 +113,14 @@ describe('agent display mode policy', () => {
         runtime: emptyRuntime(),
       }),
     ).toBe('rendered')
+    expect(
+      commandAllowedByRenderedViewPolicy({
+        policy: { kind: 'leases-rendered-feed', feature: 'copy-assistant-message' },
+        kind: 'antigravity',
+        mode: 'terminal',
+        runtime: emptyRuntime(),
+      }),
+    ).toBe(true)
   })
 
   it('falls back to Terminal mode when an unrecognized mode reaches the selector (#1548)', () => {
@@ -123,6 +131,14 @@ describe('agent display mode policy', () => {
         runtime: emptyRuntime(),
       }),
     ).toBe('terminal')
+    expect(
+      commandAllowedByRenderedViewPolicy({
+        policy: { kind: 'opens-rendered-feed' },
+        kind: 'claude',
+        mode: 'invalid-mode' as never,
+        runtime: emptyRuntime(),
+      }),
+    ).toBe(false)
   })
 
   it('keeps ordinary OpenCode on the rendered Agent surface', () => {

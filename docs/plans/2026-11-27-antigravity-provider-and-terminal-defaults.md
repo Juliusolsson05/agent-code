@@ -87,3 +87,32 @@ Answered 2026-11-27: all defaults + include terminal TUI scroll fix.
 - Splitting `packages/antigravity-acp-headless` into its own git submodule repo (kept in-repo as in PR #1545; can be extracted later).
 - Adding a separate PTY/TUI runtime for `agy` (Antigravity's private SQLite store has no observable transcript/status contract; `agy --conversation <id>` is the escape hatch).
 - Migrating existing users' persisted `agentViewMode` via a store version bump.
+- Adding an xterm OSC 52 clipboard handler for tmux copy-mode drag-selection (tmux 3.6a's `external` default already emits OSC 52 safely without weakening server-wide `set-clipboard`; OSC 52 wiring in xterm can be a clean follow-up).
+
+## Rulings
+
+- Ruling: Remove `['set-clipboard', 'on']` from `TMUX_SESSION_FLAGS` — `set-clipboard` is a tmux server option that ignores `-t <name>` and would mutate the user's shared default tmux server, weakening tmux 3.6a's `external` default — cost if wrong: plain drag-select without holding Option/Alt stays in tmux's paste buffer until an xterm OSC 52 handler is added.
+
+## Review (2026-11-27, one round — 2 independent read-only reviewers)
+
+| Finding | Verdict | Disposition |
+|---|---|---|
+| `set-clipboard` in `TMUX_SESSION_FLAGS` is a server option mutating shared tmux server (R1 #1, R2 #5) | valid | fixed (removed `set-clipboard` from `TMUX_SESSION_FLAGS`, pinned by `TmuxRegistry.test.ts`) |
+| `useRenderedLeaseHygiene` cancels Copy Assistant / Copy Code Block pickers on Antigravity & overridden panes under default `'terminal'` mode (R2 #1) | valid | fixed (check `getEffectiveAgentSurfaceForSession === 'terminal'` per session) |
+| `buildSessionContextMenu.renderer.test.ts` and `sessionContextMenu.renderer.test.tsx` pass invalid `agentViewMode: 'rendered'` (R2 #2) | valid | fixed (changed to valid `'agent'`) |
+| `useKeybinds` and `command-palette/registry` ignore per-session `agentViewModeOverride` (R2 #3) | valid | fixed (resolved via `getEffectiveAgentSurfaceForSession` / `resolveConfiguredAgentViewMode`) |
+| `AntigravityAcpSession.onClose` clears pending permissions without emitting cleared `conditions` snapshot (R1 #2) | valid | fixed (emits empty `conditions` snapshot when closing with open permissions) |
+| `mcpProxy.mjs` unhandled `EPIPE` on `process.stdout` during teardown (R1 #4) | valid | fixed (`process.stdout.on('error', () => process.exit(0))`) |
+| Stale comment in `store.ts:95-97` (R2 #6) | valid | fixed |
+| OpenCode-specific copy in `AgentViewModePickerModal.tsx` / `workspace/hook/index.ts` & `settingsRegistry.ts` (R2 #4, #6) | valid, minor | deferred to follow-up polish |
+| `SIGKILL` escalation for hung `agy acp` children (R1 #3) | valid, non-blocking | deferred to follow-up hardening |
+
+## Plan vs built
+
+| Section | Status | Note |
+|---|---|---|
+| Antigravity ACP provider (PR #1545) | MATCH | All 5 commits cherry-picked with original `urs-antaia` authorship plus 2 review fixes (`onClose` conditions, `mcpProxy` EPIPE) |
+| Default `agentViewMode` to `'terminal'` | MATCH | Flipped default + unknown fallbacks, preserved persisted values, fixed per-session override & lease hygiene exposed by the new default |
+| Terminal TUI scrolling fix | DRIFT (recorded) | `TerminalLeaf` `convertEol: false` and `tmuxConfig` `mouse: 'on'` shipped; dropped `set-clipboard: 'on'` per Ruling above |
+| Tests & Verification | MATCH | Fail-first regression tests verified red before fix and green after; `npm run typecheck`, `npm run build` (except sandboxed `swiftc` hotkey helper), `verify-build-output.mjs`, and targeted suites all pass |
+

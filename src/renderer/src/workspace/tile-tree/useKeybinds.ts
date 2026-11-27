@@ -14,7 +14,7 @@ import { commandOwnsOpenSurface } from '@renderer/features/command-palette/surfa
 import { resolveEffectiveKeybindings } from '@renderer/features/command-keybindings/resolve'
 import { APP_INTERACTION_OWNER_SELECTOR, hasAppInteractionOwner, isInPaneInteractionOwner } from '@renderer/lib/interaction-ownership'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import { getEffectiveAgentSurface, isAgentKind } from '@renderer/workspace/agentDisplayMode'
+import { getEffectiveAgentSurfaceForSession, isAgentKind } from '@renderer/workspace/agentDisplayMode'
 import { selectVisibleDispatchRow } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { enumerateCodeBlockIds } from '@renderer/features/copy-code-block/lib/enumerateCodeBlocks'
@@ -134,10 +134,11 @@ function renderedAgentSurfaceIsVisible(
   const kind = meta?.kind
   if (!isAgentKind(kind)) return false
   return (
-    getEffectiveAgentSurface({
+    getEffectiveAgentSurfaceForSession({
       kind,
       providerRuntime: meta?.providerRuntime,
-      mode: agentViewMode === 'agent' || agentViewMode === 'hybrid' ? agentViewMode : 'terminal',
+      globalMode: agentViewMode === 'agent' || agentViewMode === 'hybrid' ? agentViewMode : 'terminal',
+      override: meta?.agentViewModeOverride,
       runtime: workspace.getRuntime(sessionId),
     }) === 'rendered'
   )

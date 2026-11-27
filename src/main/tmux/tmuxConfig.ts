@@ -19,11 +19,11 @@ export const TMUX_SESSION_FLAGS: ReadonlyArray<readonly [string, string]> = [
   // wheel-down exits at the bottom, and alt-screen apps that request mouse
   // tracking (?1000h/?1002h/?1003h/?1006h) still receive SGR wheel events
   // directly. Native xterm drag-selection remains available with Option/Alt.
+  //
+  // Deliberately NOT setting `set-clipboard`: in tmux it is a SERVER option
+  // (ignoring `-t <name>`), so setting it would mutate the user's shared
+  // default tmux server and weaken tmux 3.6a's `external` default.
   ['mouse', 'on'],
-  // Pair with `mouse on`: let tmux copy-mode drag-selection emit OSC 52
-  // clipboard writes instead of keeping selections trapped inside tmux's
-  // paste buffer.
-  ['set-clipboard', 'on'],
   // Per-window: when multiple clients are attached at different sizes,
   // size to each client independently rather than the smallest. This
   // becomes important in P4 (dispatch+mirror) but costs nothing now.
