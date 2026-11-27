@@ -77,6 +77,9 @@ const AGENT_ALIASES: Record<string, AgentProviderKind> = {
   opencode: 'opencode',
   pi: 'pi',
   grok: 'grok',
+  // Google's CLI is `agy`; `antigravity` is what people type.
+  antigravity: 'antigravity',
+  agy: 'antigravity',
   // No `hermes`: Hermes manages its own skills on its server
   // (personalAgentSkills unsupported, registry.main.ts); a skill installed
   // here would never reach it, so `--agent hermes` stays a notice.

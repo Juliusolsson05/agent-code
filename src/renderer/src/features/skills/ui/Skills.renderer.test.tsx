@@ -57,7 +57,8 @@ function installedSkill(overrides: Partial<AgentCodeInstalledSkill> = {}): Agent
 // What main reports today (targets.ts: every provider whose
 // personalAgentSkills is unsupported, sorted): Grok, and Hermes, whose skills
 // live on the user's own server.
-const UNSUPPORTED: AgentCodeInstalledSkillsSnapshot['unsupportedProviders'] = ['grok', 'hermes']
+// What main reports (agentCodeConventions targets): Antigravity, Grok and Hermes declare personal skills unsupported.
+const UNSUPPORTED: AgentCodeInstalledSkillsSnapshot['unsupportedProviders'] = ['antigravity', 'grok', 'hermes']
 const installed: AgentCodeInstalledSkillsSnapshot = {
   revision: 7,
   skills: [installedSkill()],

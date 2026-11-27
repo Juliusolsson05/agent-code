@@ -1,4 +1,4 @@
-import { isChatSurfaceProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
+import { isChatSurfaceProviderKind, isStructuredOnlyProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
 import { useRef, useState } from 'react'
 
 import type { SessionId } from '@renderer/workspace/types'
@@ -113,6 +113,11 @@ export function useComposerKeybinds({
   // key went to HermesSession.write (which drops all but Esc) and the first
   // Enter ran nothing (review b #1).
   const chatSurface = isChatSurfaceProviderKind(provider)
+  // Antigravity (agy over ACP) has no PTY either: its slash commands travel
+  // as prompt text in session/prompt, where agy expands them. PTY slash mode
+  // would send each key to a write() that refuses it, and Enter would then
+  // clear the line without sending anything (review finding).
+  const noPtySlashMode = chatSurface || isStructuredOnlyProviderKind(provider)
   const isLocalUsageCommand = () => !chatSurface && input.trim().toLowerCase() === '/usage'
   const openLocalUsageCommand = async (clearProviderLine: boolean) => {
     // WHY this local slash command is intercepted LATE instead of blocking
@@ -620,7 +625,7 @@ export function useComposerKeybinds({
     // Only when input is empty AND the user types `/`. That way
     // normal text containing a `/` in the middle (a URL, a path)
     // doesn't accidentally flip us into slash mode.
-    if (!chatSurface && !slashMode && backendReady && input === '' && e.key === '/') {
+    if (!noPtySlashMode && !slashMode && backendReady && input === '' && e.key === '/') {
       e.preventDefault()
       await send('/')
       setInputText('/')

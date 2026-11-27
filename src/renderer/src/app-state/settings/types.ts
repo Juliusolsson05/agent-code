@@ -754,7 +754,13 @@ export const DEFAULT_SETTINGS: Settings = {
   // setting still only seeds a workspace that has no workspace.json yet —
   // existing workspaces keep their last-used mode.
   agentNamesEnabled: false,
-  agentViewMode: 'agent',
+  // Terminal is the default UI mode on fresh installs (#1548): Claude, Codex,
+  // Grok and Pi open straight in their native provider TUI, while PTY-less
+  // providers (Antigravity over ACP, Hermes, structured OpenCode) still pin to
+  // their rendered surface via agentDisplayMode.ts. Existing installs with an
+  // explicitly persisted `agentViewMode` keep their saved choice in
+  // coerceSettings.
+  agentViewMode: 'terminal',
   // The owner's day-to-day set, shipped as the default (#973). TLDR and Goal
   // are the Cmd+L / Cmd+G peeks — with no domains on, a new user never sees
   // them do anything. AI Workspace and Agent Management stay opt-in. An

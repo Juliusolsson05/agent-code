@@ -15,6 +15,10 @@ const requiredOutputs = [
   // Pi panes hand this path to `pi -e`; without it every Pi pane degrades to
   // a plain TUI with no status or transcript, which no other check would catch.
   'out/main/runtime/pi/bridge.ts',
+  // Antigravity panes hand this path to agy as their built-in MCP server;
+  // without it they start with no Agent Code tools, which only a live run
+  // would notice.
+  'out/main/runtime/antigravity/mcpProxy.mjs',
 ]
 
 const missing = []

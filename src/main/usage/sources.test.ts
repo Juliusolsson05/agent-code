@@ -23,9 +23,12 @@ describe('USAGE_SOURCES registry', () => {
     // compose (it simply has no source id until one is registered) — Pi is
     // that case today: enabled, and simply contributing no source. Hermes
     // (#1482) too: its model usage is billed on the user's own server.
+    // Antigravity as well: agy reports per-turn usage over ACP but exposes no
+    // plan-quota endpoint Agent Code could read.
     for (const kind of AGENT_PROVIDER_KINDS) {
-      expect(['claude', 'codex', 'grok', 'opencode', 'pi', 'hermes'].includes(kind)).toBe(true)
+      expect(['claude', 'codex', 'grok', 'opencode', 'pi', 'hermes', 'antigravity'].includes(kind)).toBe(true)
     }
+    expect(listActiveUsageSourceIds({ enabledKinds: new Set<AgentProviderKind>(['antigravity']), opencodeUsageSource: 'none' })).toEqual([])
     expect(listActiveUsageSourceIds({ enabledKinds: new Set<AgentProviderKind>(['pi']), opencodeUsageSource: 'none' })).toEqual([])
     expect(listActiveUsageSourceIds({ enabledKinds: new Set<AgentProviderKind>(['hermes']), opencodeUsageSource: 'none' })).toEqual([])
   })

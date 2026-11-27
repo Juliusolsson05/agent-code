@@ -106,6 +106,21 @@ const piSetup: ProviderSetupDescriptor = {
   },
 }
 
+const antigravitySetup: ProviderSetupDescriptor = {
+  binaryName: 'agy',
+  label: 'Antigravity',
+  // Google's replacement for Gemini CLI for personal accounts (free, Google
+  // AI Pro and Ultra): Gemini CLI stopped serving them on 2026-06-18. Sign-in
+  // is agy's own (`agy` once in a terminal); Agent Code never handles it.
+  detail: 'Install the Antigravity CLI (agy) and run `agy` once to sign in with your Google account to use Antigravity panes.',
+  install: {
+    // Google's own installer (antigravity.google/cli/install.sh, read
+    // 2026-11-23): a signed Go binary into ~/.local/bin, checksum-verified.
+    command: 'curl -fsSL https://antigravity.google/cli/install.sh | bash',
+    docsUrl: 'https://codelabs.developers.google.com/antigravity-cli-hands-on',
+  },
+}
+
 // Keyed by LOCAL providers: a remote provider (Hermes) has no CLI to find or
 // install, so it has no setup row (see SetupToolId). Its readiness is a
 // signed-in connection under Settings → Hermes.
@@ -115,6 +130,7 @@ const providerSetupDescriptors: Record<LocalProviderKind, ProviderSetupDescripto
   opencode: opencodeSetup,
   grok: grokSetup,
   pi: piSetup,
+  antigravity: antigravitySetup,
 }
 
 export function getProviderSetupDescriptor(id: string): ProviderSetupDescriptor {

@@ -95,7 +95,7 @@ function harness(): Harness {
     configurable: true,
     value: { writeText: recordingFake(calls, 'clipboard.writeText', Promise.resolve()) },
   })
-  return { ctx: { workspace, ui, flags: {}, target: TARGET } as unknown as CommandContext, state, calls }
+  return { ctx: { workspace, ui, flags: { agentViewMode: 'agent' }, target: TARGET } as unknown as CommandContext, state, calls }
 }
 
 // What each flagged command must do to TARGET. `setup` adjusts the recording

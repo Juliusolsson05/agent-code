@@ -9,6 +9,7 @@ const xtermHarness = vi.hoisted(() => ({
   cols: 120,
   rows: 40,
   onData: null as ((data: string) => void) | null,
+  lastConstructorOptions: null as Record<string, unknown> | null,
 }))
 
 vi.mock('@xterm/xterm', () => ({
@@ -16,6 +17,10 @@ vi.mock('@xterm/xterm', () => ({
     cols = xtermHarness.cols
     rows = xtermHarness.rows
     options: Record<string, unknown> = {}
+    constructor(options: Record<string, unknown> = {}) {
+      xtermHarness.lastConstructorOptions = options
+      this.options = options
+    }
     // Minimal shape the shared useTerminalFollow hook needs to attach without
     // throwing (#865: TerminalLeaf now always wires it, not just on tail).
     // This file never engages tail, so onScroll is only ever registered —
@@ -207,5 +212,22 @@ describe('TerminalLeaf retention', () => {
       await attach.promise
     })
     expect(window.api.detachTerminal).toHaveBeenCalledExactlyOnceWith('shell-1')
+  })
+
+  // #1549: in xterm-256color, cud1 (cursor down without carriage return) is
+  // bare '\n'. Both tmux and TUIs like agy (Bubble Tea/Ultraviolet) emit bare
+  // '\n' for vertical cursor movement; convertEol: true turns every '\n' into
+  // '\r\n', snapping the cursor to column 0 and corrupting TUI scroll/layout.
+  it('constructs xterm with convertEol: false so tmux and full-screen TUIs preserve column on bare LF (#1549)', async () => {
+    xtermHarness.lastConstructorOptions = null
+    render(
+      <TerminalLeaf sessionId="shell-1" focused onFocusRequest={() => {}} workspace={workspace} showStatusMode={false} />,
+    )
+    await act(async () => {
+      attach.resolve('')
+      await attach.promise
+    })
+    const options = xtermHarness.lastConstructorOptions as Record<string, unknown> | null
+    expect(options?.convertEol).toBe(false)
   })
 })

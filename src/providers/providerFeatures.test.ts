@@ -87,6 +87,16 @@ describe('provider feature matrix', () => {
         switchTargets: [],
         verifiedExternalResumeCommand: false,
       },
+      // Antigravity: resume by id and View Prompts; nothing that writes a
+      // transcript until a Antigravity projection exists.
+      antigravity: {
+        transcriptRewind: false,
+        transcriptDuplicate: false,
+        promptHistoryExtraction: true,
+        inAppResume: true,
+        switchTargets: [],
+        verifiedExternalResumeCommand: true,
+      },
     })
   })
 

@@ -267,6 +267,13 @@ const BUILT_IN_MCP_DOMAINS_BY_PROVIDER = {
   // Agent Code does not own. Offering a domain would mint a bearer and a URL
   // nothing could ever call. The Goal/TLDR peeks still render the pane.
   hermes: [],
+  // Antigravity takes MCP servers per session over ACP (session/new and
+  // session/load `mcpServers`). agy 1.5.15 advertises no HTTP MCP capability,
+  // so the per-pane endpoint reaches it as a stdio server: Agent Code's MCP
+  // proxy (antigravity-acp-headless src/mcpProxy.mjs), with the bearer in the
+  // server's environment, never in argv. The full set is offered as for the
+  // other local providers.
+  antigravity: [...BUILT_IN_MCP_DOMAINS],
 } as const satisfies Record<AgentProviderKind, readonly BuiltInMcpDomain[]>
 
 const BUILT_IN_MCP_DOMAIN_SET = new Set<string>(BUILT_IN_MCP_DOMAINS)

@@ -601,7 +601,7 @@ export const sessionCommands: CommandDef[] = [
     surface: 'session',
     title: 'Reload Agent',
     description: '**What it does:** Restarts the focused **agent**.\n\n**Use when:** The agent is stuck, exited, or needs reconnecting.\n\n**Notes:** Requires a resumable provider session.',
-    keywords: ['reload', 'resume', 'agent', 'claude', 'codex', 'opencode', 'pi', 'reconnect'],
+    keywords: ['reload', 'resume', 'agent', 'claude', 'codex', 'opencode', 'pi', 'antigravity', 'reconnect'],
     getState: ({ workspace, target }) => {
       const sessionId = commandTarget({ workspace, target })
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
@@ -756,7 +756,7 @@ export const sessionCommands: CommandDef[] = [
     surface: 'session',
     title: 'Copy Resume Command',
     description: '**What it does:** Copies a shell command to **resume this session**.\n\n**Use when:** You want to continue the agent outside the app.\n\n**Notes:** Produces the current provider’s verified CLI command.',
-    keywords: ['copy', 'resume', 'command', 'terminal', 'cli', 'shell', 'claude', 'codex', 'opencode', 'pi'],
+    keywords: ['copy', 'resume', 'command', 'terminal', 'cli', 'shell', 'claude', 'codex', 'opencode', 'pi', 'antigravity'],
     getState: ({ workspace, target }) => {
       const sessionId = commandTarget({ workspace, target })
       const meta = sessionId ? workspace.state.sessions[sessionId] : null

@@ -156,7 +156,7 @@ describe('menu host', () => {
       setSpotlightTarget: vi.fn(),
     } as unknown as Workspace,
     ui: {},
-    flags: { commandKeybindingOverrides: {}, agentViewMode: 'rendered' },
+    flags: { commandKeybindingOverrides: {}, agentViewMode: 'agent' },
   } as unknown as CommandContext)
 
   const request = (overrides: Partial<SessionMenuRequest> = {}): SessionMenuRequest => ({
@@ -254,7 +254,7 @@ describe('queued pick', () => {
         showPaneToast: vi.fn(),
       } as unknown as Workspace,
       ui: {},
-      flags: { commandKeybindingOverrides: {}, agentViewMode: 'rendered' },
+      flags: { commandKeybindingOverrides: {}, agentViewMode: 'agent' },
     } as unknown as CommandContext
     return { ctx, closeSession, closeFocused }
   }

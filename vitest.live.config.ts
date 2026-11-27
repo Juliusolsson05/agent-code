@@ -10,6 +10,8 @@ export default defineConfig({
       'src/**/*.live.test.ts',
       'src/**/*.live.test.tsx',
       'testing/live/**/*.test.ts',
+      // The in-repo Antigravity adapter's opt-in gate against the real agy.
+      'packages/antigravity-acp-headless/src/**/*.live.test.ts',
     ],
   },
 })

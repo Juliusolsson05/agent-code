@@ -186,6 +186,26 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
     switchTargets: [],
     verifiedExternalResumeCommand: false,
   },
+  // Antigravity (agy over ACP): prompts come from the conversation's rows (the
+  // Antigravity mapper), and Reload Agent respawns `agy acp` with the pane's
+  // conversation id, which session/load replays (recorded on agy 1.5.15).
+  // Copy Resume Command hands out `agy --conversation <id>`, which opens the
+  // SAME conversation in agy's own TUI: ACP and the TUI share one store
+  // (session/list returns sessions created by either).
+  //
+  // Rewind, Duplicate and switching are OFF: each needs to WRITE a
+  // conversation agy will resume, and agy stores conversations in a private,
+  // undocumented SQLite schema (~/.gemini/antigravity-cli/conversations/) that
+  // a closed, self-updating binary owns. Offering them would hand the user
+  // commands that no-op or corrupt.
+  antigravity: {
+    transcriptRewind: false,
+    transcriptDuplicate: false,
+    promptHistoryExtraction: true,
+    inAppResume: true,
+    switchTargets: [],
+    verifiedExternalResumeCommand: true,
+  },
 }
 
 /**

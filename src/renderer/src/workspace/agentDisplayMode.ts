@@ -1,6 +1,6 @@
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import type { AgentViewModeOverride, SessionKind } from '@renderer/workspace/types'
-import { effectiveProviderRuntime, isAgentProviderKind, isChatSurfaceProviderKind } from '@shared/types/providerKind'
+import { effectiveProviderRuntime, isAgentProviderKind, isChatSurfaceProviderKind, isStructuredOnlyProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind, AgentProviderRuntime } from '@shared/types/providerKind'
 import type {
   RenderedViewLeaseFeature,
@@ -50,6 +50,8 @@ export function providerHasNoNativeTerminal(
   providerRuntime: AgentProviderRuntime | null | undefined,
 ): boolean {
   if (isChatSurfaceProviderKind(kind)) return true
+  // Antigravity (agy over ACP) has no PTY at all; see STRUCTURED_ONLY_PROVIDER_KINDS.
+  if (isStructuredOnlyProviderKind(kind)) return true
   return kind === 'opencode' && effectiveProviderRuntime(kind, providerRuntime) !== 'terminal'
 }
 
@@ -57,7 +59,7 @@ function normalizeAgentViewModeForKind(
   kind: AgentProviderKind,
   mode: AgentViewMode,
 ): AgentViewMode {
-  if (kind !== 'opencode' && !isChatSurfaceProviderKind(kind)) return mode
+  if (kind !== 'opencode' && !isChatSurfaceProviderKind(kind) && !isStructuredOnlyProviderKind(kind)) return mode
   // WHY ordinary OpenCode is pinned to Agent mode:
   // Claude/Codex "Terminal" means "attach xterm to the real provider PTY."
   // The ordinary OpenCode choice is still HTTP/SSE and has no PTY, so mounting
@@ -78,7 +80,7 @@ export function getEffectiveAgentSurface(args: {
   const requestedMode: AgentViewMode =
     args.mode === 'terminal' || args.mode === 'hybrid' || args.mode === 'agent'
       ? args.mode
-      : 'agent'
+      : 'terminal'
   if (!isAgentKind(kind)) return 'rendered'
   // A terminal-flavoured provider session is a different process contract,
   // not merely a view preference. Its runtime does hold committed entries
@@ -176,7 +178,7 @@ export function commandAllowedByRenderedViewPolicy(args: {
   const requestedMode: AgentViewMode =
     args.mode === 'terminal' || args.mode === 'hybrid' || args.mode === 'agent'
       ? args.mode
-      : 'agent'
+      : 'terminal'
   const mode = normalizeAgentViewModeForKind(args.kind, requestedMode)
 
   // Commands that open/promote the rendered surface are exactly what Hybrid

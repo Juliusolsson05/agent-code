@@ -40,6 +40,7 @@ describe('resolveProviderEnablement', () => {
       { kind: 'grok', enabled: false, because: 'not-detected', installed: false },
       { kind: 'pi', enabled: false, because: 'not-detected', installed: false },
       { kind: 'hermes', enabled: false, because: 'not-detected', installed: false },
+      { kind: 'antigravity', enabled: false, because: 'not-detected', installed: false },
     ])
   })
 

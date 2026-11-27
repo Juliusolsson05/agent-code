@@ -93,8 +93,8 @@ export const useAppStore = create<AppStore>()(
             // incomplete: interrupted writes, localStorage edits, dev builds,
             // or a field added during a branch before the version bump lands.
             // A missing settings.agentViewMode is especially dangerous
-            // because the pane renderer treats anything other than explicit
-            // "agent" / "terminal" as Hybrid-like terminal-first behavior.
+            // because coercion is the single place that establishes the
+            // shipped default ('terminal').
             // Running the same coercion at the final merge point makes every
             // launch shape-safe, not just older-version launches.
             settings: coerceSettings({

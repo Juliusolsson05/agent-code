@@ -157,9 +157,10 @@ export function coerceSettings(value: unknown): Settings {
       : DEFAULT_SETTINGS.usageHeaderLevel,
     // `defaultWorkspaceMode` is dropped on read (#992): a stale persisted
     // value names a mode that no longer exists and selects nothing.
-    // Agent view mode is a product contract, not a loose string. A typo in
-    // localStorage must fall back to the compatible custom-rendered Agent mode
-    // rather than accidentally booting every pane into raw terminal mode.
+    // Agent view mode is a product contract, not a loose string. A missing or
+    // unrecognized value in localStorage falls back to the shipped default
+    // (`terminal`, #1548); an explicitly persisted `'agent'` or `'hybrid'`
+    // choice stays honored.
     agentViewMode: AGENT_VIEW_MODES.some(m => m.id === parsed.agentViewMode)
       ? (parsed.agentViewMode as Settings['agentViewMode'])
       : DEFAULT_SETTINGS.agentViewMode,

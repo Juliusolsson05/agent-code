@@ -104,6 +104,43 @@ describe('agent display mode policy', () => {
     ).toBe('terminal')
   })
 
+  it('keeps Antigravity (STRUCTURED_ONLY) on the rendered feed even under default Terminal mode', () => {
+    expect(
+      getEffectiveAgentSurfaceForSession({
+        kind: 'antigravity',
+        globalMode: 'terminal',
+        override: undefined,
+        runtime: emptyRuntime(),
+      }),
+    ).toBe('rendered')
+    expect(
+      commandAllowedByRenderedViewPolicy({
+        policy: { kind: 'leases-rendered-feed', feature: 'copy-assistant-message' },
+        kind: 'antigravity',
+        mode: 'terminal',
+        runtime: emptyRuntime(),
+      }),
+    ).toBe(true)
+  })
+
+  it('falls back to Terminal mode when an unrecognized mode reaches the selector (#1548)', () => {
+    expect(
+      getEffectiveAgentSurface({
+        kind: 'claude',
+        mode: 'invalid-mode' as never,
+        runtime: emptyRuntime(),
+      }),
+    ).toBe('terminal')
+    expect(
+      commandAllowedByRenderedViewPolicy({
+        policy: { kind: 'opens-rendered-feed' },
+        kind: 'claude',
+        mode: 'invalid-mode' as never,
+        runtime: emptyRuntime(),
+      }),
+    ).toBe(false)
+  })
+
   it('keeps ordinary OpenCode on the rendered Agent surface', () => {
     expect(
       getEffectiveAgentSurface({

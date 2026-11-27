@@ -318,7 +318,14 @@ export function TerminalLeaf({
       // to CSS variables while preserving a stable ANSI table for shell tools.
       term = new Terminal({
         cursorBlink: true,
-        convertEol: true,
+        // WHY convertEol: false (matching AgentTerminalLeaf and AgentInlineTerminal,
+        // #1549): a real PTY/tmux already translates '\n' → '\r\n' in cooked
+        // mode (ONLCR), whereas in raw/TUI mode `xterm-256color`'s `cud1`
+        // (cursor down 1 row, preserving column) IS bare '\n'. Setting
+        // convertEol: true turns every bare '\n' from tmux or Bubble Tea /
+        // Ultraviolet TUIs (such as `agy`) into '\r\n', snapping the cursor to
+        // column 0 and corrupting full-screen layouts and scroll repaints.
+        convertEol: false,
         // Pull the user-picked font from the central settings layer.
         // xterm.js renders to a canvas, so it cannot read the
         // `--theme-app-font` CSS variable directly — getActiveAppFontFamily

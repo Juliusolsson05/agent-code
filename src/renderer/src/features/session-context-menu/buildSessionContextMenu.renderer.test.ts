@@ -61,7 +61,7 @@ function menu(
   const ctx = {
     workspace: { state, getRuntime: () => emptyRuntime() } as unknown as Workspace,
     ui: {},
-    flags: { commandKeybindingOverrides: options.keybindingOverrides ?? {}, agentViewMode: 'rendered' },
+    flags: { commandKeybindingOverrides: options.keybindingOverrides ?? {}, agentViewMode: 'agent' },
     target: sessionId,
   } as unknown as CommandContext
   return buildSessionContextMenu({

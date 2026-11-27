@@ -49,6 +49,13 @@ export const PI_ATTENTION_CONDITION_KINDS = new Set<string>([
   'pi.trust',
 ])
 
+// Antigravity: a tool-permission request agy sent over ACP
+// (session/request_permission). The turn waits on it until answered — see
+// src/providers/antigravity/renderer/conditions/policy.ts.
+export const ANTIGRAVITY_ATTENTION_CONDITION_KINDS = new Set<string>([
+  'antigravity.permission',
+])
+
 // Hermes (#1482): every server→client request blocks the remote agent until
 // answered (or until Hermes' own timeout fails it closed), so all four are
 // attention kinds.
