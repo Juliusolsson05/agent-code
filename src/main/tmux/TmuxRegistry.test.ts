@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { parsePaneForegroundListing } from './TmuxRegistry.js'
+import { TMUX_SESSION_FLAGS } from './tmuxConfig.js'
 
 // The listing is parsed from ONE `tmux list-panes -a` per poll across every
 // managed session, and the user's own tmux sessions share the default server,
@@ -44,5 +45,21 @@ describe('parsePaneForegroundListing', () => {
     expect(parsePaneForegroundListing(output, 'agentcode-')).toEqual(new Map([
       ['agentcode-3', { command: 'npm', cwd: '/work/fg' }],
     ]))
+  })
+})
+
+// #1549: tmux attach puts the outer xterm on the alternate screen (?1049h)
+// where buffer.hasScrollback is false. With `mouse off`, xterm turns wheel
+// scrolls into Up/Down arrow keys instead of scrolling tmux scrollback,
+// breaking scrolling in shells and inline-mode TUIs like agy. With `mouse on`,
+// tmux scrolls its scrollback via copy-mode and still forwards SGR mouse wheel
+// events to alt-screen mouse-tracking TUIs.
+describe('TMUX_SESSION_FLAGS', () => {
+  it('enables tmux mouse support and OSC 52 clipboard so wheel scrolling works in terminal panes (#1549)', () => {
+    const flags = new Map(TMUX_SESSION_FLAGS)
+    expect(flags.get('status')).toBe('off')
+    expect(flags.get('mouse')).toBe('on')
+    expect(flags.get('set-clipboard')).toBe('on')
+    expect(flags.get('aggressive-resize')).toBe('on')
   })
 })

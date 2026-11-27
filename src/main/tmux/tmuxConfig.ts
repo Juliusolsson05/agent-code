@@ -1,8 +1,6 @@
 // Per-session tmux configuration applied via `tmux set -t <name>`
-// immediately after `tmux new-session`. These flags are the entire
-// reason the user never sees tmux: status bar off, mouse off,
-// aggressive-resize on so a smaller secondary attacher (P4 dispatch)
-// doesn't shrink the primary view.
+// immediately after `tmux new-session`. These flags keep tmux chrome invisible
+// while preserving terminal scrollback and TUI mouse scrolling.
 //
 // Keep this list authoritative — every code path that creates a
 // Agent Code tmux session must apply these. Drift here would let the
@@ -12,8 +10,20 @@ export const TMUX_SESSION_FLAGS: ReadonlyArray<readonly [string, string]> = [
   // Hide the persistent status bar. Without this the renderer would
   // see one row eaten by tmux's bottom chrome.
   ['status', 'off'],
-  // Don't intercept mouse events — the renderer wants those.
-  ['mouse', 'off'],
+  // WHY mouse ON (#1549): `tmux attach` switches the outer xterm onto the
+  // alternate screen (?1049h), where xterm has no scrollback buffer. With
+  // `mouse off`, xterm's MouseService._handlePassiveWheel turns every wheel
+  // scroll into Up/Down arrow keys instead of scrolling tmux's scrollback —
+  // breaking scrolling in plain shells and inline-mode TUIs like `agy`. With
+  // `mouse on`, wheel-up enters tmux copy-mode to scroll real scrollback,
+  // wheel-down exits at the bottom, and alt-screen apps that request mouse
+  // tracking (?1000h/?1002h/?1003h/?1006h) still receive SGR wheel events
+  // directly. Native xterm drag-selection remains available with Option/Alt.
+  ['mouse', 'on'],
+  // Pair with `mouse on`: let tmux copy-mode drag-selection emit OSC 52
+  // clipboard writes instead of keeping selections trapped inside tmux's
+  // paste buffer.
+  ['set-clipboard', 'on'],
   // Per-window: when multiple clients are attached at different sizes,
   // size to each client independently rather than the smallest. This
   // becomes important in P4 (dispatch+mirror) but costs nothing now.
