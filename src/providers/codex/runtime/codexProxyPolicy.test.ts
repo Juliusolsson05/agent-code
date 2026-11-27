@@ -11,6 +11,7 @@ const harness = vi.hoisted(() => ({
   ptySpawns: [] as Array<{ binary: string; args: string[]; env: Record<string, string> }>,
   proxyCreateCalls: [] as Array<Record<string, unknown>>,
   proxyShouldThrow: false,
+  proxyCreateHook: null as null | (() => Promise<void>),
 }))
 
 vi.mock('@main/storage/paths.js', async (importOriginal) => {
@@ -66,6 +67,7 @@ vi.mock('codex-headless', async () => {
       }
       static async create(options: Record<string, unknown>) {
         harness.proxyCreateCalls.push(options)
+        if (harness.proxyCreateHook) await harness.proxyCreateHook()
         if (harness.proxyShouldThrow) {
           throw new Error('EADDRINUSE: failed to bind local proxy')
         }
@@ -106,7 +108,7 @@ describe('resolveCodexProxyDecision', () => {
     expect(decision).toMatchObject({ useProxy: false, reason: 'custom-model-provider' })
   })
 
-  it('uses config.toml openai_base_url or OPENAI_BASE_URL as upstreamBaseUrl', async () => {
+  it('uses valid config.toml openai_base_url and ignores env.OPENAI_BASE_URL', async () => {
     await writeFile(
       join(codexHome, 'config.toml'),
       'model_provider = "openai"\nopenai_base_url = "https://gateway.example/v1"\n',
@@ -117,15 +119,53 @@ describe('resolveCodexProxyDecision', () => {
       upstreamBaseUrl: 'https://gateway.example/v1',
     })
 
+    // Codex CLI TUI does not read env.OPENAI_BASE_URL; with no auth.json,
+    // env.OPENAI_BASE_URL alone must NOT enable the proxy.
     await writeFile(join(codexHome, 'config.toml'), '', 'utf8')
     expect(
       await resolveCodexProxyDecision({
         CODEX_HOME: codexHome,
         OPENAI_BASE_URL: 'https://env-gateway.example/v1',
       }),
-    ).toEqual({
-      useProxy: true,
-      upstreamBaseUrl: 'https://env-gateway.example/v1',
+    ).toMatchObject({
+      useProxy: false,
+      reason: 'indeterminate-auth-mode',
+    })
+  })
+
+  it('skips proxy when config.toml sets invalid openai_base_url, profile, chatgpt_base_url, or keyring store', async () => {
+    await writeFile(join(codexHome, 'auth.json'), JSON.stringify({ auth_mode: 'chatgpt' }), 'utf8')
+
+    await writeFile(join(codexHome, 'config.toml'), 'openai_base_url = "not-a-url"\n', 'utf8')
+    expect(await resolveCodexProxyDecision({ CODEX_HOME: codexHome })).toMatchObject({
+      useProxy: false,
+      reason: 'invalid-config',
+    })
+
+    await writeFile(join(codexHome, 'config.toml'), 'profile = "work"\n', 'utf8')
+    expect(await resolveCodexProxyDecision({ CODEX_HOME: codexHome })).toMatchObject({
+      useProxy: false,
+      reason: 'custom-config-profile',
+    })
+
+    await writeFile(
+      join(codexHome, 'config.toml'),
+      'chatgpt_base_url = "https://enterprise.chatgpt.example"\n',
+      'utf8',
+    )
+    expect(await resolveCodexProxyDecision({ CODEX_HOME: codexHome })).toMatchObject({
+      useProxy: false,
+      reason: 'custom-chatgpt-base-url',
+    })
+
+    await writeFile(
+      join(codexHome, 'config.toml'),
+      'cli_auth_credentials_store = "keyring"\n',
+      'utf8',
+    )
+    expect(await resolveCodexProxyDecision({ CODEX_HOME: codexHome })).toMatchObject({
+      useProxy: false,
+      reason: 'keyring-credential-store',
     })
   })
 
@@ -152,7 +192,7 @@ describe('resolveCodexProxyDecision', () => {
     })
   })
 
-  it('detects apikey authMode from auth_mode or OPENAI_API_KEY in auth.json or env', async () => {
+  it('detects apikey authMode from auth.json but does NOT infer apikey from env.OPENAI_API_KEY alone', async () => {
     await writeFile(join(codexHome, 'auth.json'), JSON.stringify({ auth_mode: 'apikey' }), 'utf8')
     expect(await resolveCodexProxyDecision({ CODEX_HOME: codexHome })).toEqual({
       useProxy: true,
@@ -165,12 +205,14 @@ describe('resolveCodexProxyDecision', () => {
       authMode: 'apikey',
     })
 
+    // Developers with Keychain ChatGPT auth often export OPENAI_API_KEY for
+    // other tools; absent auth.json must still skip rather than guess apikey.
     await rm(join(codexHome, 'auth.json'))
     expect(
       await resolveCodexProxyDecision({ CODEX_HOME: codexHome, OPENAI_API_KEY: 'sk-env' }),
-    ).toEqual({
-      useProxy: true,
-      authMode: 'apikey',
+    ).toMatchObject({
+      useProxy: false,
+      reason: 'indeterminate-auth-mode',
     })
   })
 
@@ -190,6 +232,7 @@ describe('CodexSession proxy fail-open and NO_PROXY hygiene', () => {
     harness.ptySpawns = []
     harness.proxyCreateCalls = []
     harness.proxyShouldThrow = false
+    harness.proxyCreateHook = null
   })
 
   afterEach(async () => {
@@ -272,5 +315,40 @@ describe('CodexSession proxy fail-open and NO_PROXY hygiene', () => {
     expect(harness.proxyCreateCalls).toHaveLength(0)
     expect(harness.ptySpawns).toHaveLength(1)
     expect(harness.ptySpawns[0].args.join(' ')).not.toContain('openai_base_url')
+  })
+
+  it('does not emit fallback or spawn PTY when a cancelled start attempt fails in ResponsesProxy.create', async () => {
+    await writeFile(join(codexHome, 'auth.json'), JSON.stringify({ auth_mode: 'chatgpt' }), 'utf8')
+    let releaseCreate!: () => void
+    const createStarted = new Promise<void>(resolve => {
+      harness.proxyCreateHook = async () => {
+        resolve()
+        await new Promise<void>(r => { releaseCreate = r })
+      }
+    })
+    harness.proxyShouldThrow = true
+
+    const session = new CodexSession({
+      cwd: codexHome,
+      useProxy: true,
+      env: {
+        CODEX_HOME: codexHome,
+        HTTPS_PROXY: undefined,
+        https_proxy: undefined,
+        HTTP_PROXY: undefined,
+        http_proxy: undefined,
+      },
+    })
+    const diagnostics: unknown[] = []
+    session.on('transcript-diagnostic', d => diagnostics.push(d))
+
+    const startPromise = session.start()
+    await createStarted
+    const stopPromise = session.stop()
+    releaseCreate()
+    await Promise.all([startPromise, stopPromise])
+
+    expect(harness.ptySpawns).toHaveLength(0)
+    expect(diagnostics.some(d => (d as { type?: string }).type === 'codex-proxy-fallback')).toBe(false)
   })
 })

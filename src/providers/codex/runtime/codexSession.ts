@@ -382,9 +382,10 @@ export class CodexSession extends EventEmitter {
       // WHY proxy setup is pre-checked and fail-open (#1552):
       //   ResponsesProxy is an observational enhancement; Codex's rollout
       //   tailer and PTY work without it. Pre-checking corporate proxy env,
-      //   config.toml model_provider/openai_base_url, and auth.json avoids
-      //   misrouting ChatGPT/keyring/custom-provider users, and catching any
-      //   startup error guarantees a proxy failure never aborts Codex spawn.
+      //   config.toml settings, and auth.json avoids misrouting ChatGPT/
+      //   keyring/custom-provider users, and catching any startup error
+      //   guarantees a proxy failure never aborts Codex spawn.
+      let createdProxy: ResponsesProxy | null = null
       try {
         const decision = await resolveCodexProxyDecision(cleanEnv)
         if (!this.isStartAttemptActive(attempt)) return
@@ -410,7 +411,7 @@ export class CodexSession extends EventEmitter {
                   : `shell-${new Date().toISOString().replace(/[:.]/g, '-')}`),
           })
           if (!this.isStartAttemptActive(attempt)) return
-          const proxy = await ResponsesProxy.create({
+          createdProxy = await ResponsesProxy.create({
             eventsFile,
             ...(decision.upstreamBaseUrl ? { upstreamBaseUrl: decision.upstreamBaseUrl } : {}),
             ...(decision.authMode ? { authMode: decision.authMode } : {}),
@@ -420,19 +421,31 @@ export class CodexSession extends EventEmitter {
             // returned proxy did not exist when stop snapshotted the attempt, so the
             // continuation that receives it must close it locally and must never
             // publish it into fields now owned by a later generation.
-            try { await proxy.stop() } catch { /* best-effort */ }
+            try { await createdProxy.stop() } catch { /* best-effort */ }
             return
           }
-          attempt.proxyServer = proxy
-          this.proxyServer = proxy
+          attempt.proxyServer = createdProxy
+          this.proxyServer = createdProxy
           const mergedNoProxy = mergeNoProxy(cleanEnv)
           cleanEnv.NO_PROXY = mergedNoProxy
           cleanEnv.no_proxy = mergedNoProxy
-          args.push('--config', `openai_base_url=${JSON.stringify(proxy.info.proxyBaseUrl)}`)
+          args.push('--config', `openai_base_url=${JSON.stringify(createdProxy.info.proxyBaseUrl)}`)
         }
       } catch (err) {
+        if (createdProxy) {
+          try { await createdProxy.stop() } catch { /* best-effort */ }
+        }
+        // WHY check generation liveness BEFORE touching shared fields or
+        // falling through to ptySpawn: stop() or a newer start() generation
+        // may have cancelled this attempt while allocateProxyEventsFile() or
+        // ResponsesProxy.create() was awaiting. Falling through would spawn
+        // an orphaned Codex PTY for a dead generation, and unconditional
+        // `this.proxyServer = null` would clobber the newer generation's proxy.
+        if (!this.isStartAttemptActive(attempt)) return
+        if (attempt.proxyServer && this.proxyServer === attempt.proxyServer) {
+          this.proxyServer = null
+        }
         attempt.proxyServer = null
-        this.proxyServer = null
         const detail = err instanceof Error ? err.message : String(err)
         console.warn(
           `[codexSession] proxy startup failed for session ${this.shellSessionId ?? '<unknown>'}; falling back to direct spawn:`,

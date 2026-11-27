@@ -99,8 +99,9 @@ export type ClaudeSessionEvents = {
   screen: [ScreenSnapshot]
   'jsonl-entry': [JsonlEntry, string]
   'jsonl-error': [Error]
-  // Declared for the provider-neutral AgentSession contract. Claude currently
-  // emits no transcript-discovery diagnostics, so this event never fires.
+  // Non-fatal provider diagnostics on the AgentSession contract (e.g. local
+  // mitmproxy skipped due to incompatible env or fail-open fallback to direct
+  // spawn). Never used to mark the session or transcript unhealthy.
   'transcript-diagnostic': [unknown]
   'proxy-transport-gap': [TransportGap]
   // Optional status: the spinner verb ("Cogitating…", "Cascading…",

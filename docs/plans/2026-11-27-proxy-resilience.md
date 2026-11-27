@@ -37,14 +37,14 @@ All changes live in the main `agent-code` repository (`src/`) so this lands as a
 ### 3. Codex fail-open & config/auth/env hygiene (`src/providers/codex/runtime/codexProxyPolicy.ts`, `codexSession.ts`)
 - `resolveCodexProxyDecision(cleanEnv)` inspects `cleanEnv`, `$CODEX_HOME/config.toml` (parsed via `@iarna/toml`), and `$CODEX_HOME/auth.json` before starting `ResponsesProxy`:
   - Skips if corporate proxy env vars are set.
-  - Skips if `config.toml` sets `model_provider` to anything other than `"openai"` (or if `config.toml` cannot be parsed).
-  - Uses `config.toml`'s `openai_base_url` or `cleanEnv.OPENAI_BASE_URL` as `upstreamBaseUrl` when present.
-  - Otherwise inspects `$CODEX_HOME/auth.json`:
+  - Skips if `config.toml` sets `model_provider` to anything other than `"openai"`, sets `profile`, sets `chatgpt_base_url`, sets `cli_auth_credentials_store = "keyring"`, or cannot be parsed.
+  - Uses `config.toml`'s `openai_base_url` as `upstreamBaseUrl` after validating it as an `http:`/`https:` URL (does NOT consult `env.OPENAI_BASE_URL`, which Codex CLI TUI ignores).
+  - Otherwise inspects `$CODEX_HOME/auth.json` only (does NOT infer `apikey` from `env.OPENAI_API_KEY`, which Codex CLI TUI ignores and which would misroute Keychain ChatGPT users):
     - ChatGPT-family `auth_mode` (`chatgpt`, `chatgptAuthTokens`, `headers`, `agentIdentity`, `personalAccessToken`) or `tokens` without `OPENAI_API_KEY` → `authMode: 'chatgpt'`.
-    - `auth_mode === 'apikey'` or `OPENAI_API_KEY` present in `auth.json` or `cleanEnv` → `authMode: 'apikey'`.
+    - `auth_mode === 'apikey'` or `OPENAI_API_KEY` present in `auth.json` → `authMode: 'apikey'`.
     - Otherwise (missing/indeterminate auth, e.g., Keychain/keyring or not logged in) → skip proxy.
 - When `ResponsesProxy` is used, merges `localhost,127.0.0.1,::1` into `cleanEnv.NO_PROXY` and `cleanEnv.no_proxy`.
-- Wraps `resolveCodexProxyDecision`, `allocateProxyEventsFile`, and `ResponsesProxy.create` in `try/catch`; on any failure logs a warning, emits a non-fatal `transcript-diagnostic`, leaves `this.proxyServer = null`, omits `--config openai_base_url=...`, and spawns Codex directly.
+- Wraps `resolveCodexProxyDecision`, `allocateProxyEventsFile`, and `ResponsesProxy.create` in `try/catch`; on any failure stops any locally created proxy, re-checks `isStartAttemptActive(attempt)` before mutating shared fields or falling through to `ptySpawn`, logs a warning, emits a non-fatal `transcript-diagnostic`, omits `--config openai_base_url=...`, and spawns Codex directly.
 
 ### 4. Skip proxy for Terminal-mode panes (`agentDisplayMode.ts`, `session.ts`, `rehydrate.ts`)
 - Add `shouldUseProxyForSession({ kind, useProxyStreaming, globalMode, override })` in `src/renderer/src/workspace/agentDisplayMode.ts`: returns `false` when `resolveConfiguredAgentViewMode(globalMode, override) === 'terminal'`.
@@ -57,3 +57,12 @@ All changes live in the main `agent-code` repository (`src/`) so this lands as a
   - `codexProxyPolicy.ts` (corporate proxy, `config.toml` `model_provider` & `openai_base_url`, `OPENAI_BASE_URL`, `auth.json` modes, indeterminate auth skip) and `CodexSession` fail-open direct spawn
   - `shouldUseProxyForSession` and terminal-mode proxy suppression in renderer session actions / rehydrate
 - `npm run typecheck` and targeted vitest suites.
+
+## Review Disposition
+
+| Finding | Severity | Disposition | Resolution |
+| --- | --- | --- | --- |
+| Cancelled `CodexSession` start attempt could clear a newer generation's `proxyServer` or fall through to `ptySpawn` in the proxy `catch` block | Blocking | Fixed | Stop any locally created proxy, return early when `!this.isStartAttemptActive(attempt)` before touching `this.proxyServer` / emitting `codex-proxy-fallback` / spawning PTY, and clear `this.proxyServer` only by identity match (`codexSession.ts`). Added regression test. |
+| `codexProxyPolicy` consulted `env.OPENAI_BASE_URL` and `env.OPENAI_API_KEY`, which Codex CLI TUI ignores (risking 401s for Keychain ChatGPT users who export `OPENAI_API_KEY` for other tools) | Blocking | Fixed | Removed `env.OPENAI_BASE_URL` and `env.OPENAI_API_KEY` inference from `resolveCodexProxyDecision` (`codexProxyPolicy.ts`). Updated unit tests. |
+| Validate `config.toml` `openai_base_url` and skip proxy on `profile`, `chatgpt_base_url`, or `cli_auth_credentials_store = "keyring"` | Non-blocking | Fixed | Added `http:`/`https:` URL validation and conservative skips for `profile`, `chatgpt_base_url`, and `keyring` store (`codexProxyPolicy.ts`). Added unit tests. |
+| Stale comment on `ClaudeSessionEvents['transcript-diagnostic']` claiming Claude never emits diagnostics | Non-blocking | Fixed | Updated comment in `claudeSession.ts` to document non-fatal proxy skip/fallback diagnostics. |

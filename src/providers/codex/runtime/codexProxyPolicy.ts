@@ -18,15 +18,19 @@ import { hasCorporateProxyEnv } from '@providers/shared/runtime/proxyEnv.js'
  *      own Rust HTTP client would have proxied cleanly.
  *   2. `CodexSession` injects `--config openai_base_url=...`, which only
  *      redirects the built-in `openai` provider. If the user configured a
- *      custom `model_provider` in `$CODEX_HOME/config.toml`, spinning up
- *      `ResponsesProxy` is wasted work (and risks interfering with config).
- *   3. `ResponsesProxy`'s default fallback when `~/.codex/auth.json` is absent
- *      is `apikey` → `https://api.openai.com/v1`. On macOS Keychain / keyring /
- *      `auto` credential stores (or before a user has logged in), `auth.json`
- *      does not exist even for ChatGPT-authenticated users — guessing
- *      `api.openai.com` sends a ChatGPT JWT to the wrong host and causes 401s.
- *      When we cannot prove the upstream/auth mode, skipping the proxy is
- *      strictly safer than guessing.
+ *      custom `model_provider`, a named `profile`, or a custom
+ *      `chatgpt_base_url` in `$CODEX_HOME/config.toml`, we cannot safely
+ *      predict the effective upstream and skip the proxy.
+ *   3. Vendored Codex CLI (`codex-rs/core/src/config/mod.rs` and
+ *      `login/src/auth/manager.rs`) does NOT read `env.OPENAI_BASE_URL` or
+ *      `env.OPENAI_API_KEY` for TUI auth. Inferring `apikey` from
+ *      `env.OPENAI_API_KEY` when `auth.json` is absent would misroute
+ *      developers who authenticate Codex via macOS Keychain (ChatGPT) while
+ *      exporting `OPENAI_API_KEY` for unrelated tools, causing 401s against
+ *      `api.openai.com`. Similarly, `cli_auth_credentials_store = "keyring"`
+ *      means any `auth.json` on disk may be stale. When we cannot prove the
+ *      upstream/auth mode from Codex's own config/auth files, skipping the
+ *      proxy is strictly safer than guessing.
  */
 
 export type CodexProxyDecision =
@@ -40,6 +44,9 @@ export type CodexProxyDecision =
       reason:
         | 'corporate-proxy-env'
         | 'custom-model-provider'
+        | 'custom-config-profile'
+        | 'custom-chatgpt-base-url'
+        | 'keyring-credential-store'
         | 'invalid-config'
         | 'indeterminate-auth-mode'
       detail: string
@@ -56,6 +63,15 @@ const CHATGPT_AUTH_MODES = new Set([
 function resolveCodexHome(env: Readonly<Record<string, string | undefined>>): string {
   const configured = env.CODEX_HOME?.trim()
   return configured ? configured : join(homedir(), '.codex')
+}
+
+function isValidHttpUrl(raw: string): boolean {
+  try {
+    const parsed = new URL(raw)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
 }
 
 async function readOptionalFile(path: string): Promise<{ exists: boolean; content: string | null }> {
@@ -82,12 +98,22 @@ export async function resolveCodexProxyDecision(
 
   const codexHome = resolveCodexHome(env)
 
-  // 1. Inspect $CODEX_HOME/config.toml for model_provider and openai_base_url.
+  // 1. Inspect $CODEX_HOME/config.toml for provider/profile/store overrides and
+  //    explicit openai_base_url.
   let configBaseUrl: string | undefined
   try {
     const configFile = await readOptionalFile(join(codexHome, 'config.toml'))
     if (configFile.exists && configFile.content !== null) {
       const parsed = parseToml(configFile.content) as Record<string, unknown>
+
+      if (typeof parsed.profile === 'string' && parsed.profile.trim().length > 0) {
+        return {
+          useProxy: false,
+          reason: 'custom-config-profile',
+          detail: `Codex config.toml selects profile=${JSON.stringify(parsed.profile.trim())}; skipping local ResponsesProxy.`,
+        }
+      }
+
       const modelProvider = parsed.model_provider
       if (
         typeof modelProvider === 'string' &&
@@ -100,8 +126,36 @@ export async function resolveCodexProxyDecision(
           detail: `Codex config.toml uses model_provider=${JSON.stringify(modelProvider.trim())}; skipping local ResponsesProxy.`,
         }
       }
+
+      if (typeof parsed.chatgpt_base_url === 'string' && parsed.chatgpt_base_url.trim().length > 0) {
+        return {
+          useProxy: false,
+          reason: 'custom-chatgpt-base-url',
+          detail: 'Codex config.toml sets chatgpt_base_url; skipping local ResponsesProxy.',
+        }
+      }
+
+      if (
+        typeof parsed.cli_auth_credentials_store === 'string' &&
+        parsed.cli_auth_credentials_store.trim().toLowerCase() === 'keyring'
+      ) {
+        return {
+          useProxy: false,
+          reason: 'keyring-credential-store',
+          detail: 'Codex config.toml sets cli_auth_credentials_store="keyring"; skipping local ResponsesProxy because auth.json may be stale.',
+        }
+      }
+
       if (typeof parsed.openai_base_url === 'string' && parsed.openai_base_url.trim().length > 0) {
-        configBaseUrl = parsed.openai_base_url.trim()
+        const candidate = parsed.openai_base_url.trim()
+        if (!isValidHttpUrl(candidate)) {
+          return {
+            useProxy: false,
+            reason: 'invalid-config',
+            detail: `Codex config.toml openai_base_url is not a valid http(s) URL; skipping local ResponsesProxy.`,
+          }
+        }
+        configBaseUrl = candidate
       }
     }
   } catch (err) {
@@ -112,17 +166,17 @@ export async function resolveCodexProxyDecision(
     }
   }
 
-  const envBaseUrl = env.OPENAI_BASE_URL?.trim() || undefined
-  const upstreamBaseUrl = configBaseUrl ?? envBaseUrl
-  if (upstreamBaseUrl) {
+  if (configBaseUrl) {
     return {
       useProxy: true,
-      upstreamBaseUrl,
+      upstreamBaseUrl: configBaseUrl,
     }
   }
 
-  // 2. No explicit upstream URL: inspect $CODEX_HOME/auth.json and OPENAI_API_KEY
+  // 2. No explicit config.toml openai_base_url: inspect $CODEX_HOME/auth.json
   //    to determine whether traffic belongs on chatgpt.com or api.openai.com.
+  //    Do NOT fall back to env.OPENAI_API_KEY: Codex TUI does not use it for
+  //    auth, so consulting it would misroute Keychain ChatGPT users.
   let authData: Record<string, unknown> | null = null
   try {
     const authFile = await readOptionalFile(join(codexHome, 'auth.json'))
@@ -138,17 +192,16 @@ export async function resolveCodexProxyDecision(
     authData = null
   }
 
-  const envApiKey = typeof env.OPENAI_API_KEY === 'string' && env.OPENAI_API_KEY.trim().length > 0
   const fileApiKey =
     typeof authData?.OPENAI_API_KEY === 'string' && authData.OPENAI_API_KEY.trim().length > 0
   const authModeRaw = typeof authData?.auth_mode === 'string' ? authData.auth_mode.trim() : ''
   const hasTokens = Boolean(authData?.tokens)
 
-  if (CHATGPT_AUTH_MODES.has(authModeRaw) || (hasTokens && !fileApiKey && !envApiKey)) {
+  if (CHATGPT_AUTH_MODES.has(authModeRaw) || (hasTokens && !fileApiKey)) {
     return { useProxy: true, authMode: 'chatgpt' }
   }
 
-  if (authModeRaw === 'apikey' || fileApiKey || envApiKey) {
+  if (authModeRaw === 'apikey' || fileApiKey) {
     return { useProxy: true, authMode: 'apikey' }
   }
 
@@ -156,6 +209,6 @@ export async function resolveCodexProxyDecision(
     useProxy: false,
     reason: 'indeterminate-auth-mode',
     detail:
-      'Neither $CODEX_HOME/auth.json nor OPENAI_API_KEY indicates the Codex auth mode; skipping local ResponsesProxy to avoid misrouting.',
+      '$CODEX_HOME/auth.json does not indicate the Codex auth mode; skipping local ResponsesProxy to avoid misrouting.',
   }
 }
