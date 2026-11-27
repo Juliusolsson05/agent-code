@@ -179,7 +179,11 @@ export function useWorkspace(
       // future native-mode work to distinguish "real user override" from
       // "stale impossible override." Reject it at the write boundary; the
       // display-policy pin remains the read-side safety net.
-      showToast('Choose OpenCode Terminal when creating the agent to use the native TUI')
+      showToast(
+        kind === 'opencode'
+          ? 'Choose OpenCode Terminal when creating the agent to use the native TUI'
+          : `${providerChoiceLabel(kind)} has no native terminal; it always uses Agent Code rendering.`,
+      )
       return false
     }
     if (effectiveProviderRuntime(kind, meta.providerRuntime) === 'terminal' && override === 'agent') {

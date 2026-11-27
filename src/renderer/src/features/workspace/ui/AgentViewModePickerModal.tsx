@@ -73,12 +73,14 @@ export function AgentViewModePickerModal({
         value: 'terminal',
         label: 'Terminal',
         description: nativeUnavailable
-          ? 'Choose OpenCode Terminal when creating an agent; this structured session has no PTY.'
+          ? kind === 'opencode'
+            ? 'Choose OpenCode Terminal when creating an agent; this structured session has no PTY.'
+            : `${provider.name} has no native terminal; it always uses Agent Code rendering.`
           : 'Always show the provider native terminal for this session.',
         disabled: nativeUnavailable,
       },
     ],
-    [globalMode, nativeUnavailable, terminalRuntime],
+    [globalMode, kind, nativeUnavailable, provider.name, terminalRuntime],
   )
 
   const pick = (value: PickerValue) => {

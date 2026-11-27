@@ -24,12 +24,14 @@ import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/use
 import { useAgentTerminalDimensionActive, useAgentTerminalOwnerVisible } from '@renderer/workspace/terminal/AgentTerminalOwnership'
 import { subscribeToAgentPtyData } from '@renderer/workspace/terminal/sessionDataDispatcher'
 import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebglRenderer'
+import { attachOsc52ClipboardHandler } from '@renderer/workspace/terminal/osc52Clipboard'
 import { attachTerminalWheelBoundary } from '@renderer/workspace/terminal/terminalWheelBoundary'
 import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/terminalInputForwarder'
 import { encodeTerminalPaste, registerTerminalPasteTarget } from '@renderer/workspace/terminal/textPasteTarget'
 import { AgentTerminalActions } from '@renderer/workspace/tile-tree/AgentTerminalActions'
 import { useTerminalFollow } from '@renderer/workspace/tile-tree/terminalFollow'
 import type { AgentProviderKind } from '@shared/types/providerKind'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 
 type Props = {
   sessionId: SessionId
@@ -180,6 +182,7 @@ export function AgentTerminalLeaf({
     let fit: FitAddon | null = null
     let webglRenderer: ReturnType<typeof attachXtermWebglRenderer> | null = null
     let wheelBoundary: ReturnType<typeof attachTerminalWheelBoundary> | null = null
+    let osc52Disposable: { dispose(): void } | null = null
     let onDataDisposable: { dispose(): void } | null = null
     let offPtyData: (() => void) | null = null
     // Nullable like the disposables above: xterm init can throw before the
@@ -303,6 +306,9 @@ export function AgentTerminalLeaf({
       fit = new FitAddon()
       term.loadAddon(fit)
       term.open(container)
+      // Write-only OSC 52 clipboard support so tmux mouse-drag selections copy
+      // to the macOS clipboard without exposing clipboard reads to the PTY.
+      osc52Disposable = attachOsc52ClipboardHandler(term)
       // Host-level, after open(): bubbles after every xterm wheel listener so
       // xterm keeps first refusal — see terminalWheelBoundary.ts.
       wheelBoundary = attachTerminalWheelBoundary(container)
@@ -579,6 +585,7 @@ export function AgentTerminalLeaf({
       if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
       resizeObserver?.disconnect()
       onDataDisposable?.dispose()
+      osc52Disposable?.dispose()
       offFollowAttach?.()
       offPtyData?.()
       offTextPaste?.()
@@ -634,9 +641,12 @@ export function AgentTerminalLeaf({
   // below can never disagree with the fill they sit on.
   const statusLit = paneHeaderStatusLit(showStatusMode, isSessionLive)
 
+  const providerLabel = getRendererProviderCapabilities(provider).name
+
   return (
     <div
       data-pane-id={sessionId}
+      data-agent-terminal-leaf="true"
       className={`
         flex flex-col h-full min-h-0 min-w-0
         border ${focused ? 'border-accent' : 'border-border'}
@@ -680,50 +690,24 @@ export function AgentTerminalLeaf({
         statusMode={showStatusMode}
         isSessionLive={isSessionLive}
         completionUnseen={completionUnseen}
-        // `text-ink` lifts the surface name above the muted cwd on the plain
-        // strip. On the lit strip it inherits `accent-fg`, since ink is not
-        // guaranteed to contrast with a user-chosen accent.
+        // Clean provider display name (#1551): Terminal is now the default
+        // agent surface, so debug-sounding `raw ${provider}` + redundant
+        // `terminal view` chrome only adds noise on every pane header.
+        // `text-ink` lifts the provider name above the muted cwd on the plain
+        // strip; on the lit strip it inherits `accent-fg`.
         badge={
           <span className={`flex-shrink-0 ${statusLit ? '' : 'text-ink'}`}>
-            raw {provider}
+            {providerLabel}
           </span>
         }
         trailing={
-          <>
-            {/* TAIL pill styling copied from ScrollIndicator so both surfaces
-                read identically — without it the raw view silently follows
-                output while showing no state the palette can be checked
-                against. The one exception is the lit strip: `text-accent` on
-                `bg-accent` makes TAIL invisible exactly when the agent is
-                producing the output being followed, so it inherits
-                `accent-fg` there. */}
-            {tailActive ? (
-              <span
-                className={`text-[10px] font-code uppercase tracking-wider ${statusLit ? '' : 'text-accent'}`}
-              >
-                TAIL
-              </span>
-            ) : null}
-            {/* No color of its own: it inherits the row's `text-muted`, or
-                `accent-fg` on the lit strip.
-
-                Hidden below 320px of header text room (PaneHeader's label
-                group is the `@container`, so the flag's quarter is already
-                subtracted). `raw <provider>` already names this surface, so
-                the label is the one piece of chrome that can go without losing
-                information. Without this, a flagged Tiled Dispatch lane
-                (~250px) had more fixed-width text than room, and the label
-                slid under the flag with TAIL next.
-
-                The threshold covers the fixed row content with every piece
-                shown, measured at the 10px code font: pane label chip
-                (~26px), `raw opencode` (~72px), TAIL (~26px), this label
-                (~76px) and the gaps, about 236px, plus roughly 80px so the cwd
-                keeps a readable tail. */}
-            <span className="hidden text-[10px] uppercase tracking-wider @min-[320px]:inline">
-              terminal view
+          tailActive ? (
+            <span
+              className={`text-[10px] font-code uppercase tracking-wider ${statusLit ? '' : 'text-accent'}`}
+            >
+              TAIL
             </span>
-          </>
+          ) : null
         }
       />
 

@@ -255,7 +255,10 @@ describe('terminal-view status header wiring', () => {
     // draws a PaneHeader with `data-status-lit`, so without this a routing
     // change could pass the assertion below without touching the wiring
     // under test.
-    expect(screen.getByText('raw claude')).toBeTruthy()
+    expect(container.querySelector('[data-agent-terminal-leaf="true"]')).not.toBeNull()
+    expect(screen.getByText('Claude Code')).toBeTruthy()
+    expect(screen.queryByText('raw claude')).toBeNull()
+    expect(screen.queryByText('terminal view')).toBeNull()
     expect(statusRow(container).getAttribute('data-status-lit')).toBe(String(showStatusMode))
   })
 })

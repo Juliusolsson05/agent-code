@@ -562,13 +562,16 @@ export function getSettingsRegistry(
       // respect, not a single command's preference. Commands only declare
       // whether they require a rendered feed; the central display policy turns
       // that into "available, disabled, or temporarily render in hybrid."
+      //
+      // Inherits DEFAULT_SETTING_METADATA (`apply: 'immediate'`): live panes
+      // without a per-session override switch surface immediately when the
+      // global mode changes.
       id: 'agent-view-mode',
       category: 'workspace',
       title: 'Agent View Mode',
       description:
-        'Choose whether Claude and Codex panes show Agent Code rendering, the provider terminal, or terminal-first Hybrid mode that renders only while a feature needs the feed.',
+        'Choose whether PTY-backed agent panes (Claude, Codex, Grok) show the provider terminal, Agent Code rendering, or terminal-first Hybrid mode that renders only while a feature needs the feed. Terminal-only providers (OpenCode Terminal, Pi) always use their native terminal; structured-only providers (OpenCode, Hermes, Antigravity) always use Agent Code rendering.',
       keywords: ['agent', 'view', 'mode', 'terminal', 'raw', 'hybrid', 'renderer', 'feed', 'tui'],
-      metadata: { scope: 'app', apply: 'new-session', storage: 'settings' },
       control: {
         type: 'select',
         getValue: settings => settings.agentViewMode,
@@ -628,7 +631,7 @@ export function getSettingsRegistry(
       id: 'worktree-badges',
       category: 'workspace',
       title: 'Worktree Badges',
-      description: 'Show the inferred git worktree or branch for each agent pane above the composer.',
+      description: 'Show the inferred git worktree or branch for each agent pane above the composer. (Agent view only.)',
       keywords: ['worktree', 'branch', 'badge', 'git', 'agent'],
       control: {
         type: 'toggle',
@@ -690,7 +693,7 @@ export function getSettingsRegistry(
       category: 'workspace',
       title: 'Auto-send Prompt Suggestions',
       description:
-        'When on, clicking a prompt-suggestion chip sends it immediately as the next prompt. When off, clicking only fills the composer so you can edit it first. On by default.',
+        'When on, clicking a prompt-suggestion chip sends it immediately as the next prompt. When off, clicking only fills the composer so you can edit it first. Off by default. Applies in Agent/Hybrid view.',
       keywords: ['prompt', 'suggestion', 'chip', 'autosend', 'send', 'composer', 'next prompt'],
       control: {
         type: 'toggle',
@@ -943,8 +946,8 @@ export function getSettingsRegistry(
       category: 'dictation',
       title: 'Inline Dictation',
       description:
-        'Show a voice control inside each composer and insert transcripts as editable draft text.',
-      keywords: ['voice', 'dictation', 'speech', 'stt', 'composer', 'microphone'],
+        'Enable voice dictation in composers and terminal panes. Shows a voice control inside each composer and inserts transcripts as editable draft text or terminal input.',
+      keywords: ['voice', 'dictation', 'speech', 'stt', 'composer', 'terminal', 'microphone'],
       control: {
         type: 'toggle',
         getValue: settings => settings.dictationEnabled,
@@ -1144,7 +1147,7 @@ export function getSettingsRegistry(
       title: 'Providers',
       description:
         'Choose which coding agents Agent Code offers. Detected CLIs start on; turning a provider off hides it from pickers, switching, and usage — running sessions keep running. Reset returns a provider to detection.',
-      keywords: ['provider', 'providers', 'enable', 'disable', 'claude', 'codex', 'opencode', 'grok', 'pi', 'antigravity', 'hermes', 'antigravity', 'usage', 'hide'],
+      keywords: ['provider', 'providers', 'enable', 'disable', 'claude', 'codex', 'opencode', 'grok', 'pi', 'antigravity', 'hermes', 'usage', 'hide'],
       // Main's setup.json is the truth (storage: 'setup'); the row mirrors it.
       metadata: { scope: 'app', apply: 'new-session', storage: 'setup' },
       control: { type: 'providers-enablement' },
