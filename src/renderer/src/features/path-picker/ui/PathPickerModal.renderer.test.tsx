@@ -5,6 +5,8 @@ import type { Conversation, ConversationListRequest, ConversationListResponse } 
 
 import { PathPickerModal } from './PathPickerModal'
 import { MISSING_PROVIDER_HINT, resetSetupStoreForTests, useSetupStore } from '@renderer/features/setup/store'
+import { useProviderEnablementStore } from '@renderer/features/providers/store'
+import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind'
 import { loadFirstRunCheck } from '@shared/setup/firstRunRecordings.testSupport'
 
 const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
@@ -294,6 +296,59 @@ describe('PathPickerModal keyboard', () => {
       .filter(el => !el.hasAttribute('disabled') && el.getAttribute('tabindex') !== '-1')
     const after = tabbables.slice(tabbables.indexOf(field) + 1)
     expect(after[0]).toBe(screen.getByRole('listbox', { name: 'Previous sessions' }))
+  })
+})
+
+describe('PathPickerModal with zero enabled providers (#1553)', () => {
+  const originalEnablement = useProviderEnablementStore.getState()
+  afterEach(() => {
+    useProviderEnablementStore.setState(originalEnablement, true)
+    resetSetupStoreForTests()
+  })
+
+  function setZeroEnabledProviders(): void {
+    useProviderEnablementStore.getState().setSnapshot({
+      entries: AGENT_PROVIDER_KINDS.map(kind => ({
+        kind,
+        installed: false,
+        enabled: false,
+        because: 'detected' as const,
+      })),
+      opencodeUsageSource: 'none',
+      zaiCredentialPresent: false,
+    })
+  }
+
+  it('shows an inline Open Setup action and opens a Terminal instead of silently submitting Claude', async () => {
+    setZeroEnabledProviders()
+    const list = vi.fn(async () => response([]))
+    installApi(list)
+    const onAccept = vi.fn()
+    const onOpenTerminal = vi.fn()
+    const onCancel = vi.fn()
+    render(
+      <PathPickerModal
+        open
+        defaultValue="/repo"
+        onCancel={onCancel}
+        onAccept={onAccept}
+        onOpenTerminal={onOpenTerminal}
+        onResume={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText(/No agent providers are enabled/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open Setup' })).toBeInTheDocument()
+    const confirm = screen.getByRole('button', { name: 'Open Terminal' })
+    fireEvent.click(confirm)
+    await waitFor(() => expect(onOpenTerminal).toHaveBeenCalledWith('/repo'))
+    expect(onAccept).not.toHaveBeenCalled()
+    expect(list).not.toHaveBeenCalled()
+
+    // Clicking Open Setup closes the picker and opens SetupGate.
+    fireEvent.click(screen.getByRole('button', { name: 'Open Setup' }))
+    expect(onCancel).toHaveBeenCalled()
+    expect(useSetupStore.getState().requested).toBe(true)
   })
 })
 

@@ -78,6 +78,14 @@ export function PathPickerSurface() {
     [closePathPicker, workspace],
   )
 
+  const onOpenTerminal = useCallback(
+    async (cwd: string) => {
+      await workspace.newTab(cwd, undefined, 'terminal')
+      closePathPicker()
+    },
+    [closePathPicker, workspace],
+  )
+
   const onResume = useCallback(
     async (cwd: string, sessionId: string, provider: AgentProviderKind) => {
       // Resume reuses newTab's plumbing — same workspace entry, same
@@ -122,6 +130,7 @@ export function PathPickerSurface() {
       defaultValue={defaultValue}
       onCancel={closePathPicker}
       onAccept={onAccept}
+      onOpenTerminal={onOpenTerminal}
       onResume={onResume}
       openTabsForPath={openTabsForPath}
       onActivateTab={onActivateTab}

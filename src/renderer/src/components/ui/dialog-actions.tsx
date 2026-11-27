@@ -160,13 +160,19 @@ export function focusedControlOwnsEnter(target: EventTarget | null): boolean {
   // its own option list on several platforms, and the dialog-level listener
   // saw that Enter bubble up — Merge Project Tabs opens with focus on its
   // Keep select, so "Enter to choose the kept tab" MERGED the tabs at once.
+  //
+  // `data-owns-enter` (#1553): an inline sub-form input inside a larger dialog
+  // (such as SetupGate's manual path editor) owns its own Enter submission and
+  // must never confirm/close the enclosing dialog. Single-input dialogs like
+  // AgentTitlePrompt omit the attribute so Enter still confirms the dialog.
   // Every caller of this predicate only ever steps ASIDE when it returns
   // true, so widening it cannot make any handler act where it did not.
   return (
     target.tagName === 'BUTTON' ||
     target.tagName === 'A' ||
     target.tagName === 'TEXTAREA' ||
-    target.tagName === 'SELECT'
+    target.tagName === 'SELECT' ||
+    target.hasAttribute('data-owns-enter')
   )
 }
 

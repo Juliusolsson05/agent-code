@@ -341,3 +341,68 @@ describe('the setup panel never strands the first run (#1047 review)', () => {
     expect(spawnedKinds(spawnSession)).toEqual(['terminal'])
   })
 })
+
+describe('SetupGate UX dead-end fixes (#1553)', () => {
+  it('pressing Enter inside Enter Path Manually submits the path and never closes SetupGate', async () => {
+    const devCheck = loadFirstRunCheck('developer-machine')
+    const { api } = mountMachine([devCheck])
+    await waitFor(() => expect(projects()).toBe(1))
+    const setupSetToolPath = vi.fn(async () => ({ ok: false as const, reason: 'No file exists at that path.' }))
+    Object.assign(api, { setupSetToolPath })
+
+    // Reopen Setup (mustAnswer === false, so DialogActions binds Enter to Close).
+    await act(async () => {
+      setupCommands.find(command => command.id === 'open-setup')!.run({ ui: { closePalette: vi.fn() } } as unknown as CommandContext)
+    })
+    await screen.findByRole('dialog')
+
+    // Found provider rows expose Change Path… so users can override detected paths.
+    const changeButtons = screen.getAllByRole('button', { name: 'Change Path…' })
+    expect(changeButtons.length).toBeGreaterThan(0)
+    fireEvent.click(changeButtons[0]!)
+
+    const input = screen.getByRole('textbox')
+    fireEvent.change(input, { target: { value: '~/missing/claude' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(await screen.findByText('No file exists at that path.')).toBeTruthy()
+    expect(setupSetToolPath).toHaveBeenCalledWith(expect.any(String), '~/missing/claude')
+    // Dialog stayed open so the user sees the validation error.
+    expect(screen.getByRole('dialog')).toBeTruthy()
+  })
+
+  it('renders SetupGate error state with Retry when requested and the initial check failed', async () => {
+    const devCheck = loadFirstRunCheck('developer-machine')
+    let calls = 0
+    const setupCheck = vi.fn(async () => {
+      calls += 1
+      if (calls <= 2) throw new Error('login shell timed out')
+      return devCheck
+    })
+    Object.defineProperty(window, 'api', { configurable: true, value: {
+      loadWorkspace: async () => null,
+      defaultCwd: async () => '/Users/someone',
+      setupCheck,
+      setupSkipOptional: vi.fn(async () => devCheck),
+      setupAcknowledgeNoProviders: vi.fn(async () => devCheck),
+      spawnSession: vi.fn(async () => ({ sessionId: 's1' })),
+      onOrchestrationRequest: () => () => undefined,
+      onAgentManagementRequest: () => () => undefined,
+      reportSessionLifecycle: vi.fn(),
+      appendFeedDebugLog: async () => undefined,
+    } })
+    render(<GlobalToastContext.Provider value={{ showToast }}><SetupGate /></GlobalToastContext.Provider>)
+    await waitFor(() => expect(setupCheck).toHaveBeenCalledTimes(1))
+
+    // User opens Setup explicitly while check === null and error is set.
+    await act(async () => {
+      setupCommands.find(command => command.id === 'open-setup')!.run({ ui: { closePalette: vi.fn() } } as unknown as CommandContext)
+    })
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+    expect(screen.getByText(/Could not inspect installed tools/)).toBeTruthy()
+
+    // Clicking Retry recovers once the check succeeds.
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByText('Agent providers')).toBeTruthy()
+  })
+})

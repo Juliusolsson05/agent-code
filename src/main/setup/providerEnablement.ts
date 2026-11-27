@@ -11,6 +11,7 @@ import {
   type ProviderEnablementSnapshot,
 } from '@shared/types/providerEnablement.js'
 import { checkPrerequisites } from '@main/setup/prerequisites.js'
+import type { SetupCheckResult } from '@shared/types/setup.js'
 import { peekHermesConnectionService } from '@main/hermes/registry.js'
 import { invalidateUsageSnapshotCache } from '@main/usage/usageService.js'
 import {
@@ -107,6 +108,43 @@ function withRemoteProviders(local: ReadonlySet<AgentProviderKind>): ReadonlySet
 /** Re-resolve and broadcast after a remote connection was signed in or out. */
 export async function refreshRemoteProviderDetection(): Promise<void> {
   emit(await resolveAndCache())
+}
+
+function setsEqual<T>(a: ReadonlySet<T>, b: ReadonlySet<T>): boolean {
+  if (a.size !== b.size) return false
+  for (const item of a) {
+    if (!b.has(item)) return false
+  }
+  return true
+}
+
+/**
+ * Push a fresh `checkPrerequisites()` result into the cached detected set and
+ * broadcast `provider-enablement:changed` if the detected set changed.
+ *
+ * WHY this exists (#1553): `cachedDetected` is held for the process lifetime so
+ * picker opens don't re-run login-shell probes. Without this hook, installing a
+ * CLI or setting a manual path in SetupGate updated `setup.json` and the setup
+ * store, but `providerEnablement` kept serving its startup empty set until the
+ * user restarted the app — so `⌘T` (PathPickerModal) still hid the newly
+ * installed provider. Reusing the `checkPrerequisites()` result the setup IPC
+ * already computed avoids spawning a second wave of login-shell probes.
+ */
+export async function syncDetectedProvidersFromCheck(
+  result: Pick<SetupCheckResult, 'usableProviders'>,
+): Promise<ProviderEnablementSnapshot> {
+  const nextDetected: ReadonlySet<AgentProviderKind> = new Set(
+    (result.usableProviders ?? []).filter(kind => AGENT_PROVIDER_KINDS.includes(kind)),
+  )
+  const previousDetected = cachedDetected
+  cachedDetected = nextDetected
+  lastDetected = nextDetected
+  const snapshot = await resolveAndCache(async () => nextDetected)
+  if (!previousDetected || !setsEqual(previousDetected, nextDetected)) {
+    invalidateUsageSnapshotCache()
+    emit(snapshot)
+  }
+  return snapshot
 }
 
 /** Fail-open before the first resolve: hiding a user's providers because a

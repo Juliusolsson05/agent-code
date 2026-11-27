@@ -52,7 +52,23 @@ export function SetupGate() {
   const panelRef = useRef<HTMLDivElement>(null)
   const [busy, setBusy] = useState<SetupInstallTarget | 'check' | null>('check')
   const [actionError, setActionError] = useState<string | null>(null)
+  // Tracks which provider rows currently have their inline "Enter Path
+  // Manually…" / "Change Path…" editor open (#1553). While any row is editing
+  // a path, DialogActions must NOT bind Enter to close/continue the dialog —
+  // otherwise pressing Enter inside the path input closes SetupGate instead
+  // of submitting the path.
+  const [editingTools, setEditingTools] = useState<ReadonlySet<SetupToolId>>(() => new Set())
   const { showToast } = useGlobalToast()
+
+  const handleEditingChange = useCallback((tool: SetupToolId, open: boolean) => {
+    setEditingTools(prev => {
+      if (open === prev.has(tool)) return prev
+      const next = new Set(prev)
+      if (open) next.add(tool)
+      else next.delete(tool)
+      return next
+    })
+  }, [])
 
   const refresh = useCallback(async () => {
     setBusy('check')
@@ -92,7 +108,18 @@ export function SetupGate() {
       ((noProvider && !check.noProvidersAcknowledged)
         || missingOptional.some(tool => tool.installable && !tool.skipped)),
   )
-  const shouldShow = Boolean(check && (requested || automatic))
+  // WHY `|| (requested && error)` (#1553): if the initial prerequisite check
+  // failed (`check === null`, `error` set) and the user explicitly opens Setup
+  // from File › Setup… or the command palette, returning null silently hides
+  // both the failure and the Retry button. Showing the dialog with the error
+  // alert + Retry gives the user a way to recover.
+  const shouldShow = Boolean((check && (requested || automatic)) || (requested && error))
+
+  useEffect(() => {
+    if (!shouldShow && editingTools.size > 0) {
+      setEditingTools(new Set())
+    }
+  }, [shouldShow, editingTools.size])
   // The one state that may not be dismissed by a stray key or click: a fresh
   // install with nothing to run, whose bootstrap is parked on this answer.
   // Everything else — a returning user, an optional helper, a panel the user
@@ -184,10 +211,10 @@ export function SetupGate() {
     if (answerNotSaved) showToast(SETUP_ANSWER_NOT_SAVED)
   }, [automatic, missingOptional, noProvider, showToast])
 
-  if (!shouldShow || !check) return null
+  if (!shouldShow) return null
 
-  const providers = Object.values(check.tools).filter(tool => tool.provider)
-  const helpers = Object.values(check.tools).filter(tool => !tool.provider)
+  const providers = check ? Object.values(check.tools).filter(tool => tool.provider) : []
+  const helpers = check ? Object.values(check.tools).filter(tool => !tool.provider) : []
   const shownError = actionError ?? error
 
   // WHY the shared Dialog primitive and not a bare overlay div (#1047
@@ -228,26 +255,46 @@ export function SetupGate() {
             {noProvider ? 'No agent provider is installed yet' : 'Agent Code Setup'}
           </DialogTitle>
           <DialogDescription className="leading-5">
-            {noProvider
-              ? 'Install one of the CLIs below in a terminal, then press Retry. Or continue with a terminal now and install from there. Setup stays available from the File menu and the command palette.'
-              : 'The agent CLIs and helper tools on this Mac, and how to add the ones that are missing.'}
+            {!check
+              ? 'Could not inspect installed tools. Press Retry to try again.'
+              : noProvider
+                ? 'Install one of the CLIs below in a terminal, then press Retry. Or continue with a terminal now and install from there. Setup stays available from the File menu and the command palette.'
+                : 'The agent CLIs and helper tools on this Mac, and how to add the ones that are missing.'}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="min-h-0 overflow-y-auto">
-          <SectionLabel>Agent providers</SectionLabel>
-          <div className="divide-y divide-border">
-            {providers.map(tool => (
-              <SetupRow key={tool.id} tool={tool} busy={busy} onInstall={install} onSetPath={setToolPath} />
-            ))}
+        {check ? (
+          <div className="min-h-0 overflow-y-auto">
+            <SectionLabel>Agent providers</SectionLabel>
+            <div className="divide-y divide-border">
+              {providers.map(tool => (
+                <SetupRow
+                  key={tool.id}
+                  tool={tool}
+                  busy={busy}
+                  onInstall={install}
+                  onSetPath={setToolPath}
+                  onEditingChange={handleEditingChange}
+                />
+              ))}
+            </div>
+            <SectionLabel>Helper tools</SectionLabel>
+            <div className="divide-y divide-border">
+              {helpers.map(tool => (
+                <SetupRow
+                  key={tool.id}
+                  tool={tool}
+                  busy={busy}
+                  onInstall={install}
+                  onSetPath={setToolPath}
+                  onEditingChange={handleEditingChange}
+                />
+              ))}
+            </div>
           </div>
-          <SectionLabel>Helper tools</SectionLabel>
-          <div className="divide-y divide-border">
-            {helpers.map(tool => (
-              <SetupRow key={tool.id} tool={tool} busy={busy} onInstall={install} onSetPath={setToolPath} />
-            ))}
-          </div>
-        </div>
+        ) : (
+          <div className="min-h-0" />
+        )}
 
         {shownError ? (
           // Capped and scrollable: this can be the whole stdout+stderr of a
@@ -271,6 +318,7 @@ export function SetupGate() {
         <DialogActions
           confirmLabel={mustAnswer ? 'Continue with a Terminal' : automatic ? 'Continue' : 'Close'}
           confirmKey={mustAnswer ? null : 'Enter'}
+          confirmOnEnter={editingTools.size === 0}
           confirmDisabled={busy !== null}
           onConfirm={() => void continueOn()}
           legend={mustAnswer ? <span>Escape is off until you choose.</span> : undefined}
@@ -300,22 +348,30 @@ function SetupRow({
   busy,
   onInstall,
   onSetPath,
+  onEditingChange,
 }: {
   tool: SetupToolStatus
   busy: SetupInstallTarget | 'check' | null
   onInstall: (target: SetupInstallTarget) => void
   onSetPath: (tool: SetupToolId, path: string) => Promise<string | null>
+  onEditingChange: (tool: SetupToolId, open: boolean) => void
 }) {
   const [overrideOpen, setOverrideOpen] = useState(false)
   const [overridePath, setOverridePath] = useState('')
   const [overrideError, setOverrideError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
 
+  const setEditorOpen = (next: boolean) => {
+    setOverrideOpen(next)
+    onEditingChange(tool.id, next)
+    if (!next) setOverrideError(null)
+  }
+
   const submitOverride = async () => {
     const reason = await onSetPath(tool.id, overridePath)
     setOverrideError(reason)
     if (!reason) {
-      setOverrideOpen(false)
+      setEditorOpen(false)
       setOverridePath('')
     }
   }
@@ -339,10 +395,13 @@ function SetupRow({
     ? 'Shipped with Agent Code; no install required.'
     : (tool.path ?? tool.detail ?? 'Not found')
   const missingProvider = tool.provider && !tool.found && !isBundled
-  // The manual override is for providers: a false "Not installed" is the one
-  // probe error that costs the user an agent (#495 A1). Helpers have
-  // Install/Skip and never gate anything.
-  const canOverride = missingProvider
+  // WHY every provider row allows a manual path override (#1553): previously
+  // only missing providers showed "Enter Path Manually…", so a user whose
+  // provider resolved to an unwanted version (or bundled binary) had no UI way
+  // to point Agent Code at a different wrapper or install even though
+  // toolchain.ts already honors manual overrides above PATH and bundled.
+  const canOverride = tool.provider
+  const overrideButtonLabel = tool.found || isBundled ? 'Change Path…' : 'Enter Path Manually…'
 
   const copy = async (command: string) => {
     try {
@@ -372,9 +431,13 @@ function SetupRow({
           {canOverride ? (
             <Button type="button" variant="outline" size="sm"
               disabled={busy !== null}
-              onClick={() => setOverrideOpen(open => !open)}
+              onClick={() => {
+                const next = !overrideOpen
+                if (next && !overridePath && tool.path) setOverridePath(tool.path)
+                setEditorOpen(next)
+              }}
             >
-              Enter Path Manually…
+              {overrideButtonLabel}
             </Button>
           ) : null}
           {!isBundled && !tool.found && target && tool.installable ? (
@@ -416,12 +479,17 @@ function SetupRow({
           <div className="flex items-center gap-2">
             <Input
               type="text"
+              data-owns-enter=""
               value={overridePath}
               onChange={e => setOverridePath(e.target.value)}
               onKeyDown={e => {
-                if (e.key === 'Enter' && overridePath.trim()) void submitOverride()
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  if (overridePath.trim()) void submitOverride()
+                }
               }}
-              placeholder={`/absolute/path/to/${tool.id}`}
+              placeholder={`/absolute/path/to/${tool.id} or ~/…`}
               spellCheck={false}
               aria-label={`Path to ${tool.id}`}
               className="h-7 min-w-0 flex-1 text-[11px]"
