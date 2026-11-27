@@ -38,7 +38,7 @@ export function registerSetupIpc(): void {
         ok: false,
         target,
         output: `Unknown setup install target: ${String(target)}`,
-        check: await checkPrerequisites(),
+        check: await checkPrerequisites({ force: true }),
       }
     }
     return await installWithHomebrew(target)
@@ -46,7 +46,7 @@ export function registerSetupIpc(): void {
 
   ipcMain.handle('setup:skip-optional', async (_evt, tool: SetupToolId) => {
     await markOptionalSkipped(tool, true)
-    return await checkPrerequisites()
+    return await checkPrerequisites({ force: true })
   })
 
   // The first-run answer "continue without a provider" (#995). Durable for the
@@ -54,7 +54,7 @@ export function registerSetupIpc(): void {
   // launch, and in every new window, for a user who has already answered it.
   ipcMain.handle('setup:acknowledge-no-providers', async () => {
     await markNoProvidersAcknowledged()
-    return await checkPrerequisites()
+    return await checkPrerequisites({ force: true })
   })
 
   // Escape hatch for #495 A1: automatic resolution is a probe, and a
@@ -108,7 +108,7 @@ export function registerSetupIpc(): void {
       }
       await setManualToolPath(tool, candidate)
       await refreshToolchainFromState()
-      const check = await checkPrerequisites()
+      const check = await checkPrerequisites({ force: true })
       await syncDetectedProvidersFromCheck(check).catch(err => {
         console.warn('[setup] failed to sync provider enablement after set-tool-path:', err)
       })

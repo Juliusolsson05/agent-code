@@ -59,3 +59,12 @@ Fresh-user setup, binary detection, and provider enablement have several interlo
   - `src/renderer/src/features/setup/firstRun.renderer.test.tsx`
   - `src/renderer/src/features/path-picker/ui/PathPickerModal.renderer.test.tsx`
 - Run `npm run typecheck` and targeted `vitest` suites in the worktree.
+
+## Review Disposition
+
+| Finding | Severity | Disposition |
+| --- | --- | --- |
+| Post-mutation callers (`setup:set-tool-path`, `setup:skip-optional`, `setup:acknowledge-no-providers`, `setup:install`) could coalesce onto a stale pre-mutation `inFlightCheck`, or an older check could clobber a newer write-back | Blocking | Fixed: added `checkPrerequisites({ force?: boolean })`, monotonic `checkGeneration` guard around `updateToolPaths` / `refreshToolchainFromState`, identity-checked `finally`, and `force: true` at all post-mutation callers. |
+| Older in-flight `detectInstalledKinds()` could overwrite a newer `syncDetectedProvidersFromCheck()` in `providerEnablement.ts` | Blocking | Fixed: added monotonic `detectionGeneration` counter and identity-checked `inFlightDetection` cleanup; added regression test. |
+| Calling `resolveBundledTool('mitmdump')` during `checkPrerequisites()` eagerly extracted an 87 MB tarball on fresh startup | Non-blocking | Fixed: kept `mitmdump` on lazy `isBundledArchiveAvailable` while probing bare-binary `opencode` via `resolveBundledTool`. |
+| `SetupGate` Enter handler in manual path input did not guard `busy === null`, and `DialogActions` still showed the `↩` chip while editing a path | Non-blocking | Fixed: guarded Enter submit with `busy === null && overridePath.trim()` and set `confirmKey={mustAnswer || editingTools.size > 0 ? null : 'Enter'}`. |

@@ -196,3 +196,28 @@ it('updates cached detection and broadcasts when syncDetectedProvidersFromCheck 
   await enablement.syncDetectedProvidersFromCheck({ usableProviders: ['claude'] })
   expect(broadcasts).toEqual([true])
 })
+
+it('never lets an older in-flight detectInstalledKinds overwrite a newer syncDetectedProvidersFromCheck', async () => {
+  let releaseStaleProbe!: (value: { usableProviders: string[] }) => void
+  probe.checkPrerequisites.mockImplementationOnce(
+    () => new Promise(resolve => { releaseStaleProbe = resolve }),
+  )
+  const enablement = await import('./providerEnablement.js')
+
+  // Kick off initial detection (stays in flight).
+  const initialPromise = enablement.getProviderEnablementSnapshot()
+  await vi.waitFor(() => expect(releaseStaleProbe).toBeTypeOf('function'))
+
+  // Meanwhile Setup discovers Claude and syncs it.
+  await enablement.syncDetectedProvidersFromCheck({ usableProviders: ['claude'] })
+
+  // Now the older probe finishes with an empty set; it must NOT overwrite Claude.
+  releaseStaleProbe({ usableProviders: [] })
+  await initialPromise
+
+  const snapshot = await enablement.getProviderEnablementSnapshot()
+  expect(snapshot.entries.find(entry => entry.kind === 'claude')).toMatchObject({
+    enabled: true,
+    installed: true,
+  })
+})

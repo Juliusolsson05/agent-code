@@ -4,7 +4,7 @@ import type {
   SetupToolStatus,
 } from '@shared/types/setup.js'
 import { isExecutable, resolveToolPath } from '@main/setup/binaryResolver.js'
-import { resolveBundledTool } from '@main/setup/runtimeTools.js'
+import { isBundledArchiveAvailable, resolveBundledTool } from '@main/setup/runtimeTools.js'
 import type { BundledToolId } from '@main/setup/runtimeTools.js'
 import { loadSetupState, updateToolPaths } from '@main/setup/setupState.js'
 import { listProviderSetupDescriptors } from '@providers/registry.setup.js'
@@ -97,19 +97,30 @@ const CHECK_ORDER: SetupToolId[] = ['brew', ...LOCAL_PROVIDER_KINDS, 'git', 'mit
 // SetupGate (`setup:check`) and providerEnablement (`provider-enablement:get`)
 // both call `checkPrerequisites()` at the same time; without sharing the
 // in-flight promise, startup spawns 2x CHECK_ORDER.length (~16) parallel login
-// shells simultaneously. Cleared in `finally` so every subsequent explicit
-// Retry runs a fresh probe.
+// shells simultaneously.
+//
+// WHY `{ force?: boolean }` + `checkGeneration`:
+//   Post-mutation callers (`setup:set-tool-path`, `setup:skip-optional`,
+//   `setup:acknowledge-no-providers`, `setup:install`) MUST NOT coalesce onto
+//   an older in-flight check that read `setup.json` BEFORE the mutation landed.
+//   Passing `force: true` starts a new generation; `finally` only clears
+//   `inFlightCheck` if it still points at THIS promise, and the write-back /
+//   toolchain refresh is gated on `generation === checkGeneration` so an older
+//   check finishing last can never clobber a newer check's tool paths.
 let inFlightCheck: Promise<SetupCheckResult> | null = null
+let checkGeneration = 0
 
-export function checkPrerequisites(): Promise<SetupCheckResult> {
-  if (inFlightCheck) return inFlightCheck
-  inFlightCheck = runCheckPrerequisites().finally(() => {
-    inFlightCheck = null
+export function checkPrerequisites(options?: { force?: boolean }): Promise<SetupCheckResult> {
+  if (!options?.force && inFlightCheck) return inFlightCheck
+  const generation = ++checkGeneration
+  const current = runCheckPrerequisites(generation).finally(() => {
+    if (inFlightCheck === current) inFlightCheck = null
   })
-  return inFlightCheck
+  inFlightCheck = current
+  return current
 }
 
-async function runCheckPrerequisites(): Promise<SetupCheckResult> {
+async function runCheckPrerequisites(generation: number): Promise<SetupCheckResult> {
   const state = await loadSetupState()
   const brewPath = await resolveToolPath('brew')
   const entries = await Promise.all(
@@ -150,16 +161,18 @@ async function runCheckPrerequisites(): Promise<SetupCheckResult> {
         const persisted = state.toolPaths[tool]
         if (persisted && (await isExecutable(persisted))) systemPath = persisted
       }
-      // WHY `resolveBundledTool` instead of `isBundledArchiveAvailable` (#1553):
-      //   `isBundledArchiveAvailable` only checks whether the file/archive
-      //   exists on disk, NOT whether the OS will actually execute it. On a
-      //   noexec mount, Gatekeeper stall, or broken extraction, `resolveBundledTool`
-      //   returns null at spawn time while `isBundledArchiveAvailable` still
-      //   returned true — causing SetupGate to report "Bundled" (hiding the
-      //   manual override and install options) and bootstrap to pick a broken
-      //   provider. Probing through `resolveBundledTool` ensures "Bundled" only
-      //   appears when the bundled binary is genuinely runnable; otherwise we
-      //   fall back cleanly to `systemPath` or show the install/manual options.
+      // WHY `opencode` uses `resolveBundledTool` while `mitmdump` stays on
+      // `isBundledArchiveAvailable` (#1553):
+      //   - `opencode` is a single unpacked Mach-O binary: probing it through
+      //     `resolveBundledTool` is fast (and success-cached), and proves the
+      //     OS will actually execute it. On a noexec mount or Gatekeeper block,
+      //     `isBundledArchiveAvailable` falsely reported "Bundled", hiding
+      //     manual override / install options and causing first-run bootstrap
+      //     to pick a broken provider.
+      //   - `mitmdump` is an ~87 MB `.tar.gz` archive extracted lazily on first
+      //     proxy use; calling `resolveBundledTool('mitmdump')` here would
+      //     block every fresh startup on extracting 87 MB before SetupGate
+      //     even renders.
       //
       // WHY `!hasValidManual` gates bundled precedence:
       //   Matches `toolchain.ts`: a valid manual override beats the bundled
@@ -168,7 +181,9 @@ async function runCheckPrerequisites(): Promise<SetupCheckResult> {
       const bundled =
         !hasValidManual &&
         BUNDLED_TOOL_IDS.has(tool) &&
-        Boolean(await resolveBundledTool(tool as BundledToolId))
+        (tool === 'opencode'
+          ? Boolean(await resolveBundledTool('opencode'))
+          : await isBundledArchiveAvailable(tool as BundledToolId))
       const found = bundled || Boolean(systemPath)
       const status: SetupToolStatus = {
         ...TOOL_META[tool],
@@ -197,17 +212,24 @@ async function runCheckPrerequisites(): Promise<SetupCheckResult> {
   // persisted (#1403 recheck a), so "found at X" is also what a launch uses.
   // The cost: the next launch starts from the last persisted paths until a
   // check's write-back lands.
-  const probed = Object.fromEntries(
-    entries.map(([tool, status]) => [tool, status.path]),
-  ) as Partial<Record<SetupToolId, string | null>>
-  let unsaved: typeof probed | undefined
-  try {
-    await updateToolPaths(probed)
-  } catch (error) {
-    console.warn('[setup] could not persist probed tool paths:', (error as NodeJS.ErrnoException).code ?? 'error')
-    unsaved = probed
+  // Guard write-back + toolchain refresh by generation: if a newer `force: true`
+  // check started after a setup mutation (e.g. `setup:set-tool-path`), this
+  // older check must not overwrite `toolPaths` or `toolchain` with stale data.
+  if (generation === checkGeneration) {
+    const probed = Object.fromEntries(
+      entries.map(([tool, status]) => [tool, status.path]),
+    ) as Partial<Record<SetupToolId, string | null>>
+    let unsaved: typeof probed | undefined
+    try {
+      await updateToolPaths(probed)
+    } catch (error) {
+      console.warn('[setup] could not persist probed tool paths:', (error as NodeJS.ErrnoException).code ?? 'error')
+      unsaved = probed
+    }
+    if (generation === checkGeneration) {
+      await refreshToolchainFromState(unsaved)
+    }
   }
-  await refreshToolchainFromState(unsaved)
 
   // No `ready`/`blocking` any more (#995): nothing blocks launch. The policy
   // that replaced them is in readiness.ts, and it runs here so every

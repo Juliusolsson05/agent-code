@@ -317,7 +317,7 @@ export function SetupGate() {
             dead. Guards carried over (k3): both buttons wait while busy. */}
         <DialogActions
           confirmLabel={mustAnswer ? 'Continue with a Terminal' : automatic ? 'Continue' : 'Close'}
-          confirmKey={mustAnswer ? null : 'Enter'}
+          confirmKey={mustAnswer || editingTools.size > 0 ? null : 'Enter'}
           confirmOnEnter={editingTools.size === 0}
           confirmDisabled={busy !== null}
           onConfirm={() => void continueOn()}
@@ -486,7 +486,7 @@ function SetupRow({
                 if (e.key === 'Enter') {
                   e.preventDefault()
                   e.stopPropagation()
-                  if (overridePath.trim()) void submitOverride()
+                  if (busy === null && overridePath.trim()) void submitOverride()
                 }
               }}
               placeholder={`/absolute/path/to/${tool.id} or ~/…`}

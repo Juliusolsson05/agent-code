@@ -82,9 +82,11 @@ it('launches the persisted probe when the write-back lands', async () => {
   expect(getToolPath('codex', '')).toBe('/fresh/codex')
 })
 
-// #1553: bundled tools must only report `source: 'bundled'` when
-// `resolveBundledTool` succeeds, not merely when an archive exists on disk.
-it('falls back to system/missing when resolveBundledTool returns null even if archive exists', async () => {
+// #1553: bundled opencode (bare binary) must only report `source: 'bundled'`
+// when `resolveBundledTool` succeeds, not merely when an archive exists on
+// disk. mitmdump (87 MB tarball) stays lazy on `isBundledArchiveAvailable` so
+// startup does not block on extraction.
+it('falls back to system for opencode when resolveBundledTool returns null, while keeping mitmdump lazy', async () => {
   runtimeTools.isBundledArchiveAvailable.mockResolvedValue(true)
   runtimeTools.resolveBundledTool.mockResolvedValue(null)
   resolver.resolveToolPath.mockImplementation(async (tool: string) =>
@@ -98,9 +100,8 @@ it('falls back to system/missing when resolveBundledTool returns null even if ar
     source: 'system',
   })
   expect(check.tools.mitmdump).toMatchObject({
-    found: false,
-    path: null,
-    source: undefined,
+    found: true,
+    source: 'bundled',
   })
 })
 
@@ -146,4 +147,42 @@ it('deduplicates concurrent in-flight checkPrerequisites() calls', async () => {
   await checkPrerequisites()
   const brewCallsAfter = resolver.resolveToolPath.mock.calls.filter(([tool]) => tool === 'brew')
   expect(brewCallsAfter).toHaveLength(2)
+})
+
+it('force: true bypasses in-flight deduplication and prevents the older check from clobbering newer state', async () => {
+  let releaseFirstBrew!: () => void
+  const firstBrewGate = new Promise<void>(resolve => { releaseFirstBrew = resolve })
+  let brewInvocation = 0
+  resolver.resolveToolPath.mockImplementation(async (tool: string) => {
+    if (tool === 'brew') {
+      brewInvocation += 1
+      if (brewInvocation === 1) await firstBrewGate
+      return '/opt/homebrew/bin/brew'
+    }
+    if (tool === 'codex') {
+      return brewInvocation === 1 ? '/stale/codex' : '/newer/codex'
+    }
+    return null
+  })
+  resolver.isExecutable.mockImplementation(async (path: string) =>
+    path === '/stale/codex' || path === '/newer/codex',
+  )
+
+  const { checkPrerequisites } = await import('./prerequisites.js')
+  const { getToolPath } = await import('./toolchain.js')
+
+  const staleCheck = checkPrerequisites()
+  // A post-mutation check forces a fresh run while `staleCheck` is still parked.
+  const freshCheck = checkPrerequisites({ force: true })
+  expect(freshCheck).not.toBe(staleCheck)
+
+  const fresh = await freshCheck
+  expect(fresh.tools.codex).toMatchObject({ found: true, path: '/newer/codex' })
+  expect(getToolPath('codex', '')).toBe('/newer/codex')
+
+  // Now let the older check finish; it must NOT overwrite disk or toolchain.
+  releaseFirstBrew()
+  await staleCheck
+  expect(JSON.parse(await readFile(join(dir, 'setup.json'), 'utf8')).toolPaths.codex).toBe('/newer/codex')
+  expect(getToolPath('codex', '')).toBe('/newer/codex')
 })
