@@ -21,17 +21,18 @@ describe('dictation audio input persistence', () => {
 })
 
 describe('coerceSettings agentViewMode', () => {
-  it('defaults missing agentViewMode to Agent mode', () => {
-    expect(coerceSettings({}).agentViewMode).toBe('agent')
+  it('defaults missing agentViewMode to Terminal mode (#1548)', () => {
+    expect(coerceSettings({}).agentViewMode).toBe('terminal')
   })
 
   it('keeps valid agentViewMode values', () => {
+    expect(coerceSettings({ agentViewMode: 'agent' }).agentViewMode).toBe('agent')
     expect(coerceSettings({ agentViewMode: 'terminal' }).agentViewMode).toBe('terminal')
     expect(coerceSettings({ agentViewMode: 'hybrid' }).agentViewMode).toBe('hybrid')
   })
 
-  it('falls back to Agent mode for invalid agentViewMode values', () => {
-    expect(coerceSettings({ agentViewMode: 'feed-but-sometimes' }).agentViewMode).toBe('agent')
+  it('falls back to Terminal mode for invalid agentViewMode values', () => {
+    expect(coerceSettings({ agentViewMode: 'feed-but-sometimes' }).agentViewMode).toBe('terminal')
   })
 
   // Corner style is coerced for a sharper reason than the other enums here:

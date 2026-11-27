@@ -137,7 +137,7 @@ function renderedAgentSurfaceIsVisible(
     getEffectiveAgentSurface({
       kind,
       providerRuntime: meta?.providerRuntime,
-      mode: agentViewMode === 'terminal' || agentViewMode === 'hybrid' ? agentViewMode : 'agent',
+      mode: agentViewMode === 'agent' || agentViewMode === 'hybrid' ? agentViewMode : 'terminal',
       runtime: workspace.getRuntime(sessionId),
     }) === 'rendered'
   )

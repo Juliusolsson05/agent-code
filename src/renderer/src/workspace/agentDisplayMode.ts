@@ -80,7 +80,7 @@ export function getEffectiveAgentSurface(args: {
   const requestedMode: AgentViewMode =
     args.mode === 'terminal' || args.mode === 'hybrid' || args.mode === 'agent'
       ? args.mode
-      : 'agent'
+      : 'terminal'
   if (!isAgentKind(kind)) return 'rendered'
   // A terminal-flavoured provider session is a different process contract,
   // not merely a view preference. Its runtime does hold committed entries
@@ -178,7 +178,7 @@ export function commandAllowedByRenderedViewPolicy(args: {
   const requestedMode: AgentViewMode =
     args.mode === 'terminal' || args.mode === 'hybrid' || args.mode === 'agent'
       ? args.mode
-      : 'agent'
+      : 'terminal'
   const mode = normalizeAgentViewModeForKind(args.kind, requestedMode)
 
   // Commands that open/promote the rendered surface are exactly what Hybrid
