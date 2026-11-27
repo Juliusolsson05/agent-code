@@ -117,19 +117,33 @@ export class BundledToolExecProbeError extends Error {
   }
 }
 
+// Bounded timeout for the real-exec version probe (#1553). On macOS, a
+// quarantined or freshly-unpacked binary can stall inside Gatekeeper/XProtect
+// assessment; without a timeout, startup and SetupGate hang indefinitely.
+export const EXEC_PROBE_TIMEOUT_MS = 8_000
+
 // Cache keyed by binary path, NOT by tool: mitmdump probes a freshly
 // extracted per-version path, and a re-extraction after corruption gets a
-// new tmp path and therefore a fresh probe. Failures are cached too — a
-// noexec mount does not heal within a process lifetime, and re-spawning a
-// known-broken binary on every resolve would just spam the journal. The
-// cached promise is always awaited immediately by its first caller, so a
-// cached rejection never floats unhandled.
+// new tmp path and therefore a fresh probe.
+//
+// WHY only SUCCESSFUL probes are kept in the cache (#1553): we used to keep
+// rejected promises forever, assuming failures only meant an immutable noexec
+// mount. In practice, macOS Gatekeeper quarantine, XProtect stalls, or a
+// transient chmod/extract hiccup can be cleared by the user while the app is
+// running — caching the failure permanently made SetupGate's Retry button
+// useless until app restart. Keeping the in-flight promise still deduplicates
+// concurrent probes, and evicting on rejection ensures Retry re-probes.
 const execProbeCache = new Map<string, Promise<void>>()
 
-function probeExecutable(
+export function clearExecProbeCacheForTests(): void {
+  execProbeCache.clear()
+}
+
+export function probeExecutable(
   tool: BundledToolId,
   binary: string,
   versionArgs: string[],
+  timeoutMs: number = EXEC_PROBE_TIMEOUT_MS,
 ): Promise<void> {
   const cached = execProbeCache.get(binary)
   if (cached) return cached
@@ -137,47 +151,83 @@ function probeExecutable(
     const child = spawn(binary, versionArgs, {
       stdio: ['ignore', 'ignore', 'pipe'],
     })
+    let settled = false
     let stderr = ''
+    const finish = (outcome: { ok: true } | { ok: false; err: Error }) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (outcome.ok) resolve()
+      else reject(outcome.err)
+    }
+    const timer = setTimeout(() => {
+      try {
+        child.kill('SIGKILL')
+      } catch {
+        // Child may have already exited between timeout scheduling and kill.
+      }
+      finish({
+        ok: false,
+        err: new BundledToolExecProbeError(
+          tool,
+          binary,
+          `bundled ${tool} at ${binary} timed out after ${timeoutMs}ms on its version probe (Gatekeeper/XProtect stall or hung binary)`,
+        ),
+      })
+    }, timeoutMs)
     child.stderr.on('data', chunk => {
       stderr += String(chunk)
     })
     child.once('error', err => {
       const code = (err as NodeJS.ErrnoException).code
       if (code === 'EACCES') {
-        reject(
-          new BundledToolExecProbeError(
+        finish({
+          ok: false,
+          err: new BundledToolExecProbeError(
             tool,
             binary,
             `bundled ${tool} at ${binary} has its executable bit set but the OS refused to execute it (EACCES) — the containing filesystem may be mounted noexec`,
             { cause: err },
           ),
-        )
+        })
         return
       }
-      reject(
-        new BundledToolExecProbeError(
+      finish({
+        ok: false,
+        err: new BundledToolExecProbeError(
           tool,
           binary,
           `bundled ${tool} at ${binary} failed to spawn: ${code ?? err.message}`,
           { cause: err },
         ),
-      )
+      })
     })
     child.once('exit', code => {
-      if (code === 0) resolve()
-      else {
-        reject(
-          new BundledToolExecProbeError(
+      if (code === 0) {
+        finish({ ok: true })
+      } else {
+        finish({
+          ok: false,
+          err: new BundledToolExecProbeError(
             tool,
             binary,
             `bundled ${tool} at ${binary} exited ${code} on its version probe: ${stderr.trim()}`,
           ),
-        )
+        })
       }
     })
   })
-  execProbeCache.set(binary, probe)
-  return probe
+  const tracked = probe.then(
+    () => undefined,
+    err => {
+      if (execProbeCache.get(binary) === tracked) {
+        execProbeCache.delete(binary)
+      }
+      throw err
+    },
+  )
+  execProbeCache.set(binary, tracked)
+  return tracked
 }
 
 export function getPlatformKey(): string | null {

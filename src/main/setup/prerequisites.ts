@@ -4,7 +4,7 @@ import type {
   SetupToolStatus,
 } from '@shared/types/setup.js'
 import { isExecutable, resolveToolPath } from '@main/setup/binaryResolver.js'
-import { isBundledArchiveAvailable } from '@main/setup/runtimeTools.js'
+import { resolveBundledTool } from '@main/setup/runtimeTools.js'
 import type { BundledToolId } from '@main/setup/runtimeTools.js'
 import { loadSetupState, updateToolPaths } from '@main/setup/setupState.js'
 import { listProviderSetupDescriptors } from '@providers/registry.setup.js'
@@ -93,7 +93,23 @@ const TOOL_META: Record<SetupToolId, Omit<SetupToolStatus, 'found' | 'path'>> = 
 // providers (Hermes) have no binary to find; see SetupToolId.
 const CHECK_ORDER: SetupToolId[] = ['brew', ...LOCAL_PROVIDER_KINDS, 'git', 'mitmdump']
 
-export async function checkPrerequisites(): Promise<SetupCheckResult> {
+// Deduplicate concurrent in-flight prerequisite checks (#1553). On startup,
+// SetupGate (`setup:check`) and providerEnablement (`provider-enablement:get`)
+// both call `checkPrerequisites()` at the same time; without sharing the
+// in-flight promise, startup spawns 2x CHECK_ORDER.length (~16) parallel login
+// shells simultaneously. Cleared in `finally` so every subsequent explicit
+// Retry runs a fresh probe.
+let inFlightCheck: Promise<SetupCheckResult> | null = null
+
+export function checkPrerequisites(): Promise<SetupCheckResult> {
+  if (inFlightCheck) return inFlightCheck
+  inFlightCheck = runCheckPrerequisites().finally(() => {
+    inFlightCheck = null
+  })
+  return inFlightCheck
+}
+
+async function runCheckPrerequisites(): Promise<SetupCheckResult> {
   const state = await loadSetupState()
   const brewPath = await resolveToolPath('brew')
   const entries = await Promise.all(
@@ -125,8 +141,8 @@ export async function checkPrerequisites(): Promise<SetupCheckResult> {
       //      via the null → delete write-back. Re-checks the file, not
       //      the bookkeeping, so genuinely-removed tools still clear.
       const manual = state.manualToolPaths[tool]
-      let systemPath =
-        manual && (await isExecutable(manual)) ? manual : null
+      const hasValidManual = Boolean(manual && (await isExecutable(manual)))
+      let systemPath = hasValidManual ? manual! : null
       if (!systemPath) {
         systemPath = tool === 'brew' ? brewPath : await resolveToolPath(tool)
       }
@@ -134,15 +150,25 @@ export async function checkPrerequisites(): Promise<SetupCheckResult> {
         const persisted = state.toolPaths[tool]
         if (persisted && (await isExecutable(persisted))) systemPath = persisted
       }
-      // WHY bundled detection takes precedence over PATH:
-      //   When we ship a tool, that is the version we tested with and
-      //   the version proxy diagnostics + behaviour assume. A user's
-      //   stale Homebrew install of an older mitmproxy could pass
-      //   PATH detection but break our proxy startup contract. Show
-      //   the bundled status so the user knows what's actually being
-      //   spawned at runtime.
+      // WHY `resolveBundledTool` instead of `isBundledArchiveAvailable` (#1553):
+      //   `isBundledArchiveAvailable` only checks whether the file/archive
+      //   exists on disk, NOT whether the OS will actually execute it. On a
+      //   noexec mount, Gatekeeper stall, or broken extraction, `resolveBundledTool`
+      //   returns null at spawn time while `isBundledArchiveAvailable` still
+      //   returned true — causing SetupGate to report "Bundled" (hiding the
+      //   manual override and install options) and bootstrap to pick a broken
+      //   provider. Probing through `resolveBundledTool` ensures "Bundled" only
+      //   appears when the bundled binary is genuinely runnable; otherwise we
+      //   fall back cleanly to `systemPath` or show the install/manual options.
+      //
+      // WHY `!hasValidManual` gates bundled precedence:
+      //   Matches `toolchain.ts`: a valid manual override beats the bundled
+      //   binary, so SetupGate must show the user's chosen path as `system`
+      //   rather than falsely labelling it `Bundled`.
       const bundled =
-        BUNDLED_TOOL_IDS.has(tool) && (await isBundledArchiveAvailable(tool as BundledToolId))
+        !hasValidManual &&
+        BUNDLED_TOOL_IDS.has(tool) &&
+        Boolean(await resolveBundledTool(tool as BundledToolId))
       const found = bundled || Boolean(systemPath)
       const status: SetupToolStatus = {
         ...TOOL_META[tool],

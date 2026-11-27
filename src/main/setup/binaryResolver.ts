@@ -75,39 +75,49 @@ export async function isExecutable(path: string): Promise<boolean> {
 // when the app is launched from a terminal it is the user's real PATH; from
 // Finder it is launchd's minimal one, which is exactly when the well-known
 // dirs earn their keep.
-const WELL_KNOWN_BIN_DIRS = [
-  join(homedir(), '.local', 'bin'),
-  // WHY ~/.opencode/bin (#995 Codex review, reproduced): OpenCode's own
-  // installer — the command the setup panel now tells users to run — writes
-  // the binary here and appends its PATH export to ~/.zshrc. The login-shell
-  // probe runs `$SHELL -lc`, and `zsh -lc` sources .zprofile/.zshenv but NOT
-  // .zshrc, so the probe cannot see it either. Without this entry the loop the
-  // feature exists to close dead-ended: the gate says "Not installed", the
-  // user runs the command it gave them, presses Retry, and it still says
-  // "Not installed".
-  join(homedir(), '.opencode', 'bin'),
-  // The Grok CLI's own layout, for the same reason. Its npm install lands in a
-  // prefix already scanned below, but a native install puts the binary here.
-  join(homedir(), '.grok', 'bin'),
-  // Pi's installer (https://pi.dev/install.sh) writes `pi` into ~/.local/bin
-  // (above) for an npm install, or into ~/.pi/agent/bin for its managed
-  // install — and, like OpenCode's, relies on a .zshrc PATH line the login
-  // probe never sources.
-  join(homedir(), '.pi', 'agent', 'bin'),
-  join(homedir(), '.volta', 'bin'),
-  join(homedir(), '.asdf', 'shims'),
-  join(homedir(), '.bun', 'bin'),
-  join(homedir(), '.cargo', 'bin'),
-  '/opt/homebrew/bin',
-  '/usr/local/bin',
-  '/usr/bin',
-  '/bin',
-]
+function getWellKnownBinDirs(): string[] {
+  const home = homedir()
+  return [
+    join(home, '.local', 'bin'),
+    // WHY ~/.opencode/bin (#995 Codex review, reproduced): OpenCode's own
+    // installer — the command the setup panel now tells users to run — writes
+    // the binary here and appends its PATH export to ~/.zshrc. The login-shell
+    // probe runs `$SHELL -lc`, and `zsh -lc` sources .zprofile/.zshenv but NOT
+    // .zshrc, so the probe cannot see it either. Without this entry the loop the
+    // feature exists to close dead-ended: the gate says "Not installed", the
+    // user runs the command it gave them, presses Retry, and it still says
+    // "Not installed".
+    join(home, '.opencode', 'bin'),
+    // The Grok CLI's own layout, for the same reason. Its npm install lands in a
+    // prefix already scanned below, but a native install puts the binary here.
+    join(home, '.grok', 'bin'),
+    // Pi's installer (https://pi.dev/install.sh) writes `pi` into ~/.local/bin
+    // (above) for an npm install, or into ~/.pi/agent/bin for its managed
+    // install — and, like OpenCode's, relies on a .zshrc PATH line the login
+    // probe never sources.
+    join(home, '.pi', 'agent', 'bin'),
+    // Claude Code's local install layout (`claude migrate-installer` / native
+    // local shim), plus common macOS version-manager and global-package dirs
+    // that are frequently added in `.zshrc` rather than `.zprofile` (#1553).
+    join(home, '.claude', 'local'),
+    join(home, '.local', 'share', 'mise', 'shims'),
+    join(home, 'Library', 'pnpm'),
+    join(home, '.npm-global', 'bin'),
+    join(home, '.volta', 'bin'),
+    join(home, '.asdf', 'shims'),
+    join(home, '.bun', 'bin'),
+    join(home, '.cargo', 'bin'),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    '/usr/bin',
+    '/bin',
+  ]
+}
 
 async function scanForTool(command: string): Promise<string | null> {
   const pathDirs = (process.env.PATH ?? '').split(':').filter(Boolean)
   const seen = new Set<string>()
-  for (const dir of [...pathDirs, ...WELL_KNOWN_BIN_DIRS]) {
+  for (const dir of [...pathDirs, ...getWellKnownBinDirs()]) {
     if (seen.has(dir)) continue
     seen.add(dir)
     const candidate = join(dir, command)
@@ -127,7 +137,17 @@ export async function resolveToolPath(tool: SetupToolId): Promise<string | null>
       timeoutMs: 10_000,
       maxBuffer: 64 * 1024,
     })
-    const path = result.stdout.trim().split('\n')[0]?.trim()
+    // WHY the LAST non-empty line, not `[0]` (#1553): users frequently have
+    // echoes, MOTDs, or tool-init notices in `~/.zprofile` or `~/.zshenv`.
+    // Those print to stdout BEFORE `command -v` runs, so line 0 was the banner
+    // text — which failed `isExecutable()` and broke Layer 1 detection for
+    // every tool on the machine. `command -v` always writes the resolved path
+    // as the final non-empty line.
+    const lines = result.stdout
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(Boolean)
+    const path = lines.at(-1)
     if (path && await isExecutable(path)) return path
   } catch {
     // Probe failure is NOT evidence of absence (#495 A1) — a broken rc
