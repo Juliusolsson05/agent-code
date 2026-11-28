@@ -42,6 +42,6 @@ export async function installWithHomebrew(
     ok,
     target,
     output,
-    check: await checkPrerequisites(),
+    check: await checkPrerequisites({ force: true }),
   }
 }

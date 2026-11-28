@@ -11,6 +11,7 @@ import {
   type ProviderEnablementSnapshot,
 } from '@shared/types/providerEnablement.js'
 import { checkPrerequisites } from '@main/setup/prerequisites.js'
+import type { SetupCheckResult } from '@shared/types/setup.js'
 import { peekHermesConnectionService } from '@main/hermes/registry.js'
 import { invalidateUsageSnapshotCache } from '@main/usage/usageService.js'
 import {
@@ -32,28 +33,40 @@ let cachedSnapshot: ProviderEnablementSnapshot | null = null
 // `cachedDetected` to force a fresh probe). It is what a saved change is
 // shown against when the fresh probe fails; see `mutate`.
 let lastDetected: ReadonlySet<AgentProviderKind> | null = null
+// Monotonic generation counter for `cachedDetected` / `lastDetected` (#1553):
+// an older in-flight `detectInstalledKinds()` resolving after a newer
+// `syncDetectedProvidersFromCheck()` or `resetProviderEnablement()` must never
+// overwrite the fresher detected set.
+let detectionGeneration = 0
 
 function detectInstalledKinds(): Promise<ReadonlySet<AgentProviderKind>> {
   if (cachedDetected) return Promise.resolve(cachedDetected)
   if (inFlightDetection) return inFlightDetection
-  inFlightDetection = checkPrerequisites()
+  const generation = ++detectionGeneration
+  const current = checkPrerequisites()
     .then(result => {
       // usableProviders is the exact resolution the first-run SetupGate uses
       // (manual override → PATH probe → bundled archive), so Settings →
       // Providers and the gate can never disagree about "installed".
-      cachedDetected = new Set(
+      const next = new Set(
         (result.usableProviders ?? []).filter(kind => AGENT_PROVIDER_KINDS.includes(kind)),
       )
-      lastDetected = cachedDetected
-      return cachedDetected
+      if (generation !== detectionGeneration) {
+        return cachedDetected ?? next
+      }
+      cachedDetected = next
+      lastDetected = next
+      return next
     })
     // WHY in `finally` (#1403 review): cleared only on success, a rejected
     // probe stayed in flight forever, so every later resolve returned the
-    // same rejection until restart.
+    // same rejection until restart. Guarded by identity so an older probe
+    // cannot clear a newer probe's in-flight slot.
     .finally(() => {
-      inFlightDetection = null
+      if (inFlightDetection === current) inFlightDetection = null
     })
-  return inFlightDetection
+  inFlightDetection = current
+  return current
 }
 
 // WHY refreshes are ordered (#1403 verification a): a refresh reads setup
@@ -107,6 +120,47 @@ function withRemoteProviders(local: ReadonlySet<AgentProviderKind>): ReadonlySet
 /** Re-resolve and broadcast after a remote connection was signed in or out. */
 export async function refreshRemoteProviderDetection(): Promise<void> {
   emit(await resolveAndCache())
+}
+
+function setsEqual<T>(a: ReadonlySet<T>, b: ReadonlySet<T>): boolean {
+  if (a.size !== b.size) return false
+  for (const item of a) {
+    if (!b.has(item)) return false
+  }
+  return true
+}
+
+/**
+ * Push a fresh `checkPrerequisites()` result into the cached detected set and
+ * broadcast `provider-enablement:changed` if the detected set changed.
+ *
+ * WHY this exists (#1553): `cachedDetected` is held for the process lifetime so
+ * picker opens don't re-run login-shell probes. Without this hook, installing a
+ * CLI or setting a manual path in SetupGate updated `setup.json` and the setup
+ * store, but `providerEnablement` kept serving its startup empty set until the
+ * user restarted the app — so `⌘T` (PathPickerModal) still hid the newly
+ * installed provider. Reusing the `checkPrerequisites()` result the setup IPC
+ * already computed avoids spawning a second wave of login-shell probes.
+ */
+export async function syncDetectedProvidersFromCheck(
+  result: Pick<SetupCheckResult, 'usableProviders'>,
+): Promise<ProviderEnablementSnapshot> {
+  const nextDetected: ReadonlySet<AgentProviderKind> = new Set(
+    (result.usableProviders ?? []).filter(kind => AGENT_PROVIDER_KINDS.includes(kind)),
+  )
+  const previousDetected = cachedDetected
+  // Advance the generation so any older in-flight `detectInstalledKinds()`
+  // cannot clobber this fresher detection when it settles later.
+  detectionGeneration += 1
+  inFlightDetection = null
+  cachedDetected = nextDetected
+  lastDetected = nextDetected
+  const snapshot = await resolveAndCache(async () => nextDetected)
+  if (!previousDetected || !setsEqual(previousDetected, nextDetected)) {
+    invalidateUsageSnapshotCache()
+    emit(snapshot)
+  }
+  return snapshot
 }
 
 /** Fail-open before the first resolve: hiding a user's providers because a
@@ -171,6 +225,8 @@ export async function resetProviderEnablement(
   // Reset must also redo detection: "installed" is the display hint on the
   // settings row, and a stale cached detection would keep showing the state
   // from before any install that happened while the app was closed.
+  detectionGeneration += 1
+  inFlightDetection = null
   cachedDetected = null
   return await mutate(() => setProviderEnablementOverride(kind, null))
 }

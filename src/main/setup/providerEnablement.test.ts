@@ -172,3 +172,52 @@ it('never publishes a pending toggle through an overlapping read', async () => {
   expect(snapshot.entries.find(entry => entry.kind === 'claude')!.enabled).toBe(true)
   expect(enablement.getCachedProviderEnablement()!.entries.find(entry => entry.kind === 'claude')!.enabled).toBe(true)
 })
+
+// #1553: when SetupGate discovers a newly installed CLI via setup:check or
+// setup:set-tool-path, providerEnablement must update its cached detected set
+// and broadcast `provider-enablement:changed` so PathPickerModal (⌘T) shows
+// the new provider without an app restart.
+it('updates cached detection and broadcasts when syncDetectedProvidersFromCheck sees new providers', async () => {
+  probe.checkPrerequisites.mockResolvedValue({ usableProviders: [] })
+  const enablement = await import('./providerEnablement.js')
+  const initial = await enablement.getProviderEnablementSnapshot()
+  expect(initial.entries.find(entry => entry.kind === 'claude')).toMatchObject({ enabled: false, installed: false })
+
+  const broadcasts: boolean[] = []
+  enablement.onProviderEnablementChanged(snapshot => {
+    broadcasts.push(snapshot.entries.find(entry => entry.kind === 'claude')!.enabled)
+  })
+
+  const synced = await enablement.syncDetectedProvidersFromCheck({ usableProviders: ['claude'] })
+  expect(synced.entries.find(entry => entry.kind === 'claude')).toMatchObject({ enabled: true, installed: true })
+  expect(broadcasts).toEqual([true])
+
+  // Re-syncing the identical detected set must not spam broadcasts.
+  await enablement.syncDetectedProvidersFromCheck({ usableProviders: ['claude'] })
+  expect(broadcasts).toEqual([true])
+})
+
+it('never lets an older in-flight detectInstalledKinds overwrite a newer syncDetectedProvidersFromCheck', async () => {
+  let releaseStaleProbe!: (value: { usableProviders: string[] }) => void
+  probe.checkPrerequisites.mockImplementationOnce(
+    () => new Promise(resolve => { releaseStaleProbe = resolve }),
+  )
+  const enablement = await import('./providerEnablement.js')
+
+  // Kick off initial detection (stays in flight).
+  const initialPromise = enablement.getProviderEnablementSnapshot()
+  await vi.waitFor(() => expect(releaseStaleProbe).toBeTypeOf('function'))
+
+  // Meanwhile Setup discovers Claude and syncs it.
+  await enablement.syncDetectedProvidersFromCheck({ usableProviders: ['claude'] })
+
+  // Now the older probe finishes with an empty set; it must NOT overwrite Claude.
+  releaseStaleProbe({ usableProviders: [] })
+  await initialPromise
+
+  const snapshot = await enablement.getProviderEnablementSnapshot()
+  expect(snapshot.entries.find(entry => entry.kind === 'claude')).toMatchObject({
+    enabled: true,
+    installed: true,
+  })
+})

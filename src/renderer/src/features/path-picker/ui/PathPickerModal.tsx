@@ -3,7 +3,7 @@ import { EmptyState } from '@renderer/components/ui/empty-state'
 import { useEnabledAgentProviderKinds } from '@renderer/features/providers/store'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
-import { MISSING_PROVIDER_HINT, preferredPickerProvider, useMissingProviders } from '@renderer/features/setup/store'
+import { MISSING_PROVIDER_HINT, preferredPickerProvider, useMissingProviders, useSetupStore } from '@renderer/features/setup/store'
 import { useEffect, useRef, useState } from 'react'
 
 import { Button } from '@renderer/components/ui/button'
@@ -50,6 +50,12 @@ type Props = {
   /** Called when the user opens a brand-new session for `cwd`.
    *  Now carries the selected provider so App knows which kind to spawn. */
   onAccept: (expandedPath: string, provider: AgentProvider) => void | Promise<void>
+  /** Called when no agent providers are enabled and the user opens a plain
+   *  terminal tab for `cwd` instead (#1553). */
+  onOpenTerminal?: (expandedPath: string) => void | Promise<void>
+  /** Optional override for the inline "Open Setup" action shown when 0
+   *  providers are enabled. Defaults to closing the picker and opening Setup. */
+  onOpenSetup?: () => void
   /** Called when the user picks a previous session to resume. */
   onResume: (
     expandedPath: string,
@@ -90,6 +96,8 @@ export function PathPickerModal({
   defaultValue = '',
   onCancel,
   onAccept,
+  onOpenTerminal,
+  onOpenSetup,
   onResume,
   openTabsForPath,
   onActivateTab,
@@ -102,6 +110,7 @@ export function PathPickerModal({
   // first one that is. It used to be Claude unconditionally, so on a Mac
   // without Claude, ⌘T failed only after the user had chosen a directory.
   const enabledKinds = useEnabledAgentProviderKinds()
+  const noEnabledProviders = enabledKinds.size === 0
   // A disabled preselect would open the picker on a provider the user asked
   // to hide (#1102); fall back to the first enabled kind, then the default.
   const initialProvider = (): AgentProvider => {
@@ -111,6 +120,15 @@ export function PathPickerModal({
   }
   const [provider, setProvider] = useState<AgentProvider>(initialProvider)
   const missingProviders = useMissingProviders()
+
+  // Keep the selected provider valid when `enabledKinds` updates live (e.g.
+  // after SetupGate discovers a newly installed CLI and broadcasts
+  // `provider-enablement:changed`, #1553).
+  useEffect(() => {
+    if (enabledKinds.size > 0 && !enabledKinds.has(provider)) {
+      setProvider(initialProvider())
+    }
+  }, [enabledKinds, provider])
 
   // Resume list state. We eagerly refresh the list whenever the path
   // changes and resolves to a valid directory — gives the user live
@@ -203,6 +221,13 @@ export function PathPickerModal({
       // that was just tab-completed into an existing directory.
       setPendingCreatePath(null)
       setResolvedPath(result.path)
+      if (noEnabledProviders) {
+        setSessions([])
+        setListingTarget(null)
+        setListingError(null)
+        setSessionsLoading(false)
+        return
+      }
       try {
         // Scope 'cwd', not 'repository': this picker is about one typed
         // directory, and a worktree's sessions listed under the main checkout
@@ -226,7 +251,7 @@ export function PathPickerModal({
       }
     }, 150)
     return () => clearTimeout(t)
-  }, [value, open, provider])
+  }, [value, open, provider, noEnabledProviders])
 
   // Decided at submit time from the freshly expanded path, never from the
   // debounced `resolvedPath` the hint below renders: the user can press Enter
@@ -259,11 +284,22 @@ export function PathPickerModal({
           onActivateTab!(holder.tabId)
           return
         }
+        if (noEnabledProviders) {
+          // Never silently submit DEFAULT_PROVIDER ('claude') when the user
+          // has zero enabled providers (#1553): open a Terminal tab if the
+          // host supports it, otherwise do nothing and leave the Open Setup
+          // prompt visible.
+          if (onOpenTerminal) await onOpenTerminal(result.path)
+          return
+        }
         await onAccept(result.path, provider)
         return
       }
       if (result.error !== 'does not exist') {
         setError(result.error)
+        return
+      }
+      if (noEnabledProviders && !onOpenTerminal) {
         return
       }
       const created = await window.api.createDirectory(value)
@@ -279,6 +315,10 @@ export function PathPickerModal({
       const reValidated = await window.api.expandCwd(value)
       if (!reValidated.ok) {
         setError(reValidated.error)
+        return
+      }
+      if (noEnabledProviders) {
+        await onOpenTerminal!(reValidated.path)
         return
       }
       await onAccept(reValidated.path, provider)
@@ -339,35 +379,62 @@ export function PathPickerModal({
         </DialogHeader>
 
         <div className="flex min-h-0 flex-1 flex-col px-4 py-3">
-        {/* Provider toggle: one choice among providers, announced by
-            aria-pressed (it was colour only) with a keyboard focus ring. */}
-        <div className="flex gap-2 mb-3 flex-shrink-0" role="group" aria-label="Provider">
-          {AGENT_PROVIDER_KINDS.filter(p => enabledKinds.has(p)).map(p => (
-            <button
-              key={p}
+        {/* Provider toggle, or inline notice when 0 providers are enabled (#1553). */}
+        {noEnabledProviders ? (
+          <div
+            role="status"
+            className="mb-3 flex flex-shrink-0 items-center justify-between gap-3 rounded-control border border-border bg-canvas/50 px-3 py-2 text-[11px] text-muted"
+          >
+            <span>
+              No agent providers are enabled. Open Setup to install one
+              {onOpenTerminal ? ', or open a Terminal tab below.' : '.'}
+            </span>
+            <Button
               type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy}
               onClick={() => {
-                if (p !== provider) invalidateResumeListing()
-                setProvider(p)
+                if (onOpenSetup) {
+                  onOpenSetup()
+                } else {
+                  onCancel()
+                  useSetupStore.getState().open()
+                }
               }}
-              // Still selectable when missing: the probe can be wrong, and
-              // the spawn re-resolves the CLI itself (see useMissingProviders).
-              title={missingProviders.has(p) ? MISSING_PROVIDER_HINT : undefined}
-              data-provider-missing={missingProviders.has(p) || undefined}
-              aria-pressed={provider === p}
-              className={`rounded-control
-                px-3 py-1 text-[11px] font-medium uppercase tracking-wider
-                border transition-colors duration-120 outline-none focus-visible:ring-1 focus-visible:ring-focus-ring
-                ${provider === p
-                  ? 'bg-accent text-accent-fg border-accent'
-                  : 'bg-transparent text-muted border-border hover:border-border-hi hover:text-ink'}
-                ${missingProviders.has(p) ? 'line-through decoration-muted' : ''}
-              `}
             >
-              {getRendererProviderCapabilities(p).shortLabel}
-            </button>
-          ))}
-        </div>
+              Open Setup
+            </Button>
+          </div>
+        ) : (
+          <div className="flex gap-2 mb-3 flex-shrink-0" role="group" aria-label="Provider">
+            {AGENT_PROVIDER_KINDS.filter(p => enabledKinds.has(p)).map(p => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => {
+                  if (p !== provider) invalidateResumeListing()
+                  setProvider(p)
+                }}
+                // Still selectable when missing: the probe can be wrong, and
+                // the spawn re-resolves the CLI itself (see useMissingProviders).
+                title={missingProviders.has(p) ? MISSING_PROVIDER_HINT : undefined}
+                data-provider-missing={missingProviders.has(p) || undefined}
+                aria-pressed={provider === p}
+                className={`rounded-control
+                  px-3 py-1 text-[11px] font-medium uppercase tracking-wider
+                  border transition-colors duration-120 outline-none focus-visible:ring-1 focus-visible:ring-focus-ring
+                  ${provider === p
+                    ? 'bg-accent text-accent-fg border-accent'
+                    : 'bg-transparent text-muted border-border hover:border-border-hi hover:text-ink'}
+                  ${missingProviders.has(p) ? 'line-through decoration-muted' : ''}
+                `}
+              >
+                {getRendererProviderCapabilities(p).shortLabel}
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="relative mb-2 flex-shrink-0">
           <div className="absolute left-2 top-1/2 -translate-y-1/2 text-accent text-[12px] pointer-events-none select-none z-10">
@@ -435,13 +502,15 @@ export function PathPickerModal({
 
         {/* Resume section — shows the most recent sessions recorded in
             the currently-typed cwd. Click a row to spawn with --resume. */}
-        <ResumeSection
-          resolvedPath={resolvedPath}
-          sessions={sessions}
-          loading={sessionsLoading}
-          onResume={resume}
-          disabled={busy}
-        />
+        {!noEnabledProviders && (
+          <ResumeSection
+            resolvedPath={resolvedPath}
+            sessions={sessions}
+            loading={sessionsLoading}
+            onResume={resume}
+            disabled={busy}
+          />
+        )}
 
         {listingError && (
           <div role="alert" className="mt-2 text-[11px] text-danger flex-shrink-0">
@@ -476,10 +545,12 @@ export function PathPickerModal({
           confirmLabel={
             preferred
               ? (preferred.current ? 'Stay Here' : 'Go to Tab')
-              : pendingCreatePath ? 'Create & Open' : 'New Session'
+              : noEnabledProviders
+                ? (pendingCreatePath ? 'Create & Open Terminal' : 'Open Terminal')
+                : (pendingCreatePath ? 'Create & Open' : 'New Session')
           }
           confirmOnEnter={false}
-          confirmDisabled={busy || (!preferred && value.trim() === '')}
+          confirmDisabled={busy || (!preferred && (value.trim() === '' || (noEnabledProviders && !onOpenTerminal)))}
           onConfirm={() => {
             if (preferred) onActivateTab?.(preferred.tabId)
             else void submit({ forceNewTab: true })
@@ -487,7 +558,7 @@ export function PathPickerModal({
           onCancel={onCancel}
           cancelDisabled={busy}
           escapeCancels={!busy}
-          extraActions={preferred ? (
+          extraActions={preferred && (!noEnabledProviders || onOpenTerminal) ? (
             <Button type="button" variant="outline" size="sm" onClick={() => void submit({ forceNewTab: true })} disabled={busy}>
               New Tab Anyway
               <Kbd binding="Shift+Enter" />

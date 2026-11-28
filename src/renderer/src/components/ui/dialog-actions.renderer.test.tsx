@@ -132,6 +132,10 @@ describe('focusedControlOwnsEnter', () => {
     // The dialog surface and ordinary containers do not: Enter there is the
     // dialog's to handle.
     expect(focusedControlOwnsEnter(document.createElement('div'))).toBe(false)
+    expect(focusedControlOwnsEnter(document.createElement('input'))).toBe(false)
+    const ownedInput = document.createElement('input')
+    ownedInput.setAttribute('data-owns-enter', '')
+    expect(focusedControlOwnsEnter(ownedInput)).toBe(true)
     expect(focusedControlOwnsEnter(null)).toBe(false)
   })
 })

@@ -1,5 +1,5 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -28,9 +28,16 @@ vi.mock('@main/setup/binaryResolver.js', () => ({
   isExecutable: async () => false,
   classifyExecutable: async () => 'ok',
 }))
-vi.mock('@main/setup/runtimeTools.js', () => ({ isBundledArchiveAvailable: async () => false }))
+vi.mock('@main/setup/runtimeTools.js', () => ({
+  isBundledArchiveAvailable: async () => false,
+  resolveBundledTool: async () => null,
+}))
 vi.mock('@main/setup/toolchain.js', () => ({ refreshToolchainFromState: async () => {} }))
 vi.mock('@main/setup/homebrewInstaller.js', () => ({ installWithHomebrew: vi.fn() }))
+const syncDetected = vi.hoisted(() => ({ fn: vi.fn(async () => ({})) }))
+vi.mock('@main/setup/providerEnablement.js', () => ({
+  syncDetectedProvidersFromCheck: syncDetected.fn,
+}))
 // Each rename in order: `true` fails it. The answer's write is the first, the
 // check's write-back the second.
 const renamePlan = vi.hoisted(() => ({ fail: [] as boolean[] }))
@@ -51,6 +58,7 @@ beforeEach(async () => {
   paths.STATE_DIR = dir
   handlers.clear()
   renamePlan.fail = []
+  syncDetected.fn.mockClear()
   vi.resetModules()
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   const { registerSetupIpc } = await import('./setup.js')
@@ -89,4 +97,25 @@ it('answers a saved manual path even when the check cannot write back', async ()
 it('rejects a skip whose own write fails', async () => {
   renamePlan.fail = [true]
   await expect(invoke('setup:skip-optional', 'mitmdump')).rejects.toThrow('ENOSPC')
+})
+
+// #1553: tilde expansion in setup:set-tool-path + syncing providerEnablement.
+it('expands leading ~/ to homedir() in setup:set-tool-path and syncs provider enablement', async () => {
+  const result = await invoke('setup:set-tool-path', 'claude', '~/.local/bin/claude') as { ok: boolean }
+  expect(result.ok).toBe(true)
+  expect(await onDisk()).toMatchObject({
+    manualToolPaths: { claude: join(homedir(), '.local/bin/claude') },
+  })
+  expect(syncDetected.fn).toHaveBeenCalledOnce()
+})
+
+it('rejects relative paths in setup:set-tool-path', async () => {
+  const result = await invoke('setup:set-tool-path', 'claude', 'local/bin/claude') as { ok: boolean; reason?: string }
+  expect(result.ok).toBe(false)
+  expect(result.reason).toContain('starting with / or ~/')
+})
+
+it('syncs provider enablement after setup:check', async () => {
+  await invoke('setup:check')
+  expect(syncDetected.fn).toHaveBeenCalledOnce()
 })
