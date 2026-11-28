@@ -1,6 +1,6 @@
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import type { AgentViewModeOverride, SessionKind } from '@renderer/workspace/types'
-import { effectiveProviderRuntime, isAgentProviderKind, isChatSurfaceProviderKind, isStructuredOnlyProviderKind } from '@shared/types/providerKind'
+import { effectiveProviderRuntime, isAgentProviderKind, isAgentSessionKind, isChatSurfaceProviderKind, isStructuredOnlyProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind, AgentProviderRuntime } from '@shared/types/providerKind'
 import type {
   RenderedViewLeaseFeature,
@@ -21,6 +21,31 @@ export function resolveConfiguredAgentViewMode(
   override: AgentViewModeOverride | undefined,
 ): AgentViewMode {
   return override ?? globalMode
+}
+
+/**
+ * Decide whether a spawned/recovered session should request local proxy
+ * streaming (#1552).
+ *
+ * WHY hard terminal mode forces `useProxy: false`:
+ *   In hard `'terminal'` mode the pane renders the raw provider PTY directly
+ *   and never mounts Agent Code's semantic feed. Skipping the local proxy
+ *   avoids spinning up unnecessary mitmproxy / ResponsesProxy processes and
+ *   eliminates proxy overhead and network-compatibility risk for terminal-mode
+ *   panes.
+ */
+export function shouldUseProxyForSession(args: {
+  kind: SessionKind
+  useProxyStreaming: boolean
+  globalMode: AgentViewMode
+  override?: AgentViewModeOverride
+}): boolean | undefined {
+  if (!isAgentSessionKind(args.kind)) return undefined
+  if (!args.useProxyStreaming) return false
+  if (resolveConfiguredAgentViewMode(args.globalMode, args.override) === 'terminal') {
+    return false
+  }
+  return true
 }
 
 // Delegates to the shared guard so a registered third provider is an

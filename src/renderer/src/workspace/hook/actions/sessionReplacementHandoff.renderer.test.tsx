@@ -2,6 +2,7 @@ import { act, renderHook } from '@testing-library/react'
 import type { MutableRefObject } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { useAppStore } from '@renderer/app-state/store'
 import { UndoCloseStack } from '@renderer/lib/undoClose'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
@@ -16,9 +17,11 @@ vi.mock('@renderer/workspace/hook/actions/initialHistory', () => ({
 }))
 
 const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
+const originalStore = useAppStore.getState()
 
 afterEach(() => {
   vi.useRealTimers()
+  useAppStore.setState(originalStore, true)
   if (originalApiDescriptor) {
     Object.defineProperty(window, 'api', originalApiDescriptor)
   } else {
@@ -33,6 +36,9 @@ function ref<T>(current: T): MutableRefObject<T> {
 describe('renderer session replacement handoff', () => {
   it.each(['claude', 'codex', 'terminal'] as const)('preserves current text and destination-supported images when replacing with %s', async (destination) => {
     vi.useFakeTimers()
+    // Seed 'agent' mode explicitly because default 'terminal' mode skips local
+    // proxy streaming (#1552), whereas this test verifies useProxy forwarding.
+    useAppStore.setState({ settings: { ...originalStore.settings, agentViewMode: 'agent' } })
     const image = { id: 'draft-image', mediaType: 'image/png', base64Data: 'eA==', previewUrl: 'blob:draft', filename: 'draft.png' }
     const predecessorId = 'local-predecessor'
     let state = {
