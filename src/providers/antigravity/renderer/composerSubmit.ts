@@ -12,7 +12,9 @@ import type { ComposerSubmitIo } from '@providers/registry.renderer.capabilities
 import type { PromptAcceptance, PromptDeliveryResult } from '@shared/types/providerConfig'
 
 export async function antigravityComposerSubmit(io: ComposerSubmitIo): Promise<PromptAcceptance> {
-  const result = await io.deliverPrompt(io.input)
+  const result = io.draftImages.length
+    ? await io.deliverPrompt(io.input, undefined, { inlineImages: io.draftImages.map(({ mediaType, base64Data }) => ({ mediaType, base64Data })) })
+    : await io.deliverPrompt(io.input)
   if (!result.ok) {
     const error = new Error(result.message) as Error & { promptDeliveryResult: PromptDeliveryResult }
     error.promptDeliveryResult = result

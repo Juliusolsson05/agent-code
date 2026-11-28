@@ -79,6 +79,16 @@ describe('GoalLoopService drain (#1341)', () => {
     }
   }
 
+  it('pauses a running loop when the provider interrupts its turn without a successful Stop', async () => {
+    const { svc, manager, deliver } = await service()
+    await svc.startLoop('s1', { goal: 'Finish the task', loopPrompt: 'Continue' })
+    svc.observeProviderHook('s1', 'user-prompt-submit')
+    manager.emit('process-state', { sessionId: 's1', active: false, turnInterrupted: true })
+    await svc.whenSettled()
+    expect(svc.snapshot().s1).toMatchObject({ phase: 'paused', pauseReason: 'interrupted' })
+    expect(deliver).not.toHaveBeenCalled()
+  })
+
   it('dispose waits for an in-flight persist, then starts nothing new', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'agent-code-goal-loop-'))
     directories.push(directory)

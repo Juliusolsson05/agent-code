@@ -23,14 +23,14 @@ const beeper: UserMcpServerView = {
   id: 'srv-beeper',
   name: 'beeper',
   enabled: true,
-  providers: { claude: false, codex: true },
+  providers: { claude: false, codex: true, antigravity: false },
   entry: { type: 'http', url: 'http://localhost:23373/v0/mcp' },
   inputs: [],
   transport: 'http',
   summary: 'localhost:23373/v0/mcp',
   secrets: {},
   problems: [],
-  support: { claude: { ok: true }, codex: { ok: true } },
+  support: { antigravity: { ok: true }, claude: { ok: true }, codex: { ok: true } },
 }
 
 function snapshot(servers: UserMcpServerView[]): UserMcpSnapshot {

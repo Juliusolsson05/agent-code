@@ -57,7 +57,7 @@ export type AntigravityRow = {
 
 export type AntigravitySemanticEvent = Record<string, unknown> & { type: string; source: 'antigravity-acp'; ts: number }
 
-type OpenSegment = { kind: 'user' | 'assistant' | 'thought'; ordinal: number; text: string; blockId: string; blockIndex: number; openedAt: number }
+type OpenSegment = { includesImage?: boolean; kind: 'user' | 'assistant' | 'thought'; ordinal: number; text: string; blockId: string; blockIndex: number; openedAt: number }
 type OpenTool = AntigravityToolSnapshot & { ordinal: number; blockIndex: number; committed: boolean; openedAt: number }
 
 const TERMINAL_TOOL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'canceled', 'error'])
@@ -235,7 +235,7 @@ export class TurnAssembler {
   apply(update: Record<string, unknown>): void {
     switch (update.sessionUpdate) {
       case 'user_message_chunk':
-        return this.appendText('user', contentText(update.content))
+        return this.appendText('user', contentText(update.content), isRecord(update.content) && update.content.type === 'image')
       case 'agent_message_chunk':
         return this.appendText('assistant', contentText(update.content))
       case 'agent_thought_chunk':
@@ -251,8 +251,8 @@ export class TurnAssembler {
     }
   }
 
-  private appendText(kind: OpenSegment['kind'], text: string): void {
-    if (text.length === 0) return
+  private appendText(kind: OpenSegment['kind'], text: string, isImage = false): void {
+    if (text.length === 0 && !isImage) return
     if (this.segment?.kind !== kind) {
       this.closeSegment()
       const blockIndex = this.blockCounter++
@@ -264,6 +264,7 @@ export class TurnAssembler {
       }
     }
     const segment = this.segment!
+    if (isImage) segment.includesImage = true
     segment.text += text
     if (!this.live || !this.turnId || kind === 'user') return
     if (kind === 'assistant') {
@@ -281,6 +282,9 @@ export class TurnAssembler {
     if (this.live && this.turnId && segment.kind !== 'user') {
       this.emit({ type: 'block_completed', turnId: this.turnId, blockId: segment.blockId, blockIndex: segment.blockIndex, kind: segment.kind === 'thought' ? 'reasoning' : 'text' })
     }
+    // Images may be the entire user prompt. Preserve its turn and ordinal on reload
+    // without copying base64 into the UI journal or altering mixed prompts' typed text.
+    if (segment.includesImage && !segment.text.trim()) segment.text = '[Image attached]'
     if (segment.text.trim().length === 0) return
     this.sink.row({
       type: 'antigravity-row',

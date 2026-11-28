@@ -17,7 +17,7 @@ export const controlReference = [
     ],
     outcome: 'New agents, and existing agents on their next reload, launch with the chosen servers. Agent Code never writes the CLIs\' own config files.',
     cautions:
-      'User servers reach Claude and Codex only; OpenCode and Grok get built-in servers only. Codex cannot use SSE servers, and a user server whose name is already in the user\'s Codex config.toml is skipped for Codex. A server that cannot attach (missing secret, invalid config, enterprise Claude MCP policy) is left out of that launch with a notice; the agent still starts. Secrets are passed to the MCP server through the agent process environment, so the agent\'s own tools can read them. Changes need an agent reload. OAuth servers sign in through each CLI (codex mcp login, Claude /mcp).',
+      'User servers can attach to Claude, Codex and Antigravity. Antigravity accepts stdio and Streamable HTTP in both views. Codex cannot use SSE servers, and a user server whose name is already in the user\'s Codex config.toml is skipped for Codex. A server that cannot attach (missing secret, invalid config, enterprise Claude MCP policy) is left out of that launch with a notice; the agent still starts. Each provider receives its own launch configuration. Changes need an agent reload. OAuth servers sign in through each CLI (codex mcp login, Claude or Antigravity /mcp).',
     commandIds: ['mcp-servers', 'add-mcp-server', 'agent-mcp-servers'],
   },
 ] satisfies FeatureReference[]

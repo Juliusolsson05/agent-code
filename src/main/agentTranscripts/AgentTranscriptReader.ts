@@ -3,7 +3,7 @@ import { constants } from 'node:fs'
 
 import { parseOpencodeTranscriptFile, type OpencodeStore } from 'opencode-terminal-headless'
 import { readPiBranch } from 'pi-terminal-headless'
-import { liveAntigravityRows, parseAntigravityTranscriptLocator } from '@providers/antigravity/runtime/antigravityHistory.js'
+import { readOpenAntigravityRows, parseAntigravityTranscriptLocator } from '@providers/antigravity/runtime/antigravityHistory.js'
 
 import { streamJsonl } from '@shared/runtime/streamJsonl.js'
 import { codexExecScriptCalls, decodeDoubleQuotedLiteral, parseExecCommandArgument } from '@shared/codex/execScript.js'
@@ -84,8 +84,8 @@ type TranscriptSource =
   | { kind: 'pi'; path: string }
   // An Antigravity conversation has no file Agent Code reads (agy's store is
   // private SQLite); its locator `antigravity://session/<id>` names the rows
-  // the LIVE pane holds (antigravityHistory.ts).
-  | { kind: 'antigravity'; path: string; sessionId: string }
+  // from its live runtime or a confirmed native pane’s ACP replay.
+  | { kind: 'antigravity'; path: string; rows: readonly import('antigravity-acp-headless').AntigravityRow[] }
 
 type PreparedTranscript = {
   ok: true
@@ -280,10 +280,13 @@ async function prepareTranscript(
     if (requestedProvider !== 'auto' && requestedProvider !== 'antigravity') {
       return { ok: false, error: 'unsupported_provider', message: `${path} is an Antigravity conversation, not a ${requestedProvider} transcript.` }
     }
-    if (!liveAntigravityRows(antigravitySessionId)) {
-      return { ok: false, error: 'file_not_readable', message: 'This Antigravity conversation is not open in Agent Code; open or resume the agent to read it.' }
+    try {
+      const rows = await readOpenAntigravityRows(antigravitySessionId)
+      if (!rows) return { ok: false, error: 'file_not_readable', message: 'This Antigravity conversation is not open in Agent Code; open or resume the agent to read it.' }
+      return { ok: true, source: { kind: 'antigravity', path, rows }, provider: 'antigravity' }
+    } catch {
+      return { ok: false, error: 'file_not_readable', message: 'Antigravity could not replay this open conversation.' }
     }
-    return { ok: true, source: { kind: 'antigravity', path, sessionId: antigravitySessionId }, provider: 'antigravity' }
   }
 
   try {
@@ -338,7 +341,7 @@ async function* transcriptRecords(source: TranscriptSource): AsyncGenerator<Json
       yield* streamJsonl<JsonRecord>(source.path)
       return
     case 'antigravity': {
-      for (const row of liveAntigravityRows(source.sessionId) ?? []) yield row as unknown as JsonRecord
+      for (const row of source.rows) yield row as unknown as JsonRecord
       return
     }
     case 'pi': {

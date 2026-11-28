@@ -171,6 +171,10 @@ function copyMainRuntimeResourcesPlugin(): Plugin {
       from: resolve(__dirname, 'packages/antigravity-acp-headless/src/mcpProxy.mjs'),
       to: resolve(__dirname, 'out/main/runtime/antigravity/mcpProxy.mjs'),
     },
+    {
+      from: resolve(__dirname, 'src/providers/antigravity/runtime/nativeMcpRelay.cjs'),
+      to: resolve(__dirname, 'out/main/runtime/antigravity/nativeMcpRelay.cjs'),
+    },
   ]
 
   const copyResources = async () => {

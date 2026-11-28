@@ -1,3 +1,4 @@
+import { readAntigravityConfig } from '@providers/antigravity/runtime/externalControl.js'
 import { access, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -69,8 +70,8 @@ export async function claudeManagedMcpPolicyPresent(paths = defaultNativeMcpPath
 }
 
 export async function readNativeMcpServers(paths = defaultNativeMcpPaths()): Promise<NativeMcpServerSource[]> {
-  const [claude, codex] = await Promise.all([readClaudeNative(paths), readCodexNative(paths)])
-  return [...claude, ...codex]
+  const [claude, codex, antigravity] = await Promise.all([readClaudeNative(paths), readCodexNative(paths), readAntigravityNative(join(paths.home, '.gemini', 'config', 'mcp_config.json'), paths)])
+  return [...claude, ...codex, ...antigravity]
 }
 
 /**
@@ -163,6 +164,35 @@ async function readClaudeNative(paths: NativeMcpPaths): Promise<NativeMcpServerS
     nativeServer('claude', name, displayPath(file, paths.home), isPlainObject(raw) ? raw : null))
 }
 
+async function readAntigravityNative(file: string, paths: NativeMcpPaths): Promise<NativeMcpServerSource[]> {
+  let config: unknown
+  try {
+    config = await readAntigravityConfig(file)
+  } catch { return [] }
+  if (!isPlainObject(config) || !isPlainObject(config.mcpServers)) return []
+  return Object.entries(config.mcpServers).map(([name, value]) => {
+    // Copy In moves a definition across providers. An OAuth client secret must never
+    // enter the plain settings document, and provider-only filters must not disappear.
+    const allowed = isPlainObject(value) && typeof value.command === 'string'
+      ? ['command', 'args', 'env', 'type'] : ['serverUrl', 'url', 'headers', 'type']
+    const entry = isPlainObject(value) && Object.keys(value).every(key => allowed.includes(key)) ? { ...value } : null
+    if (entry && typeof entry.serverUrl === 'string') {
+      entry.type = 'http'
+      entry.url = entry.serverUrl
+      delete entry.serverUrl
+    }
+    return nativeServer('antigravity', name, displayPath(file, paths.home), entry)
+  })
+}
+
+export async function antigravityNativeServerNames(cwd: string, paths = defaultNativeMcpPaths()): Promise<Set<string>> {
+  const layers = await Promise.all([
+    readAntigravityNative(join(paths.home, '.gemini', 'config', 'mcp_config.json'), paths),
+    readAntigravityNative(join(cwd, '.agents', 'mcp_config.json'), paths),
+  ])
+  return new Set(layers.flat().map(server => server.name))
+}
+
 async function readCodexNative(paths: NativeMcpPaths): Promise<NativeMcpServerSource[]> {
   const file = join(codexHome(paths), 'config.toml')
   const table = await readCodexMcpTable(file)
@@ -215,7 +245,7 @@ function codexToMcpServersShape(raw: Record<string, unknown>): Record<string, un
 }
 
 function nativeServer(
-  provider: 'claude' | 'codex',
+  provider: NativeMcpServerSource['provider'],
   name: string,
   source: string,
   raw: Record<string, unknown> | null,

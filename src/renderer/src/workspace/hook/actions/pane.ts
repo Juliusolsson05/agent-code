@@ -1397,8 +1397,8 @@ export function usePaneActions(
 
       const sessionId = await sessionActions.spawn(cwd, {
         kind: params.kind,
-        // An orchestrated agy worker needs the per-pane MCP endpoint supplied
-        // by ACP. Only a caller explicitly asking for the terminal opts out.
+        // Automated workers default to ACP for structured prompt acknowledgments.
+        // A caller requesting the native prompt keeps the same pane tool grants.
         providerRuntime: params.kind === 'antigravity' ? providerRuntime ?? null : providerRuntime,
         resumeSessionId,
         builtInMcpDomains: params.builtInMcpDomains,

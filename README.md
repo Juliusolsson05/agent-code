@@ -154,6 +154,16 @@ those observations into one conversation and renders it in React, without
 replacing the agent loop underneath.
 Antigravity’s Terminal view runs the interactive `agy` CLI in a PTY. Its Agent
 view uses `agy acp` to render the conversation through the Agent Client Protocol.
+Both views receive the Agent Code tools enabled for that pane. Open `/mcp` inside the
+native prompt to inspect its servers. To attach your own stdio or Streamable HTTP server,
+enable its Antigravity column in **Settings → MCP** and reload the pane. Agent Code keeps
+these grants local to the pane. Running `agy mcp list` in an ordinary shell lists your
+separately configured CLI servers.
+
+Agent view accepts pasted images through the composer. In Terminal view, Agent Code can
+deliver a text prompt when the CLI is showing an empty editor in the confirmed conversation.
+An existing draft or dialog holds delivery. Both views discover Agent Code's personal skills
+in `~/.gemini/config/skills` and the current project's skills in `.agents/skills`.
 
 [`agent-transcript-parser`](https://github.com/Juliusolsson05/agent-transcript-parser)
 translates transcripts between harnesses, which is what makes switching,

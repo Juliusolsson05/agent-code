@@ -33,7 +33,7 @@ export type UserMcpToolDependencies = {
   onUserMcpChangedByAgent?: (event: { sessionId: string; message: string }) => void
 }
 
-export const MCP_SERVERS_INSTRUCTIONS = `MCP Servers lets you manage the user's own MCP servers in Agent Code (the servers Agent Code attaches to new Claude and Codex agents). Only add, change or remove servers when the user's current request asks for it; never add a server on your own initiative, and prefer the exact config the server's official documentation publishes. Add servers with mcp_servers_add using that config (a {"mcpServers": {...}} block, a VS Code {"servers": ...} block, or one entry). Every env and header value in it becomes an encrypted secret automatically; README placeholders such as YOUR_TOKEN_HERE stay unset. A server you add, or point at a different URL, command, arguments or environment, is saved switched OFF and waits for the user's review: tell the user to review it and turn it on in Settings → MCP. You cannot turn a server on. Set a secret with mcp_servers_set_secret only when the user has given you the value in this conversation; otherwise tell the user to set it in Settings → MCP. Never repeat a secret value back. Changes apply to new agents and to existing agents when they reload — including you: you will not get a server's tools until the user reloads you. OAuth servers sign in through the CLIs (codex mcp login, or /mcp in Claude); say so instead of looking for a token. Report exactly what you changed.`
+export const MCP_SERVERS_INSTRUCTIONS = `MCP Servers lets you manage the user's own MCP servers in Agent Code (the servers Agent Code attaches to new Claude, Codex and Antigravity agents). Only add, change or remove servers when the user's current request asks for it; never add a server on your own initiative, and prefer the exact config the server's official documentation publishes. Add servers with mcp_servers_add using that config (a {"mcpServers": {...}} block, a VS Code {"servers": ...} block, or one entry). Every env and header value in it becomes an encrypted secret automatically; README placeholders such as YOUR_TOKEN_HERE stay unset. A server you add, or point at a different URL, command, arguments or environment, is saved switched OFF and waits for the user's review: tell the user to review it and turn it on in Settings → MCP. You cannot turn a server on. Set a secret with mcp_servers_set_secret only when the user has given you the value in this conversation; otherwise tell the user to set it in Settings → MCP. Never repeat a secret value back. Changes apply to new agents and to existing agents when they reload — including you: you will not get a server's tools until the user reloads you. OAuth servers sign in through the CLIs (codex mcp login, or /mcp in Claude or Antigravity); say so instead of looking for a token. Report exactly what you changed.`
 
 export function registerUserMcpTools(
   server: McpServer,
@@ -73,10 +73,11 @@ export function registerUserMcpTools(
       config: z.string().min(2).max(64 * 1024).describe('The JSON config snippet.'),
       name: z.string().min(1).max(64).optional().describe('Server name, used only when config is a single bare entry.'),
       claude: z.boolean().optional().describe('Attach to new Claude agents. Defaults to true when supported.'),
+      antigravity: z.boolean().optional(),
       codex: z.boolean().optional().describe('Attach to new Codex agents. Defaults to true when supported (not for SSE).'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-  }, async ({ config, name, claude, codex }) => {
+  }, async ({ config, name, claude, codex, antigravity }) => {
     try {
       const imported = service().importConfig(config, name)
       if (!imported.ok) return { ...toolText({ ok: false, message: imported.error }), isError: true }
@@ -94,6 +95,7 @@ export function registerUserMcpTools(
           providers: {
             claude: support.claude.ok && (claude ?? true),
             codex: support.codex.ok && (codex ?? true),
+            antigravity: support.antigravity.ok && (antigravity ?? true),
           },
           entry: candidate.entry,
           inputs: candidate.inputs,
@@ -129,10 +131,11 @@ export function registerUserMcpTools(
       entry: z.record(z.string(), z.unknown()).optional(),
       enabled: z.literal(false).optional().describe('Pass false to switch the server off. Only the user can switch it on.'),
       claude: z.boolean().optional(),
+      antigravity: z.boolean().optional(),
       codex: z.boolean().optional(),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  }, async ({ id, name, entry, enabled, claude, codex }) => {
+  }, async ({ id, name, entry, enabled, claude, codex, antigravity }) => {
     try {
       const current = (await service().snapshot()).servers.find(candidate => candidate.id === id)
       if (!current) return { ...toolText({ ok: false, message: `No MCP server with id ${id}.` }), isError: true }
@@ -144,7 +147,7 @@ export function registerUserMcpTools(
         id,
         name: name ?? current.name,
         enabled: enabled ?? current.enabled,
-        providers: { claude: claude ?? current.providers.claude, codex: codex ?? current.providers.codex },
+        providers: { claude: claude ?? current.providers.claude, codex: codex ?? current.providers.codex, antigravity: antigravity ?? current.providers.antigravity },
         entry: nextEntry,
         inputs: referenced.map(inputId => current.inputs.find(input => input.id === inputId) ?? { id: inputId, description: 'Secret' }),
       }, 'agent')

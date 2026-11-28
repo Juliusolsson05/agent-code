@@ -428,6 +428,8 @@ export type AgentTranscriptObservationMetadata = {
  *  actively working, plus an optional human-readable status verb. */
 export type AgentProcessState = {
   active: boolean
+  /** The provider explicitly cancelled the turn or lost its reporting boundary. */
+  turnInterrupted?: true
   status?: string
 }
 
@@ -768,6 +770,7 @@ export interface AgentSession extends AgentSessionEmitter {
    *  for a Telegram turn, or a slash command main answered itself). The
    *  delivery adapter reports that as a `queue` acceptance so the composer
    *  settles its optimistic "submitting" phase. */
+  deliverPromptWithImages?(text: string, images: readonly import('./providerConfig.js').InlinePromptImage[]): Promise<{ turnStarted: boolean }>
   deliverPromptText?(text: string): Promise<void | { turnStarted: boolean }>
 }
 

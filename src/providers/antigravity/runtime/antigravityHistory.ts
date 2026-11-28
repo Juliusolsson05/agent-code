@@ -1,3 +1,4 @@
+import { assertAntigravityExternalControlExcluded } from './externalControl.js'
 // Antigravity history pages, and the `antigravity://session/<id>` locator.
 //
 // WHY the live session's rows first: a renderer reload (and the phone's
@@ -19,32 +20,55 @@ import { readAntigravityConversation, type AntigravityRow } from 'antigravity-ac
 
 import type { ProviderHistoryChunk, ProviderHistoryRequest } from '@shared/types/providerConfig.js'
 
-export type AntigravityHistorySource = {
-  rows: () => ReadonlyArray<AntigravityRow>
-}
+export type AntigravityHistorySource =
+  | { rows: () => ReadonlyArray<AntigravityRow> }
+  | { replay: () => Promise<ReadonlyArray<AntigravityRow>> }
 
-const live = new Map<string, AntigravityHistorySource>()
+// Native and rendered panes (and old and new processes during handoff) can
+// temporarily own the same conversation. Removing one must preserve the others.
+const live = new Map<string, Set<AntigravityHistorySource>>()
 
 export function registerAntigravityHistory(sessionId: string, source: AntigravityHistorySource): () => void {
-  live.set(sessionId, source)
+  const sources = live.get(sessionId) ?? new Set<AntigravityHistorySource>()
+  sources.add(source)
+  live.set(sessionId, sources)
   return () => {
-    if (live.get(sessionId) === source) live.delete(sessionId)
+    sources.delete(source)
+    if (!sources.size && live.get(sessionId) === sources) live.delete(sessionId)
   }
 }
 
 export function liveAntigravityRows(sessionId: string): ReadonlyArray<AntigravityRow> | null {
-  return live.get(sessionId)?.rows() ?? null
+  for (const source of [...(live.get(sessionId) ?? [])].reverse()) {
+    if ('rows' in source) return source.rows()
+  }
+  return null
+}
+
+/** A transcript locator is not permission to spawn a process in an arbitrary
+ * directory. Only the registered runtime supplies a native replay. Require its
+ * registration to survive the read, including a native /new during replay. */
+export async function readOpenAntigravityRows(sessionId: string): Promise<ReadonlyArray<AntigravityRow> | null> {
+  const rows = liveAntigravityRows(sessionId)
+  if (rows) return rows
+  const source = [...(live.get(sessionId) ?? [])].pop()
+  if (!source || !('replay' in source)) return null
+  const replay = await source.replay()
+  return live.get(sessionId)?.has(source) ? replay : null
 }
 
 export type AntigravityReplayDeps = {
   binary?: string
-  spawn?: (binary: string, args: string[], options: { cwd: string }) => ChildProcessWithoutNullStreams
+  env?: NodeJS.ProcessEnv
+  signal?: AbortSignal
+  spawn?: (binary: string, args: string[], options: { cwd: string; env?: NodeJS.ProcessEnv; signal?: AbortSignal }) => ChildProcessWithoutNullStreams
 }
 
 /** Replay a conversation through a short-lived `agy acp` (no model call). */
 export async function replayAntigravityConversation(sessionId: string, cwd: string, deps: AntigravityReplayDeps = {}): Promise<AntigravityRow[]> {
+  await assertAntigravityExternalControlExcluded(cwd, deps.env)
   const binary = deps.binary ?? 'agy'
-  const child = (deps.spawn ?? ((bin, args, options) => spawn(bin, args, { ...options, stdio: ['pipe', 'pipe', 'pipe'] })))(binary, ['acp'], { cwd })
+  const child = (deps.spawn ?? ((bin, args, options) => spawn(bin, args, { ...options, stdio: ['pipe', 'pipe', 'pipe'] })))(binary, ['acp'], { cwd, ...(deps.env ? { env: deps.env } : {}), ...(deps.signal ? { signal: deps.signal } : {}) })
   child.stderr.on('data', () => {})
   // WHY an 'error' listener: Node reports a spawn failure (agy not installed,
   // a stale tool path, EACCES) as an 'error' EVENT on the child, and never
@@ -68,14 +92,13 @@ export async function replayAntigravityConversation(sessionId: string, cwd: stri
 }
 
 export async function loadAntigravityHistoryChunk(request: ProviderHistoryRequest, deps: AntigravityReplayDeps = {}): Promise<ProviderHistoryChunk> {
-  let rows = liveAntigravityRows(request.providerSessionId)
-  if (!rows) {
-    try {
-      rows = await replayAntigravityConversation(request.providerSessionId, request.cwd, deps)
-    } catch (error) {
-      // Electron keeps Error.message, not custom properties: the category rides in the message.
-      throw Object.assign(new Error(`unreadable: Antigravity history unavailable: ${(error as Error).message}`), { code: 'unreadable' })
-    }
+  let rows: readonly AntigravityRow[]
+  try {
+    rows = await readOpenAntigravityRows(request.providerSessionId)
+      ?? await replayAntigravityConversation(request.providerSessionId, request.cwd, deps)
+  } catch (error) {
+    // Electron keeps Error.message, not custom properties: the category rides in the message.
+    throw Object.assign(new Error(`unreadable: Antigravity history unavailable: ${(error as Error).message}`), { code: 'unreadable' })
   }
   // Paging by the mapper's marker (= the row key): everything strictly older.
   const end = request.beforeMarker ? rows.findIndex(row => row.key === request.beforeMarker) : rows.length

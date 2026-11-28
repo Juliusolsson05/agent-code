@@ -112,6 +112,7 @@ export interface SessionFeed {
     prompt: string,
     imagePaths?: string[],
     deliveryId?: string,
+    options?: import('@shared/types/providerConfig.js').PromptDeliveryOptions,
   ): Promise<PromptDeliveryResult>
 
   /** Resolve a live provider condition (permission prompt, trust dialog,

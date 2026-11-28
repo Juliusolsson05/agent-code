@@ -26,6 +26,13 @@ export function resolveAntigravityMcpProxyScript(options: { moduleDir?: string; 
   return resolve(options.repoRoot ?? process.cwd(), 'packages', 'antigravity-acp-headless', 'src', 'mcpProxy.mjs')
 }
 
+export function resolveAntigravityNativeMcpRelay(): string {
+  const moduleDir = dirname(fileURLToPath(import.meta.url))
+  const staged = unpackAsar(join(moduleDir, 'runtime', 'antigravity', 'nativeMcpRelay.cjs'))
+  if (existsSync(staged)) return staged
+  return join(moduleDir, 'nativeMcpRelay.cjs')
+}
+
 /**
  * The executable that runs the proxy: Agent Code's own binary (Electron in the
  * packaged app, switched to plain Node by ELECTRON_RUN_AS_NODE in the server's

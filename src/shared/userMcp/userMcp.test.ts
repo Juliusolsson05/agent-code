@@ -141,7 +141,7 @@ describe('coerceUserMcpDocument', () => {
     })
     expect(doc.servers.map(server => server.id)).toEqual(['a1', 'b2'])
     expect(doc.servers[0]!.entry).toMatchObject({ oauth: { clientId: 'c' } })
-    expect(doc.servers[0]!.providers).toEqual({ claude: true, codex: false })
+    expect(doc.servers[0]!.providers).toEqual({ claude: true, codex: false, antigravity: false })
     expect(doc.servers[1]!.entry).toEqual({})
   })
 

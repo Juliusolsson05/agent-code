@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { AgentSkillRoot, AgentSkillsSnapshot } from '@shared/types/agentSkills.js'
+import { discoverAntigravitySkillRoots } from '@providers/antigravity/runtime/skillDiscovery.js'
 import { collectInstalledAgentSkills } from './inventory.js'
 
 const temporary: string[] = []
@@ -26,6 +27,28 @@ afterEach(async () => {
 })
 
 describe('installed skill inventory', () => {
+  it('lists Antigravity managed, legacy and workspace skills and respects the repository root', async () => {
+    const homeDirectory = await temp()
+    const project = join(homeDirectory, 'repo')
+    const cwd = join(project, 'sub')
+    await mkdir(join(project, '.git'), { recursive: true })
+    const managed = join(homeDirectory, '.gemini/config/skills/agent-code-goal/SKILL.md')
+    await write(managed, skill('agent-code-goal'))
+    for (const [folder, name] of [
+      [join(homeDirectory, '.gemini/antigravity-cli/skills'), 'cli-legacy'],
+      [join(homeDirectory, '.gemini/skills'), 'gemini-legacy'],
+      [join(cwd, '.agents/skills'), 'child-skill'],
+      [join(project, '.agents/skills'), 'project-skill'],
+      [join(homeDirectory, '.agents/skills'), 'outside-project'],
+    ] as const) await write(join(folder, name, 'SKILL.md'), skill(name))
+    const discovery = await discoverAntigravitySkillRoots({ cwd, homeDirectory, environment: {} })
+    const result = await collectInstalledAgentSkills(discovery, { paths: [managed], notices: [] })
+    expect(result.skills.map(({ source, name }) => [source, name])).toEqual([
+      ['agent-code', 'agent-code-goal'], ['project', 'child-skill'], ['personal', 'cli-legacy'],
+      ['personal', 'gemini-legacy'], ['project', 'project-skill'],
+    ])
+  })
+
   it('labels managed deployments and returns metadata only, without modifying files', async () => {
     const base = await temp()
     const managedPath = join(base, 'personal', 'conventions', 'SKILL.md')

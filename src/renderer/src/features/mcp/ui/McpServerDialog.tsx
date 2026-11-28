@@ -25,7 +25,7 @@ import type {
 import { USER_MCP_PROVIDERS, type UserMcpSecretState } from '@shared/userMcp/types'
 import { providerSupportForEntry, transportOf, userMcpDestination } from '@shared/userMcp/validate'
 
-const PROVIDER_LABEL: Record<UserMcpProvider, string> = { claude: 'Claude', codex: 'Codex' }
+const PROVIDER_LABEL: Record<UserMcpProvider, string> = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity' }
 
 /**
  * Add / Edit MCP server (#1143). Paste-first on purpose: "any MCP server"
@@ -163,7 +163,7 @@ function AddServer({ onDone, onCancel, onDirty, onSaving }: { onDone: () => void
           const fresh: Draft = {
             include: true,
             name: candidate.name,
-            providers: { claude: support.claude.ok, codex: support.codex.ok },
+            providers: { claude: support.claude.ok, codex: support.codex.ok, antigravity: support.antigravity.ok },
             secrets: { ...candidate.pendingSecrets },
           }
           const index = before.candidates.findIndex(old => old.name === candidate.name)
@@ -176,6 +176,7 @@ function AddServer({ onDone, onCancel, onDirty, onSaving }: { onDone: () => void
             providers: {
               claude: old.providers.claude && support.claude.ok,
               codex: old.providers.codex && support.codex.ok,
+              antigravity: old.providers.antigravity && support.antigravity.ok,
             },
             // Values typed or lifted earlier survive for every secret the new
             // parse still references; a value pasted literally again wins.
@@ -425,6 +426,7 @@ function EditServer({ server, onDone, onCancel, onDirty, onSaving }: { server: U
         providers: {
           claude: providers.claude && support.claude.ok,
           codex: providers.codex && support.codex.ok,
+          antigravity: providers.antigravity && support.antigravity.ok,
         },
         entry: parsed.entry,
         inputs,

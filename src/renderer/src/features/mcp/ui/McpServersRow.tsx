@@ -10,7 +10,7 @@ import { BUILT_IN_MCP_SERVERS } from '@renderer/features/mcp/lib/builtInServers'
 import { applyUserMcpResult, useUserMcpSnapshot } from '@renderer/features/mcp/store'
 import { useEnabledAgentProviderKinds } from '@renderer/features/providers/store'
 import { AGENT_PROVIDER_KINDS, isRemoteProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
-import { isUserMcpProvider, USER_MCP_PROVIDERS, type NativeMcpServer, type UserMcpServerView } from '@shared/userMcp/types'
+import { isUserMcpProvider, USER_MCP_PROVIDERS, type NativeMcpServer, type UserMcpProvider, type UserMcpServerView } from '@shared/userMcp/types'
 
 type Props = {
   settings: Settings
@@ -171,7 +171,7 @@ function UserServerRow({
   providers: AgentProviderKind[]
   columns: string
   onToggleEnabled: () => void
-  onToggleProvider: (kind: 'claude' | 'codex', on: boolean) => void
+  onToggleProvider: (kind: UserMcpProvider, on: boolean) => void
   onEdit: () => void
 }) {
   const unsetSecrets = Object.values(server.secrets).filter(secret => !secret.set).length

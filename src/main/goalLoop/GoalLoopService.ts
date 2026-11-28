@@ -345,7 +345,8 @@ export class GoalLoopService extends EventEmitter {
     // out the poll. It is an OPTIMISATION, never the mechanism: the poll re-
     // reads the level, so a provider that stops emitting edges (or never emits
     // this one) still resolves its hold.
-    const onProcessState = ({ sessionId, active }: { sessionId: string; active: boolean }) => {
+    const onProcessState = ({ sessionId, active, turnInterrupted }: { sessionId: string; active: boolean; turnInterrupted?: true }) => {
+      if (turnInterrupted) { this.interrupt(sessionId); return }
       if (active || !this.heldSince.has(sessionId)) return
       this.requestContinue(sessionId)
     }

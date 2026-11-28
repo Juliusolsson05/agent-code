@@ -1,5 +1,6 @@
 import { Terminal } from '@xterm/headless'
 import { expect, it } from 'vitest'
+import { inspectAgentTranscriptFile } from '@main/agentTranscripts/AgentTranscriptReader'
 import { getMainProvider } from '@providers/registry.main'
 
 // Each fresh TUI allocates an empty conversation in the signed-in agy account. Keep this
@@ -31,9 +32,18 @@ it.skipIf(process.env.ANTIGRAVITY_TERMINAL_LIVE !== '1')('opens two native agy p
     await expect.poll(() => visible().includes('native-terminal-check'), { timeout: 5000 }).toBe(true)
     first.write('\x15')
     await expect.poll(() => visible().includes('native-terminal-check')).toBe(false)
-    first.write('/new')
-    await expect.poll(() => visible().includes('/new')).toBe(true)
-    first.write('\r')
+    const deliver = (prompt: string) => provider.deliverPrompt({ session: first, sessionId: 'native-test', prompt, write: data => first.write(data) !== false })
+    first.write('human draft')
+    expect(await deliver('/new')).toMatchObject({ ok: false, promptWritten: false, enterWritten: false })
+    await expect.poll(() => visible().includes('human draft')).toBe(true)
+    expect(await first.awaitReadyForPrompt?.()).toMatchObject({ kind: 'occupied' })
+    first.write('\x15')
+    await expect.poll(() => visible().includes('? for shortcuts')).toBe(true)
+    // Local-only command. Its new conversation id proves the real TUI
+    // accepted Enter after inspecting the pasted command. No model turn.
+    expect(await first.awaitReadyForPrompt?.()).toMatchObject({ kind: 'ready' })
+    const submission = await deliver('/new')
+    expect(submission).toMatchObject({ ok: true })
     await expect.poll(() => first.getProviderSessionId?.(), { timeout: 15000 }).not.toBe(firstId)
     const newId = first.getProviderSessionId?.()
     expect(newId).toBeTruthy()
@@ -55,5 +65,28 @@ it.skipIf(process.env.ANTIGRAVITY_TERMINAL_LIVE !== '1')('opens two native agy p
   } finally {
     await Promise.all([first.stop(), second.stop(), resumed?.stop(), rendered?.stop()])
     screen.dispose()
+  }
+}, 60000)
+
+it.skipIf(process.env.ANTIGRAVITY_TERMINAL_LIVE !== '1')('reads a newly created native conversation through Agent Code transcript inspection', async () => {
+  const provider = getMainProvider('antigravity')
+  const options = { cwd: process.env.ANTIGRAVITY_LIVE_CWD ?? process.cwd(), binary: process.env.AGY_BINARY ?? 'agy' }
+  const fresh = provider.createSession(options)
+  let native: ReturnType<typeof provider.createSession> | undefined
+  try {
+    await fresh.start()
+    const id = fresh.getProviderSessionId?.()
+    if (!id) throw new Error('agy created no conversation')
+    await fresh.stop()
+    native = provider.createTerminalSession!({ ...options, resumeSessionId: id })
+    await native.start()
+    const path = native.getTranscriptFile?.()
+    if (!path) throw new Error('native agy published no transcript locator')
+    expect(await inspectAgentTranscriptFile({ path })).toMatchObject({ ok: true, provider: 'antigravity' })
+    await native.stop()
+    expect(await inspectAgentTranscriptFile({ path })).toMatchObject({ ok: false, error: 'file_not_readable' })
+  } finally {
+    await native?.stop()
+    await fresh.stop()
   }
 }, 60000)

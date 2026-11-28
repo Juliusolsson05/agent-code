@@ -5,6 +5,7 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
+import { inspectAgentTranscriptFile, readAgentTranscriptFile, searchAgentTranscriptFile } from '@main/agentTranscripts/AgentTranscriptReader.js'
 import { AntigravityTerminalSession } from './antigravityTerminalSession.js'
 
 // Exercise the two real process boundaries: a short-lived ACP stdio process allocates an
@@ -16,6 +17,12 @@ if (args[0] === 'acp') {
   require('node:readline').createInterface({input:process.stdin}).on('line', line => {
     const req = JSON.parse(line)
     if (process.env.AGY_TEST_AUTH === 'hang') return
+    if (req.method === 'session/load') {
+      if (req.params.cwd !== process.env.GEMINI_CLI_HOME || require('node:fs').realpathSync(req.params.cwd) !== require('node:fs').realpathSync(process.cwd())) process.exit(5)
+      for (const [id, text] of [['foreign-id', 'unrelated'], [req.params.sessionId, 'verified native transcript']]) {
+        console.log(JSON.stringify({jsonrpc:'2.0', method:'session/update', params:{sessionId:id, update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text}}}}))
+      }
+    }
     const err = req.method === 'session/new' && process.env.AGY_TEST_AUTH === 'missing'
     console.log(JSON.stringify({jsonrpc:'2.0', id:req.id, ...(err
       ? {error:{code:-32000,message:'Authentication required'}}
@@ -49,6 +56,10 @@ if (args[0] === 'acp') {
   }
   process.stdin.setRawMode(true)
   process.stdout.write('TUI:' + JSON.stringify(args.slice(2)) + ':' + process.stdout.columns + 'x' + process.stdout.rows)
+  // Reconstruct the empty prompt and footer observed on agy 1.5.18. A banner
+  // alone is not evidence that automated input can target a conversation.
+  const rule = '─'.repeat(process.stdout.columns)
+  process.stdout.write('\r\n\x1b[?2004h' + rule + '\r\n>\r\n' + rule + '\r\n? for shortcuts\x1b[2A\r\x1b[2C')
   process.stdout.on('resize', () => process.stdout.write('SIZE:' + process.stdout.columns + 'x' + process.stdout.rows))
   process.stdin.on('data', d => {
     if (d.toString() === 'q') return process.exit(0)
@@ -117,6 +128,7 @@ it('does not start a terminal when the pane closes during identity allocation', 
   const allocate = vi.fn(() => new Promise<string>(resolve => { finish = resolve }))
   session = new AntigravityTerminalSession({ binary, cwd }, { allocate })
   const starting = session.start()
+  await vi.waitFor(() => expect(allocate).toHaveBeenCalledOnce())
   await session.stop()
   finish('unused')
   await starting
@@ -162,7 +174,7 @@ it('waits for the exact native selection before publishing identity, readiness o
   await writeFile(join(cwd, 'confirm-resume'), '')
   await completion
   expect(start).toHaveBeenCalledOnce()
-  expect(ready).toHaveBeenCalledOnce()
+  await vi.waitFor(() => expect(ready).toHaveBeenCalledOnce())
   expect(candidate.getProviderSessionId()).toBe(requestedId)
 })
 
@@ -185,4 +197,24 @@ it.each([
   expect(candidate.getProcessPid()).toBeNull()
   const fifo = await readFile(join(cwd, 'launch-pipe-path'), 'utf8')
   await expect(access(fifo)).rejects.toMatchObject({ code: 'ENOENT' })
+})
+
+it('allows MCP read, search and inspect through this native pane’s confirmed identity and revokes access on stop', async () => {
+  const candidate = await prepareExplicit('hold', 3000)
+  const path = 'antigravity://session/' + requestedId
+  const starting = candidate.start()
+  await expect.poll(() => access(join(cwd, 'launch-pipe-path')).then(() => true, () => false)).toBe(true)
+  expect(await inspectAgentTranscriptFile({ path })).toMatchObject({ ok: false, error: 'file_not_readable' })
+  await writeFile(join(cwd, 'confirm-resume'), '')
+  await starting
+  const [read, search, stats] = await Promise.all([
+    readAgentTranscriptFile({ path, projection: 'timeline' }),
+    searchAgentTranscriptFile({ path, query: 'verified native' }),
+    inspectAgentTranscriptFile({ path }),
+  ])
+  expect(read, JSON.stringify(read)).toMatchObject({ ok: true, items: [expect.objectContaining({ text: 'verified native transcript' })] })
+  expect(search).toMatchObject({ ok: true, matches: [expect.anything()] })
+  expect(stats).toMatchObject({ ok: true, provider: 'antigravity' })
+  await candidate.stop()
+  expect(await inspectAgentTranscriptFile({ path })).toMatchObject({ ok: false, error: 'file_not_readable' })
 })

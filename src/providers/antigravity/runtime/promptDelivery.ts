@@ -11,13 +11,24 @@
 
 import type { PromptDeliveryIo, PromptDeliveryResult } from '@shared/types/providerConfig.js'
 
+import { AntigravityTerminalSession } from './antigravityTerminalSession.js'
+import { deliverNativeAntigravityPrompt } from './nativePromptDelivery.js'
+
 export async function deliverAntigravityPrompt(io: PromptDeliveryIo): Promise<PromptDeliveryResult> {
+  if (io.session instanceof AntigravityTerminalSession) return deliverNativeAntigravityPrompt(io, io.session)
+  if (io.imagePaths?.length || (io.inlineImages?.length && !io.session.deliverPromptWithImages)) {
+    return {
+      ok: false, stage: 'before-write', code: 'missing-capability',
+      message: 'This session accepts pasted images through the Antigravity Agent composer.',
+      promptWritten: false, enterWritten: false, retrySafe: true, disposition: 'retry-after-resolve',
+    }
+  }
   if (typeof io.session.deliverPromptText !== 'function') {
     return {
       ok: false,
       stage: 'before-write',
       code: 'missing-capability',
-      message: `Antigravity session ${io.sessionId} has no structured prompt transport. Type in its native terminal, or use the rendered Agent view for automated prompts.`,
+      message: `Antigravity session ${io.sessionId} has no prompt delivery transport.`,
       retrySafe: true,
       disposition: 'session-unusable',
       promptWritten: false,
@@ -25,7 +36,9 @@ export async function deliverAntigravityPrompt(io: PromptDeliveryIo): Promise<Pr
     }
   }
   try {
-    const result = await io.session.deliverPromptText(io.prompt)
+    const result = io.inlineImages?.length && io.session.deliverPromptWithImages
+      ? await io.session.deliverPromptWithImages(io.prompt, io.inlineImages)
+      : await io.session.deliverPromptText(io.prompt)
     // A prompt queued behind a running turn starts no turn of its own yet;
     // `queue` tells the composer not to paint it as sending (#889).
     const queued = Boolean(result && typeof result === 'object' && result.turnStarted === false)

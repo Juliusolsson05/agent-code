@@ -181,7 +181,7 @@ export async function createPrivateClaudeMcpConfig(
   if (servers.length === 0 && Object.keys(userEntries).length === 0) return null
   // The pid in the prefix lets sweepStalePrivateMcpConfigs tell a crashed
   // run's leftovers from a live instance's files.
-  const directory = await mkdtemp(join(tmpdir(), `${PRIVATE_MCP_CONFIG_PREFIX}${process.pid}-`))
+  const directory = await createPrivateMcpDirectory()
   const path = join(directory, 'mcp.json')
   const document = {
     mcpServers: Object.fromEntries([
@@ -218,6 +218,12 @@ export async function createPrivateClaudeMcpConfig(
 }
 
 const PRIVATE_MCP_CONFIG_PREFIX = 'agent-code-mcp-'
+
+/** Both file-configured providers participate in the same process-owned crash sweep. */
+export function createPrivateMcpDirectory(): Promise<string> {
+  return mkdtemp(join(tmpdir(), `${PRIVATE_MCP_CONFIG_PREFIX}${process.pid}-`))
+}
+
 
 /**
  * Remove private MCP config directories left behind by a run that crashed.

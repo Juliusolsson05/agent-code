@@ -38,7 +38,7 @@ function paste(options: { image?: boolean; text?: string; html?: string; items?:
   }
 }
 
-function hook(provider: 'codex' | 'opencode' | 'grok' | 'pi' | 'claude') {
+function hook(provider: 'codex' | 'opencode' | 'grok' | 'pi' | 'claude' | 'antigravity') {
   const showToast = vi.fn()
   const setDraftImages = vi.fn()
   const { result } = renderHook(() => useClaudeImagePaste({ provider, sessionId: 's1' as never, setDraftImages, showToast }))
@@ -93,8 +93,8 @@ describe('pasting an image into a composer that cannot take one', () => {
     expect(showToast).not.toHaveBeenCalled()
   })
 
-  it('does not say it for Claude, which takes the image', async () => {
-    const { handlePaste, showToast, setDraftImages } = hook('claude')
+  it.each(['claude', 'antigravity'] as const)('accepts the pasted image in the %s composer', async provider => {
+    const { handlePaste, showToast, setDraftImages } = hook(provider)
     let answer: unknown
     await act(async () => { answer = await handlePaste(paste({ image: true })) })
     expect(showToast).not.toHaveBeenCalledWith(expect.stringContaining("can't be sent"))

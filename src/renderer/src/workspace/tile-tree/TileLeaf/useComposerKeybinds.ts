@@ -382,9 +382,9 @@ export function useComposerKeybinds({
         // protocol). On main's before-write "not a live agent session" reject
         // the wrapper wakes the SAME SessionId and retries once; every other
         // failure shape flows through untouched.
-        deliverPrompt: (prompt, imagePaths) =>
+        deliverPrompt: (prompt, imagePaths, options) =>
           deliverWithWake(
-            () => feed.deliverPrompt(sessionId, prompt, imagePaths, pasteId),
+            () => feed.deliverPrompt(sessionId, prompt, imagePaths, pasteId, ...(options ? [options] as const : [])),
             () => workspace.ensureSessionLive(sessionId, 'tile-leaf.deliver-retry'),
           ),
         pasteId,

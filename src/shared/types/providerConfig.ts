@@ -415,7 +415,12 @@ export type MainProviderConfig = {
   deliverPrompt: (io: PromptDeliveryIo) => Promise<PromptDeliveryResult>
 }
 
+export type InlinePromptImage = { mediaType: string; base64Data: string }
+
 export type PromptDeliveryOptions = {
+  /** Clipboard data for structured prompt protocols. Never resolve renderer-supplied paths
+   * into bytes in main: choosing pixels must not grant a generic filesystem read. */
+  inlineImages?: InlinePromptImage[]
   /** App-generated tasks must not submit an unrelated native terminal draft.
    * Providers must refuse when their transport cannot preserve it or establish
    * that the active composer is empty. This is stricter than legacy delivery. */
