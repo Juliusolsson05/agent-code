@@ -1,3 +1,5 @@
+import { resolveAntigravityUserMcpEntries } from './userMcpEntries.js'
+import { openAgyTurnHooks } from './turnHooks.js'
 import { EventEmitter } from 'node:events'
 import { constants as osConstants } from 'node:os'
 import { spawn as spawnProcess, type ChildProcessWithoutNullStreams } from 'node:child_process'
@@ -8,6 +10,7 @@ import {
 } from 'antigravity-acp-headless'
 
 import type { AgentSession, AgentSessionEvents, SessionOptions } from '@shared/types/session.js'
+import type { InlinePromptImage } from '@shared/types/providerConfig.js'
 import type { ConditionCustomAction } from '@shared/types/providerConditions.js'
 import { asRecord } from '@shared/lib/asRecord.js'
 import { registerAntigravityHistory, antigravityTranscriptLocator } from '@providers/antigravity/runtime/antigravityHistory.js'
@@ -53,16 +56,15 @@ export interface AntigravitySession {
  * conversation agy no longer holds (deleted) starts a NEW conversation and
  * says so through provider-session-changed rather than failing the pane.
  *
- * dangerousMode → session mode... is NOT mapped: ACP has no auto-approve
- * switch in agy 1.5.15's session/new, and silently approving every permission
- * request client-side would hide from the user exactly what dangerous mode
- * is meant to skip — the Allow/Deny cards stay, each one click.
+ * The app's Dangerous Mode preference promises automatic approval for Claude
+ * and Codex. Antigravity keeps its own approval policy and ACP permission cards.
  */
 export class AntigravitySession extends EventEmitter implements AgentSession {
   private child: ChildProcessWithoutNullStreams | null = null
   private acp: AntigravityAcpSession | null = null
   private exited = false
   private stopping = false
+  private turnHooks: Awaited<ReturnType<typeof openAgyTurnHooks>> = null
   private providerSessionId: string | null = null
   private unregisterHistory: (() => void) | null = null
   private historyGeneration = 0
@@ -84,6 +86,7 @@ export class AntigravitySession extends EventEmitter implements AgentSession {
   private readonly extraEnv: Record<string, string | undefined>
   private readonly resumeSessionId: string | null
   private readonly builtInMcpServers: NonNullable<SessionOptions['builtInMcpServers']>
+  private readonly userMcpServers: NonNullable<SessionOptions['userMcpServers']>
   private readonly deps: Required<AntigravitySessionDeps>
 
   constructor(options: SessionOptions, deps: AntigravitySessionDeps = {}) {
@@ -93,6 +96,7 @@ export class AntigravitySession extends EventEmitter implements AgentSession {
     this.extraEnv = options.env ?? {}
     this.resumeSessionId = options.resumeSessionId ?? null
     this.builtInMcpServers = options.builtInMcpServers ?? []
+    this.userMcpServers = options.userMcpServers ?? []
     this.deps = {
       spawn: deps.spawn ?? ((binary, args, spawnOptions) => spawnProcess(binary, args, { ...spawnOptions, stdio: ['pipe', 'pipe', 'pipe'] })),
       mcpProxyScript: deps.mcpProxyScript ?? resolveAntigravityMcpProxyScript(),
@@ -113,7 +117,21 @@ export class AntigravitySession extends EventEmitter implements AgentSession {
       else env[key] = value
     }
 
-    const child = this.deps.spawn(this.binary, ['acp'], { cwd: this.cwd, env })
+    if (this.builtInMcpServers.some(server => server.tldrHooks)) {
+      this.turnHooks = await openAgyTurnHooks(this.builtInMcpServers, () => this.providerSessionId, (active, turnInterrupted) => {
+        // ACP normally owns process state. A reporting interruption also needs to
+        // pause the loop, even if the local HTTP reporting service just went away.
+        if (turnInterrupted) this.emit('process-state', { active, turnInterrupted })
+      })
+    }
+    if (this.stopping) { await this.closeTurnHooks(); return }
+    let child: ChildProcessWithoutNullStreams
+    try {
+      child = this.deps.spawn(this.binary, this.turnHooks ? ['acp', '--add-dir', this.turnHooks.workspace] : ['acp'], { cwd: this.cwd, env })
+    } catch (error) {
+      await this.closeTurnHooks()
+      throw error
+    }
     this.child = child
     // agy logs to stderr; drained so a chatty run can never fill the pipe and
     // stall the agent.
@@ -170,7 +188,15 @@ export class AntigravitySession extends EventEmitter implements AgentSession {
    * server's env list, never in argv.
    */
   private mcpServers(): AntigravityMcpServer[] {
-    if (this.builtInMcpServers.length === 0) return []
+    // agy 1.5.18 initializes and lists tools on HTTP ACP entries even though its
+    // initialize response omits mcpCapabilities.http. Preserve the legacy built-in
+    // bridge for older installations; user servers keep their own names and transport.
+    const pairs = (values: Record<string, string>) => Object.entries(values).map(([name, value]) => ({ name, value }))
+    const managed = resolveAntigravityUserMcpEntries(this.userMcpServers).map(({ name, config }): AntigravityMcpServer =>
+      'serverUrl' in config
+        ? { type: 'http', name, url: config.serverUrl, headers: pairs(config.headers) }
+        : { type: 'stdio', name, command: config.command, args: config.args, env: pairs(config.env) })
+    if (this.builtInMcpServers.length === 0) return managed
     const env: Array<{ name: string; value: string }> = [{ name: 'ELECTRON_RUN_AS_NODE', value: '1' }]
     const specs = this.builtInMcpServers.map((server, serverIndex) => {
       const headers = { ...server.headers, ...(server.bearerToken === undefined ? {} : { Authorization: `Bearer ${server.bearerToken}` }) }
@@ -183,7 +209,7 @@ export class AntigravitySession extends EventEmitter implements AgentSession {
       return { name: server.name, url: server.url, headerEnv }
     })
     env.push({ name: 'AGENT_CODE_ACP_MCP_SERVERS', value: JSON.stringify(specs) })
-    return [{ type: 'stdio', name: this.builtInMcpServers[0]!.name, command: this.deps.scriptRunner, args: [this.deps.mcpProxyScript], env }]
+    return [{ type: 'stdio', name: this.builtInMcpServers[0]!.name, command: this.deps.scriptRunner, args: [this.deps.mcpProxyScript], env }, ...managed]
   }
 
   private bindIdentity(sessionId: string, changedReason: string | null): void {
@@ -254,11 +280,16 @@ export class AntigravitySession extends EventEmitter implements AgentSession {
    * is pending, so every other delivery to the pane would fail with
    * delivery-in-flight in the meantime.
    */
-  async deliverPromptText(text: string): Promise<{ turnStarted: boolean }> {
+  async deliverPromptWithImages(text: string, images: readonly InlinePromptImage[]): Promise<{ turnStarted: boolean }> {
+    if (!this.acp?.acceptsImages) throw new AntigravityNotReadyError('The installed agy session does not accept image input.')
+    return this.deliverPromptText(text, images)
+  }
+
+  async deliverPromptText(text: string, images: readonly InlinePromptImage[] = []): Promise<{ turnStarted: boolean }> {
     const acp = this.acp
     if (!acp || this.exited || !this.providerSessionId) throw new AntigravityNotReadyError('agy is not running')
     const queued = acp.isTurnActive()
-    const { accepted, finished } = acp.prompt(text)
+    const { accepted, finished } = acp.prompt(text, images.map(({ mediaType, base64Data }) => ({ type: 'image', mimeType: mediaType, data: base64Data })))
     // The turn's outcome arrives as semantic events. A QUEUED prompt that never
     // ran because agy stopped first is said once, so it is not lost silently.
     finished.catch(error => {
@@ -308,6 +339,7 @@ export class AntigravitySession extends EventEmitter implements AgentSession {
   private onExit(code: number | null, signal: NodeJS.Signals | null): void {
     if (this.exited) return
     this.exited = true
+    void this.closeTurnHooks()
     // An exited pane no longer owns the conversation: the user may continue
     // it in agy's own TUI (`agy --conversation`), and history / catalog reads
     // must then replay it fresh instead of serving these stale rows.
@@ -324,8 +356,15 @@ export class AntigravitySession extends EventEmitter implements AgentSession {
     this.emit('exit', { exitCode: code ?? 1, ...(signalNumber !== undefined ? { signal: signalNumber } : {}) })
   }
 
+  private async closeTurnHooks(): Promise<void> {
+    const hooks = this.turnHooks
+    this.turnHooks = null
+    await hooks?.close()
+  }
+
   async stop(): Promise<void> {
     this.stopping = true
+    await this.closeTurnHooks()
     this.unregisterHistory?.()
     this.unregisterHistory = null
     const acp = this.acp

@@ -212,6 +212,13 @@ export const USER_MCP_HEADER_NAME_PATTERN = /^[A-Za-z0-9!#$%&'*+^_`|~-]+$/
  * transport. Every UI surface and launch uses this one. */
 export function providerSupportForEntry(entry: unknown): Record<UserMcpProvider, UserMcpSupport> {
   const support = providerSupport(transportOf(entry))
+  if (support.antigravity.ok && isPlainObject(entry)) {
+    // An ignored cwd, tool allowlist, or auth setting would attach a different server
+    // than the one the user reviewed. Report unsupported fields before resolving secrets.
+    const fields = transportOf(entry) === 'stdio' ? ['type', 'command', 'args', 'env'] : ['type', 'url', 'headers']
+    const unsupported = Object.keys(entry).find(key => !fields.includes(key))
+    if (unsupported) support.antigravity = { ok: false, reason: `Antigravity cannot apply the MCP setting "${unsupported}"` }
+  }
   if (support.codex.ok && isPlainObject(entry) && isStringRecord(entry.env)) {
     const protectedKey = Object.entries(entry.env)
       .find(([key, value]) => hasInputReference(value) && CODEX_PROTECTED_ENV.test(key))?.[0]
@@ -280,6 +287,9 @@ export function providerSupport(
 ): Record<UserMcpProvider, UserMcpSupport> {
   return {
     claude: { ok: true },
+    antigravity: transport === 'stdio' || transport === 'http'
+      ? { ok: true }
+      : { ok: false, reason: 'Antigravity supports stdio and Streamable HTTP servers' },
     // Codex speaks stdio and Streamable HTTP only (codex-rs mcp_types.rs has
     // no SSE transport). Claude still accepts SSE, so an SSE server is
     // Claude-only rather than invalid.

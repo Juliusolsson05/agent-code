@@ -16,10 +16,12 @@ describe('Agent Code conventions provider targets', () => {
     // agent skills unsupported; targets resolution must tolerate it — grok
     // simply never contributes a target row. Hermes (#1482) is the second:
     // its skills live on the user's own server, not in a local root.
-    // Antigravity: its personal skill folder is undocumented (project
-    // .agents/skills is discovered instead).
-    expect(result.unsupportedProviders).toEqual(['antigravity', 'grok', 'hermes'])
-    expect(result.targets).toHaveLength(2)
+    expect(result.unsupportedProviders).toEqual(['grok', 'hermes'])
+    expect(result.targets).toHaveLength(3)
+    expect(result.targets.find(target => target.id === 'antigravity-personal-skills')).toMatchObject({
+      providers: ['antigravity'],
+      skillsDirectory: join(homeDirectory, '.gemini', 'config', 'skills'),
+    })
     expect(result.targets.find(target => target.id === 'claude-personal-skills')).toMatchObject({
       providers: ['claude', 'opencode'],
       skillsDirectory: join(claudeConfig, 'skills'),

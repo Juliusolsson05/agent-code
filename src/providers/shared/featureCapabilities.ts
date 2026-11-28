@@ -193,11 +193,10 @@ const FEATURES_BY_KIND: Record<AgentProviderKind, ProviderFeatureCapabilities> =
   // SAME conversation in agy's own TUI: ACP and the TUI share one store
   // (session/list returns sessions created by either).
   //
-  // Rewind, Duplicate and switching are OFF: each needs to WRITE a
-  // conversation agy will resume, and agy stores conversations in a private,
-  // undocumented SQLite schema (~/.gemini/antigravity-cli/conversations/) that
-  // a closed, self-updating binary owns. Offering them would hand the user
-  // commands that no-op or corrupt.
+  // The interactive TUI offers /fork and /rewind. agy 1.5.18 ACP returns
+  // JSON-RPC -32601 for session/fork, session/rewind and session/import. The
+  // app's durable conversation actions require named targets and a verified
+  // outcome, even when the pane is parked. A TUI picker cannot supply that contract.
   antigravity: {
     transcriptRewind: false,
     transcriptDuplicate: false,

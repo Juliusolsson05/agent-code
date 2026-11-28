@@ -23,11 +23,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-async function withConnection<T>(input: Readable, output: Writable, run: (connection: AcpConnection, updates: (handler: ((update: Record<string, unknown>) => void) | null) => void) => Promise<T>): Promise<T> {
+async function withConnection<T>(input: Readable, output: Writable, run: (connection: AcpConnection, updates: (handler: ((update: Record<string, unknown>) => void) | null) => void) => Promise<T>, sessionId?: string): Promise<T> {
   let onUpdate: ((update: Record<string, unknown>) => void) | null = null
   const connection = new AcpConnection(input, output, {
     onNotification: (method, params) => {
-      if (method === 'session/update' && isRecord(params) && isRecord(params.update)) onUpdate?.(params.update)
+      if (method === 'session/update' && isRecord(params) && params.sessionId === sessionId && isRecord(params.update)) onUpdate?.(params.update)
     },
     // A read-only query never grants anything: refuse every agent request.
     onRequest: request => connection.respondError(request.id, -32601, 'read-only catalog client'),
@@ -81,5 +81,5 @@ export async function readAntigravityConversation(input: Readable, output: Writa
     await connection.request('session/load', { sessionId: options.sessionId, cwd: options.cwd, mcpServers: [] }, 120_000)
     assembler.flush()
     return rows.sort((a, b) => a.ordinal - b.ordinal)
-  })
+  }, options.sessionId)
 }

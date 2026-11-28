@@ -40,8 +40,8 @@ export const ipcSessionFeed: SessionFeed = {
   onSessionSubAgents: cb => window.api.onSessionSubAgents(cb),
   onSessionExit: cb => window.api.onSessionExit(cb),
   sendInput: (sessionId, data, pasteId) => window.api.sendInput(sessionId, data, pasteId),
-  deliverPrompt: (sessionId, prompt, imagePaths, deliveryId) =>
-    window.api.deliverPrompt(sessionId, prompt, imagePaths, deliveryId),
+  deliverPrompt: (sessionId, prompt, imagePaths, deliveryId, options) =>
+    window.api.deliverPrompt(sessionId, prompt, imagePaths, deliveryId, ...(options ? [options] as const : [])),
   resolveCondition: (sessionId, action) => window.api.resolveCondition(sessionId, action),
   // The one place this object does more than rename: the contract has one
   // history call and the preload bridge has two, keyed by whether a cursor

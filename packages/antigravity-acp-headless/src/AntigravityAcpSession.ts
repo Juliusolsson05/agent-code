@@ -105,6 +105,9 @@ export class AntigravityAcpSession extends EventEmitter {
   private started = false
   private closed = false
   private turnActive = false
+  private promptImages = false
+
+  get acceptsImages(): boolean { return this.promptImages }
   private readonly rows: AntigravityRow[] = []
   private readonly permissions = new Map<string, { request: AcpIncomingRequest; info: AntigravityPermissionRequest }>()
   private activity: AntigravityActivity = { active: false, status: 'starting' }
@@ -160,6 +163,9 @@ export class AntigravityAcpSession extends EventEmitter {
     if (!isRecord(init) || init.protocolVersion !== 1) {
       throw new AcpError('protocol', 'agy acp answered initialize with an unsupported protocol version')
     }
+
+    const caps = init.agentCapabilities
+    this.promptImages = isRecord(caps) && isRecord(caps.promptCapabilities) && caps.promptCapabilities.image === true
 
     const mcpServers = [...(this.options.mcpServers ?? [])]
     const resumeId = this.options.resumeSessionId ?? null
@@ -230,7 +236,11 @@ export class AntigravityAcpSession extends EventEmitter {
    * session/prompt at a time per session; a prompt typed during a turn should
    * run after it, as it would in agy's own TUI queue.
    */
-  prompt(text: string): { accepted: Promise<void>; finished: Promise<string | null> } {
+  prompt(text: string, images: readonly { type: 'image'; mimeType: string; data: string }[] = []): { accepted: Promise<void>; finished: Promise<string | null> } {
+    if (images.length && !this.promptImages) {
+      const error = new AntigravityPromptError('rejected', 'agy does not advertise image prompts')
+      return { accepted: Promise.reject(error), finished: Promise.reject(error) }
+    }
     if (this.closed || !this.sessionId) {
       const error = new AntigravityPromptError(this.closed ? 'closed' : 'not-ready', this.closed ? 'agy has stopped' : 'agy is not ready yet')
       return { accepted: Promise.reject(error), finished: Promise.reject(error) }
@@ -248,9 +258,9 @@ export class AntigravityAcpSession extends EventEmitter {
         throw error
       }
       this.turnActive = true
-      this.assembler.beginTurn(text)
+      this.assembler.beginTurn(images.length && !text.trim() ? '[Image attached]' : text)
       this.setActivity({ active: true, status: 'working' })
-      const request = this.connection.request('session/prompt', { sessionId: this.sessionId, prompt: [{ type: 'text', text }] }, null)
+      const request = this.connection.request('session/prompt', { sessionId: this.sessionId, prompt: [...(text ? [{ type: 'text', text }] : []), ...images] }, null)
       accept()
       // Settled early only when agy ignores a cancel (see cancel()).
       const abandoned = new Promise<never>((_, reject) => {

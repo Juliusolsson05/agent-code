@@ -36,6 +36,10 @@ const staticResources = [
     from: 'packages/antigravity-acp-headless/src/mcpProxy.mjs',
     to: 'out/main/runtime/antigravity/mcpProxy.mjs',
   },
+  {
+    from: 'src/providers/antigravity/runtime/nativeMcpRelay.cjs',
+    to: 'out/main/runtime/antigravity/nativeMcpRelay.cjs',
+  },
 ]
 
 // WHY fileURLToPath and not `new URL(import.meta.url).pathname`:

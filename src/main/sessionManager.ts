@@ -117,7 +117,8 @@ import type {
   SessionSpawnOptions,
   SessionSpawnResult,
 } from '@preload/api/types.js'
-import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
+import type { InlinePromptImage, PromptDeliveryResult } from '@shared/types/providerConfig.js'
+import { validInlinePromptImages } from '@shared/lib/inlinePromptImages.js'
 import {
   CodexReplacementLedger,
   type CodexReplacementReclaim,
@@ -5123,6 +5124,7 @@ export class SessionManager extends EventEmitter {
        * else, and the brief still has to arrive.
        */
       supersedesPendingPrompt?: boolean
+      inlineImages?: InlinePromptImage[]
       /** Stricter provider-owned admission for generated tasks such as browser
        * recovery. Never infer native draft safety in the renderer or overwrite
        * a draft to make this request fit. */
@@ -5200,6 +5202,15 @@ export class SessionManager extends EventEmitter {
         message: `Cannot deliver prompt: ${sessionId} is not a live agent session`,
       }
     }
+    if (options?.inlineImages !== undefined && (!entry.session.deliverPromptWithImages || !validInlinePromptImages(options.inlineImages))) {
+      return {
+        ok: false, stage: 'before-write', code: 'missing-capability', promptWritten: false, enterWritten: false,
+        retrySafe: true, disposition: 'retry-after-resolve',
+        message: entry.session.deliverPromptWithImages
+          ? 'Attach up to four PNG, JPEG, GIF, or WebP images of at most 5 MB each.'
+          : 'This session cannot receive embedded images from the composer.',
+      }
+    }
     this.promptDeliveriesInFlight.add(sessionId)
     record?.('reserved')
     let promptWritten = false
@@ -5213,6 +5224,7 @@ export class SessionManager extends EventEmitter {
     this.monitorResponses.begin(sessionId, operationId, false)
     try {
       const delivery = await getMainProvider(entry.kind).deliverPrompt({
+        ...(options?.inlineImages ? { inlineImages: options.inlineImages } : {}),
         session: entry.session,
         // WHY identity-check every delayed write: provider protocols await
         // absorption/readiness. A same-ID wake must never receive Enter from a

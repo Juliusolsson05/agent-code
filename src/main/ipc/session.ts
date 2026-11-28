@@ -573,7 +573,10 @@ export function registerSessionIpc(
           }
         : undefined
       const result = await manager.deliverPromptToAgent(sessionId, prompt, imagePaths, record, deliveryId,
-        options?.requireEmptyNativeComposer === true ? { requireEmptyNativeComposer: true } : undefined)
+        options ? {
+          ...(options.requireEmptyNativeComposer === true ? { requireEmptyNativeComposer: true } : {}),
+          ...(options.inlineImages !== undefined ? { inlineImages: options.inlineImages } : {}),
+        } : undefined)
       // ORDER BARRIER (#1181): send the committed rows before the answer.
       // Claude's acceptance IS main seeing the prompt's JSONL line, and that
       // line is buffered in the session feed tap's JSONL burst and sent on the next

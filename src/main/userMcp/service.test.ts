@@ -70,6 +70,32 @@ afterEach(async () => {
 })
 
 describe('UserMcpService storage', () => {
+  it('requires an Antigravity selection for legacy servers and reports unsupported transports', async () => {
+    const svc = service()
+    const saved = await svc.save(beeper())
+    if (!saved.ok) throw new Error(saved.error)
+    const resolve = (overrides = {}) => svc.resolveForLaunch({ provider: 'antigravity', cwd: dir, overrides })
+    expect((await resolve()).attachedIds).toEqual([])
+    expect((await resolve({ [saved.id!]: true })).attachedIds).toEqual([saved.id])
+    await svc.setProvider(saved.id!, 'antigravity', true)
+    expect((await resolve()).servers[0]?.secrets['beeper-authorization']).toBe(TOKEN)
+    await svc.save(beeper({ id: saved.id, entry: { type: 'sse', url: 'https://calendar.example/sse' }, secrets: {}, inputs: [] }))
+    expect((await resolve()).dropped[0]?.reason).toMatch(/Streamable HTTP/)
+  })
+
+  it('keeps agy-only auth and tool restrictions out of Copy In', async () => {
+    const configDir = join(dir, '.gemini', 'config')
+    await mkdir(configDir, { recursive: true })
+    await writeFile(join(configDir, 'mcp_config.json'), '// locally configured servers\n' + JSON.stringify({ mcpServers: {
+      simple: { serverUrl: 'https://tracker.example/mcp' },
+      restricted: { command: 'example', disabledTools: ['write'], oauth: { clientSecret: TOKEN } },
+    } }))
+    const entries = await readNativeMcpServers({ home: dir, platform: 'darwin' })
+    expect(entries.find(entry => entry.name === 'simple')).toMatchObject({ copyable: true, transport: 'http' })
+    expect(entries.find(entry => entry.name === 'restricted')).toMatchObject({ copyable: false, entry: null })
+    expect(JSON.stringify(entries)).not.toContain(TOKEN)
+  })
+
   it('persists the server without its secret, and the snapshot shows only a hint', async () => {
     const result = await service().save(beeper())
     expect(result.ok).toBe(true)
@@ -116,7 +142,7 @@ describe('UserMcpService storage', () => {
     const result = await service().copyNative('codex', 'sentry')
     if (!result.ok) throw new Error(result.error)
     const copy = result.snapshot.servers[0]!
-    expect(copy.providers).toEqual({ claude: true, codex: false })
+    expect(copy.providers).toEqual({ claude: true, codex: false, antigravity: false })
     expect(copy.secrets['sentry-authorization']).toEqual({ set: false })
   })
 })

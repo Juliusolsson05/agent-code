@@ -346,7 +346,7 @@ export type ComposerSubmitIo = {
   input: string
   draftImages: Array<{ base64Data: string; mediaType: string; filename?: string }>
   send: (data: string, pasteId?: string) => Promise<void>
-  deliverPrompt: (prompt: string, imagePaths?: string[]) => Promise<PromptDeliveryResult>
+  deliverPrompt: (prompt: string, imagePaths?: string[], options?: import('@shared/types/providerConfig').PromptDeliveryOptions) => Promise<PromptDeliveryResult>
   pasteId: string
 }
 
@@ -482,9 +482,8 @@ const antigravityCapabilities: RendererProviderCapabilities = {
   isTypedUserPrompt: isAntigravityTypedUserPrompt,
   typedUserPromptText: text => text,
   composerSubmit: antigravityComposerSubmit,
-  // ACP prompts carry images (agy advertises promptCapabilities.image), but
-  // the composer→main path for images is Claude-specific today; text first.
-  supportsImageAttachments: false,
+  // The ACP launch also checks the installed CLI’s advertised image capability.
+  supportsImageAttachments: true,
   // The user row is committed when the session cuts it at prompt time, right
   // after acceptance; the echo bridges the IPC gap and reconciles by text.
   usesOptimisticUserEcho: true,

@@ -119,7 +119,7 @@ describe('mcp_servers built-in domain', () => {
     expect((await service.snapshot()).servers[0]!.secrets['beeper-access_token']!.set).toBe(true)
 
     await call('mcp_servers_update', { id, codex: false })
-    expect((await service.snapshot()).servers[0]!.providers).toEqual({ claude: true, codex: false })
+    expect((await service.snapshot()).servers[0]!.providers).toEqual({ claude: true, codex: false, antigravity: true })
 
     await call('mcp_servers_remove', { id })
     expect((await service.snapshot()).servers).toEqual([])

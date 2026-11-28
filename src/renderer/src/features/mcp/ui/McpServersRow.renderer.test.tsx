@@ -24,14 +24,14 @@ function server(overrides: Partial<UserMcpServerView> = {}): UserMcpServerView {
     id: 'srv-beeper',
     name: 'beeper',
     enabled: true,
-    providers: { claude: true, codex: false },
+    providers: { claude: true, codex: false, antigravity: false },
     entry: { type: 'http', url: 'http://localhost:23373/v0/mcp', headers: { Authorization: 'Bearer ${input:beeper-authorization}' } },
     inputs: [{ id: 'beeper-authorization', description: 'Header Authorization' }],
     transport: 'http',
     summary: 'localhost:23373/v0/mcp',
     secrets: { 'beeper-authorization': { set: true, hint: '1c7d' } },
     problems: [],
-    support: { claude: { ok: true }, codex: { ok: true } },
+    support: { antigravity: { ok: true }, claude: { ok: true }, codex: { ok: true } },
     ...overrides,
   }
 }
@@ -92,7 +92,7 @@ describe('Settings → MCP grid', () => {
   it('shows an SSE server as Claude-only, with the reason, instead of a Codex checkbox', () => {
     useUserMcpStore.setState({
       snapshot: {
-        servers: [server({ name: 'linear', transport: 'sse', support: { claude: { ok: true }, codex: { ok: false, reason: 'Codex does not support SSE servers' } } })],
+        servers: [server({ name: 'linear', transport: 'sse', support: { antigravity: { ok: true }, claude: { ok: true }, codex: { ok: false, reason: 'Codex does not support SSE servers' } } })],
         native: [],
         claudeManagedPolicy: false,
       },
@@ -193,7 +193,7 @@ describe('MCP server dialog', () => {
     useAppStore.setState({ mcpServerDialog: { mode: 'edit', serverId: 'srv-beeper' } })
     render(<McpServerDialog />)
     act(() => {
-      useUserMcpStore.setState({ snapshot: { servers: [server({ providers: { claude: true, codex: true } })], native: [], claudeManagedPolicy: false } })
+      useUserMcpStore.setState({ snapshot: { servers: [server({ providers: { claude: true, codex: true, antigravity: false } })], native: [], claudeManagedPolicy: false } })
     })
     expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true)
     expect(screen.getByText(/changed in another window or by an agent/)).toBeTruthy()
@@ -280,7 +280,7 @@ describe('MCP server dialog', () => {
     await vi.waitFor(() => expect(api.userMcpSave).toHaveBeenCalledTimes(1))
     expect(api.userMcpSave.mock.calls[0]![0]).toMatchObject({
       name: 'beeper',
-      providers: { claude: true, codex: true },
+      providers: { claude: true, codex: true, antigravity: true },
       secrets: { 'beeper-authorization': TOKEN },
     })
     // Closing is the store's job; Radix animates the DOM out asynchronously.

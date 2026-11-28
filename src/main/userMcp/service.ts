@@ -40,6 +40,7 @@ import {
 import {
   claudeManagedMcpPolicyPresent,
   codexNativeServerNames,
+  antigravityNativeServerNames,
   codexShellPolicyStyle,
   readNativeMcpServers,
 } from './nativeServers.js'
@@ -62,6 +63,7 @@ export type UserMcpServiceDeps = {
   /** Injectable for tests; production reads the real CLI config files. */
   native?: {
     list(): Promise<NativeMcpServerSource[]>
+    antigravityNames?(cwd: string): Promise<Set<string>>
     codexNames(cwd: string): Promise<Set<string>>
     claudeManagedPolicy(): Promise<boolean>
     codexShellPolicy?(cwd: string): Promise<CodexShellPolicyStyle>
@@ -117,6 +119,7 @@ export class UserMcpService {
     this.secrets = new UserMcpSecretStore(join(deps.stateDir, 'mcp-secrets'), deps.codec)
     this.native = deps.native ?? {
       list: () => readNativeMcpServers(),
+      antigravityNames: cwd => antigravityNativeServerNames(cwd),
       codexNames: cwd => codexNativeServerNames(cwd),
       claudeManagedPolicy: () => claudeManagedMcpPolicyPresent(),
       codexShellPolicy: cwd => codexShellPolicyStyle(cwd),
@@ -200,7 +203,7 @@ export class UserMcpService {
         id: existing?.id ?? randomUUID(),
         name: input.name.trim(),
         enabled,
-        providers: { claude: input.providers.claude === true, codex: input.providers.codex === true },
+        providers: { claude: input.providers.claude === true, codex: input.providers.codex === true, antigravity: input.providers.antigravity === undefined ? existing?.providers.antigravity === true : input.providers.antigravity === true },
         entry,
         inputs: coerceInputs(input.inputs),
         ...(pendingReview ? { pendingReview: true as const } : {}),
@@ -485,7 +488,7 @@ export class UserMcpService {
         id: randomUUID(),
         name: native.name,
         enabled: true,
-        providers: { claude: provider !== 'claude', codex: provider !== 'codex' },
+        providers: { claude: provider !== 'claude', codex: provider !== 'codex', antigravity: false },
         entry: normalizeEntry(native.entry),
         inputs: native.inputs,
       }
@@ -543,6 +546,7 @@ export class UserMcpService {
     const dropped: UserMcpDroppedServer[] = []
     const candidates: ResolvedUserMcpServer[] = []
     const claudeManaged = provider === 'claude' && await this.native.claudeManagedPolicy().catch(() => false)
+    const agyNames = provider === 'antigravity' ? await this.native.antigravityNames?.(params.cwd) : undefined
     const codexNames = provider === 'codex'
       ? await this.native.codexNames(params.cwd).catch(() => new Set<string>())
       : new Set<string>()
@@ -564,6 +568,10 @@ export class UserMcpService {
       }
       if (server.pendingReview) {
         dropped.push({ name: server.name, reason: 'Waiting for your review in Settings → MCP' })
+        continue
+      }
+      if (agyNames?.has(server.name)) {
+        dropped.push({ name: server.name, reason: 'A server with this name is already configured in Antigravity' })
         continue
       }
       if (codexNames.has(server.name)) {
@@ -597,7 +605,7 @@ export class UserMcpService {
       ? await (this.native.codexShellPolicy?.(params.cwd) ?? Promise.resolve({ style: 'filters' } as const))
         .catch(() => ({ style: 'filters' } as const))
       : undefined
-    const translatorDrops = provider === 'claude'
+    const translatorDrops = provider !== 'codex'
       ? claudeUserMcpEntries(candidates).dropped
       // The dry run sees the same inherited environment the Codex process will
       // (Codex inherits main's), so its "your environment already sets X"

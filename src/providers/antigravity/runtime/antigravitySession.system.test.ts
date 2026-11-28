@@ -148,6 +148,38 @@ const semanticTypes = (events: Event[]) => named(events, 'semantic-event').map(e
 const lastConditions = (events: Event[]) => named(events, 'conditions').at(-1)?.args[0] as { conditions: Record<string, { state: any; actions: ConditionCustomAction[] }> } | undefined
 const waitFor = <T>(check: () => T) => vi.waitFor(check, { timeout: 2000, interval: 5 })
 
+// agy 1.5.18's initialize response advertises promptCapabilities.image. Exercise
+// the composer delivery boundary through the real ACP writer and its live rows.
+it.each(['', 'Describe this'])('sends embedded clipboard bytes to agy with caption %j', async caption => {
+  const { session, agy, events } = await launch((frame, child) => {
+    if (frame.method === 'initialize') return child.reply(frame, { ...INIT, agentCapabilities: { promptCapabilities: { image: true } } })
+    if (frame.method === 'session/prompt') return child.reply(frame, { stopReason: 'end_turn' })
+    return agyScript()(frame, child)
+  })
+  const result = await deliverAntigravityPrompt({
+    session, sessionId: 'pane', prompt: caption, write: () => false,
+    inlineImages: [{ base64Data: 'iVBORw0KGgo=', mediaType: 'image/png' }],
+  })
+  expect(result.ok).toBe(true)
+  expect(agy().sent.find(f => f.method === 'session/prompt')?.params.prompt).toEqual([
+    ...(caption ? [{ type: 'text', text: caption }] : []),
+    { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' },
+  ])
+  expect(events.find(e => e.name === 'jsonl-entry' && (e.args[0] as { role?: string }).role === 'user')?.args[0]).toMatchObject({
+    text: caption || '[Image attached]',
+  })
+})
+
+it('restores image-only and captioned image prompts without retaining image bytes in rows', async () => {
+  const image = { sessionUpdate: 'user_message_chunk', content: { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' } }
+  const { events } = await launch(agyScript({ replays: { 'conv-images': [
+    image, text('agent_message_chunk', 'one'), image, text('user_message_chunk', 'caption'),
+  ] } }), { resumeSessionId: 'conv-images' }, ['conv-images'])
+  const prompts = events.filter(e => e.name === 'jsonl-entry' && (e.args[0] as { role?: string }).role === 'user').map(e => e.args[0] as { text: string })
+  expect(prompts.map(row => row.text)).toEqual(['[Image attached]', 'caption'])
+  expect(JSON.stringify(prompts)).not.toContain('iVBORw0KGgo=')
+})
+
 describe('AntigravitySession start', () => {
   it('a fresh start spawns `agy acp`, creates a session, and binds identity before reporting ready', async () => {
     const { session, events, spawned, conversationExists, agy } = await launch(agyScript(), {
@@ -265,6 +297,22 @@ describe('AntigravitySession start', () => {
 })
 
 describe('AntigravitySession built-in MCP servers', () => {
+  it.each([false, true])('attaches managed HTTP and stdio servers over the ACP pipe on resume=%s', async resume => {
+    const { agy, spawned } = await launch(agyScript(), {
+      resumeSessionId: resume ? 'saved' : undefined,
+      userMcpServers: [
+        { id: 'a', name: 'tracker', entry: { type: 'http', url: 'https://tracker.example/mcp', headers: { Authorization: 'Bearer ${input:key}' } }, secrets: { key: 'test-secret' } },
+        { id: 'b', name: 'calendar', entry: { command: '/bin/example', args: ['serve'], env: { ACCOUNT: '${input:id}' } }, secrets: { id: 'test-account' } },
+      ],
+    }, ['saved'])
+    const request = agy().sent.find(frame => frame.method === (resume ? 'session/load' : 'session/new'))
+    expect(request!.params.mcpServers).toEqual([
+      { type: 'http', name: 'tracker', url: 'https://tracker.example/mcp', headers: [{ name: 'Authorization', value: 'Bearer test-secret' }] },
+      { type: 'stdio', name: 'calendar', command: '/bin/example', args: ['serve'], env: [{ name: 'ACCOUNT', value: 'test-account' }] },
+    ])
+    expect(JSON.stringify(spawned)).not.toContain('test-secret')
+  })
+
   it('become ONE stdio proxy server agy starts, with headers in its env and the bearer never in argv', async () => {
     const bearer = 'bearer-secret-7f3a'
     const { agy, spawned } = await launch(agyScript(), {

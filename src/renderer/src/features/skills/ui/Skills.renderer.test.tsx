@@ -57,8 +57,7 @@ function installedSkill(overrides: Partial<AgentCodeInstalledSkill> = {}): Agent
 // What main reports today (targets.ts: every provider whose
 // personalAgentSkills is unsupported, sorted): Grok, and Hermes, whose skills
 // live on the user's own server.
-// What main reports (agentCodeConventions targets): Antigravity, Grok and Hermes declare personal skills unsupported.
-const UNSUPPORTED: AgentCodeInstalledSkillsSnapshot['unsupportedProviders'] = ['antigravity', 'grok', 'hermes']
+const UNSUPPORTED: AgentCodeInstalledSkillsSnapshot['unsupportedProviders'] = ['grok', 'hermes']
 const installed: AgentCodeInstalledSkillsSnapshot = {
   revision: 7,
   skills: [installedSkill()],
@@ -115,7 +114,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   Object.assign(window, { api: { ...window.api, ...api } })
   useProviderEnablementStore.getState().setSnapshot({
-    entries: ['claude', 'codex', 'opencode', 'grok', 'pi'].map(kind => ({ kind, enabled: kind !== 'pi', installed: true, because: 'detected' })),
+    entries: ['claude', 'codex', 'opencode', 'grok', 'pi', 'antigravity'].map(kind => ({ kind, enabled: kind !== 'pi', installed: true, because: 'detected' })),
   } as unknown as ProviderEnablementSnapshot)
   useSkillsStore.setState({ installed, custom, external, updates: {}, loadError: null })
 })
@@ -156,6 +155,7 @@ describe('Settings → Skills grid (#1161)', () => {
   it('shows columns for enabled providers that support skills, never Grok', async () => {
     render(<SkillsGrid settings={DEFAULT_SETTINGS} onChange={vi.fn()} />)
     await waitFor(() => expect(api.auditAgentCodeInstalledSkills).toHaveBeenCalled())
+    expect(screen.getByRole('checkbox', { name: 'pdf for Antigravity agents' })).toBeTruthy()
     expect(screen.getByRole('checkbox', { name: 'pdf for Claude agents' })).toBeTruthy()
     expect(screen.getByRole('checkbox', { name: 'pdf for Codex agents' })).toBeTruthy()
     expect(screen.queryByRole('checkbox', { name: /for Grok agents/ })).toBeNull()
@@ -171,7 +171,7 @@ describe('Settings → Skills grid (#1161)', () => {
       skillId: 'skill-pdf',
       // Pi stays chosen even though its column is hidden: hiding a provider
       // must never silently drop it from a skill.
-      providers: ['codex', 'opencode', 'pi'],
+      providers: ['codex', 'opencode', 'pi', 'antigravity'],
     }))
   })
 

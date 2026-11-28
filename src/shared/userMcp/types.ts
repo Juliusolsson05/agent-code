@@ -5,14 +5,13 @@
 /**
  * Providers that can receive a user MCP server today.
  *
- * WHY only Claude and Codex (not every AgentProviderKind): these are the two
- * launchers whose MCP injection semantics were verified against their source
+ * Keep this list closed to launchers whose MCP injection semantics were verified against their source
  * and installed binaries. OpenCode and Grok also carry built-in MCP, but a user
  * server there needs its own translator and evidence. Keeping this list closed
  * means a new provider shows an honest "not supported yet" instead of silently
  * receiving a config shape nobody checked.
  */
-export const USER_MCP_PROVIDERS = ['claude', 'codex'] as const
+export const USER_MCP_PROVIDERS = ['claude', 'codex', 'antigravity'] as const
 export type UserMcpProvider = (typeof USER_MCP_PROVIDERS)[number]
 
 export function isUserMcpProvider(value: unknown): value is UserMcpProvider {
@@ -170,7 +169,8 @@ export type UserMcpSaveInput = {
   id?: string
   name: string
   enabled: boolean
-  providers: Record<UserMcpProvider, boolean>
+  // Older saved forms and clients predate the Antigravity column.
+  providers: Record<'claude' | 'codex', boolean> & { antigravity?: boolean }
   entry: UserMcpServerEntry
   inputs: UserMcpInput[]
   /** Secret values to set with this save (inputId → value). Values for inputs

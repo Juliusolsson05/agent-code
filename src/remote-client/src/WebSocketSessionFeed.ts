@@ -345,11 +345,12 @@ export class WebSocketSessionFeed implements SessionFeed {
     prompt: string,
     imagePaths?: string[],
     _deliveryId?: string,
+    options?: import('@shared/types/providerConfig.js').PromptDeliveryOptions,
   ): Promise<PromptDeliveryResult> {
-    if (imagePaths && imagePaths.length > 0) {
+    if (imagePaths?.length || options?.inlineImages?.length) {
       return {
         ok: false, stage: 'before-write', code: 'missing-capability',
-        message: 'Remote image-path delivery is not supported', retrySafe: true,
+        message: 'Remote image delivery is not supported', retrySafe: true,
         disposition: 'retry-after-resolve',
         promptWritten: false, enterWritten: false,
       }

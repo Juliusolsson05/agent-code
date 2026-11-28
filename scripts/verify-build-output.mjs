@@ -19,6 +19,7 @@ const requiredOutputs = [
   // without it they start with no Agent Code tools, which only a live run
   // would notice.
   'out/main/runtime/antigravity/mcpProxy.mjs',
+  'out/main/runtime/antigravity/nativeMcpRelay.cjs',
 ]
 
 const missing = []

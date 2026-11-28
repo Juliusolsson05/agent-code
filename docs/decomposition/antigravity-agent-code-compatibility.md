@@ -22,3 +22,13 @@ Opening an Antigravity pane should preserve the Agent Code capabilities granted 
 ## Verification
 
 Use the real installed CLI with disposable settings and identifiable local MCP servers. Verify list, tool execution and isolation independently. Check failure and teardown with deterministic tests. Keep credentials, conversations and model responses out of fixtures.
+
+## Observations on agy 1.5.18
+
+- Two concurrent native panes in one real checkout listed distinct grants from the application MCP host. Resuming the first pane restored its original tool. Opening agy separately left its configured servers intact.
+- Native prompt dispatch preserved a human draft and submitted the local /new command from an empty confirmed editor. Rendered Agent view accepts image content over ACP. CLI permissions remain under the user's control.
+- The CLI recognized personal skills from its current and two legacy directories. Agent Code uses the current directory for managed installs.
+- Reading a confirmed native conversation uses ACP replay through the running pane's identity. Closing the pane revokes this access. Rendered panes retain their in-memory history.
+- Google's documented hooks are configured in a temporary per-pane workspace. PreInvocation starts a reporting turn, PostToolUse marks work, and a fully idle Stop can request a TLDR or complete the turn. The adapter strips prompts, tool input and output before contacting the reporting host. See https://antigravity.google/docs/hooks.
+- The installed ACP server returned method-not-found for fork, rewind and import. The CLI provides interactive /fork and /rewind; the application cannot use them as an exact durable conversation-editing API. Cross-provider history transfer and native subagent visualization remain outside verified support.
+- A real SDK tools/call over the native relay wrote a TLDR into the intended pane's reporting store. The live CLI probe exercised discovery. External OAuth consent and model interpretation of an image were not exercised. Native agy handles OAuth directly for headerless HTTPS servers at an origin or /mcp. A server that relies on browser OAuth at a custom path can be configured in agy itself.
