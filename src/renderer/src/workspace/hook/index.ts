@@ -71,7 +71,9 @@ import { closeCompletedGoalAgents as runCompletedGoalClose } from '@renderer/wor
 import type { TldrRecord } from '@shared/types/tldr'
 import { withTerminalLastUsed, withTerminalLastUsedFloor } from '@renderer/workspace/terminalLastUsed'
 import type { AgentActivitySelection } from '@renderer/workspace/agentActivityClose'
-import { providerHasNoNativeTerminal } from '@renderer/workspace/agentDisplayMode'
+import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
+import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
+import { antigravityRuntimeForView, providerHasNoNativeTerminal } from '@renderer/workspace/agentDisplayMode'
 
 // -----------------------------------------------------------------------------
 // useWorkspace — the composer.
@@ -159,16 +161,56 @@ export function useWorkspace(
   // The last save error while saves keep failing, null once one succeeds
   // (#1244). Shown by RestoreBanner; see useAutoSave for the threshold.
   const [saveFailure, setSaveFailure] = useState<string | null>(null)
-  const setSessionAgentViewModeOverride = useCallback((
+  // Session lifecycle + derivatives that depend on it
+  const sessionActions = useSessionActions(state, setState, setRuntimes, refs)
+  const { spawn, ensureSessionLive, killSession, replaceSession, reloadAgentSessions, softReloadAgentView } =
+    sessionActions
+
+  const setSessionAgentViewModeOverride = useCallback(async (
     sessionId: SessionId,
     override: AgentViewModeOverride | null,
-  ): boolean => {
+  ): Promise<SessionId | null> => {
     const snapshot = refs.stateRef.current
     const meta = snapshot.sessions[sessionId]
-    if (!meta) return false
+    if (!meta) return null
     const kind = meta.kind ?? DEFAULT_PROVIDER
-    if (!isAgentProviderKind(kind)) return false
-    if (
+    if (!isAgentProviderKind(kind)) return null
+    let successorId = sessionId
+    if (kind === 'antigravity') {
+      const desiredRuntime = antigravityRuntimeForView(override ?? useAppStore.getState().settings.agentViewMode)
+      if (meta.providerRuntime !== desiredRuntime) {
+        const resumeSessionId = resumableProviderSessionId(meta)
+        if (!resumeSessionId) {
+          showToast('This pane needs a saved Antigravity conversation before it can switch views')
+          return null
+        }
+        // Native agy does not publish turn activity over its PTY. Typing in or
+        // running a turn in its terminal cannot be distinguished from idle.
+        if (meta.providerRuntime === 'terminal' && !await requestConfirm({
+          title: 'Switch Antigravity to Agent view?',
+          description: 'This closes the native agy prompt and reopens the same conversation. Finish any running turn and submit or copy your draft first.',
+          confirmLabel: 'Switch view',
+        })) return null
+        const current = refs.stateRef.current.sessions[sessionId]
+        if (!current || resumableProviderSessionId(current) !== resumeSessionId || current.providerRuntime !== meta.providerRuntime) return null
+        if (meta.providerRuntime !== 'terminal' && refs.latestRuntimesRef.current[sessionId]?.processActive) {
+          showToast('Wait for Antigravity to finish responding before switching views')
+          return null
+        }
+        // The raw prompt and the feed are different agy processes. A view change
+        // must resume the exact conversation and retain the pane through replacement.
+        try {
+          const successor = await replaceSession(meta.cwd, {
+            kind, targetSessionId: sessionId, resumeSessionId, providerRuntime: desiredRuntime ?? null,
+          })
+          if (!successor) return null
+          successorId = successor
+        } catch (error) {
+          showToast(error instanceof Error ? error.message : 'Could not switch Antigravity views')
+          return null
+        }
+      }
+    } else if (
       providerHasNoNativeTerminal(kind, meta.providerRuntime) &&
       override === 'terminal'
     ) {
@@ -184,24 +226,24 @@ export function useWorkspace(
           ? 'Choose OpenCode Terminal when creating the agent to use the native TUI'
           : `${providerChoiceLabel(kind)} has no native terminal; it always uses Agent Code rendering.`,
       )
-      return false
+      return null
     }
-    if (effectiveProviderRuntime(kind, meta.providerRuntime) === 'terminal' && override === 'agent') {
+    if (kind !== 'antigravity' && effectiveProviderRuntime(kind, meta.providerRuntime) === 'terminal' && override === 'agent') {
       // Effective runtime: Pi panes are terminal-only whatever their metadata
       // stored, and the toast names the pane's own provider.
       showToast(`${providerChoiceLabel(kind, 'terminal')} sessions always use the native TUI`)
-      return false
+      return null
     }
 
     setState(prev => {
-      const current = prev.sessions[sessionId]
+      const current = prev.sessions[successorId]
       if (!current) return prev
       const sessions = { ...prev.sessions }
       if (override === null) {
         const { agentViewModeOverride: _removed, ...rest } = current
-        sessions[sessionId] = rest
+        sessions[successorId] = rest
       } else {
-        sessions[sessionId] = {
+        sessions[successorId] = {
           ...current,
           agentViewModeOverride: override,
         }
@@ -213,7 +255,7 @@ export function useWorkspace(
     })
     if (override === 'terminal') {
       setRuntimes(prev => {
-        const current = prev[sessionId]
+        const current = prev[successorId]
         if (!current) return prev
         if (
           !current.assistantPicker &&
@@ -224,7 +266,7 @@ export function useWorkspace(
         }
         return {
           ...prev,
-          [sessionId]: {
+          [successorId]: {
             ...current,
             assistantPicker: null,
             codeBlockPicker: null,
@@ -233,8 +275,8 @@ export function useWorkspace(
         }
       })
     }
-    return true
-  }, [refs.stateRef, setRuntimes, setState, showToast])
+    return successorId
+  }, [refs.stateRef, refs.latestRuntimesRef, replaceSession, setRuntimes, setState, showToast])
 
   const setAgentTitle = useCallback((sessionId: SessionId, title: string): boolean => {
     // Any existing session can carry a title (#865); only a vanished one is refused.
@@ -304,10 +346,6 @@ export function useWorkspace(
   // unified layout (#992): Tile Tabs and split resizing both died with the
   // tile tree. Lane/row sizing lives in useDispatchActions.
 
-  // Session lifecycle + derivatives that depend on it
-  const sessionActions = useSessionActions(state, setState, setRuntimes, refs)
-  const { spawn, ensureSessionLive, killSession, replaceSession, reloadAgentSessions, softReloadAgentView } =
-    sessionActions
   const ensureSessionLiveRef = useRef(ensureSessionLive)
   ensureSessionLiveRef.current = ensureSessionLive
 

@@ -152,9 +152,8 @@ program from the outside — the terminal screen, the model stream, the transcri
 files on disk and the process — and expose it as an API. Agent Code reconciles
 those observations into one conversation and renders it in React, without
 replacing the agent loop underneath.
-Antigravity is the exception to the PTY shape: Agent Code runs `agy acp` and
-speaks the Agent Client Protocol with it through `antigravity-acp-headless`, so
-there is no terminal to attach.
+Antigravity’s Terminal view runs the interactive `agy` CLI in a PTY. Its Agent
+view uses `agy acp` to render the conversation through the Agent Client Protocol.
 
 [`agent-transcript-parser`](https://github.com/Juliusolsson05/agent-transcript-parser)
 translates transcripts between harnesses, which is what makes switching,

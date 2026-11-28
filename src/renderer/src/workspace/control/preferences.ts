@@ -3,7 +3,7 @@ import { ControlError, defineCapability, paginate } from '@control-sdk'
 import { useAppStore } from '@renderer/app-state/store'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import { emptyRuntime } from '@renderer/session-runtime/state'
-import { getEffectiveAgentSurfaceForSession, isAgentKind } from '@renderer/workspace/agentDisplayMode'
+import { antigravityRuntimeForView, getEffectiveAgentSurfaceForSession, isAgentKind } from '@renderer/workspace/agentDisplayMode'
 import type { Workspace } from '@renderer/workspace/hook'
 import { agentFollowEnabled } from '@renderer/workspace/agentFollow'
 
@@ -35,7 +35,16 @@ export function preferenceControlCapabilities(getWorkspace: () => Workspace) {
     defineCapability({ id: 'views.modeSet', title: 'Set an agent display mode', execution: 'window', effect: 'mutation', target: { kind: 'session', field: 'sessionId' },
       description: 'Set an exact agent’s durable Agent/Terminal override, or null to inherit global Agent/Terminal/Hybrid mode. Requires views.preferencesRead revision. Uses the normal provider policy: structured OpenCode cannot become a native terminal, and OpenCode Terminal cannot become a rendered agent. Does not focus, reload or rearrange panes.',
       input: target.extend({ revision: z.string(), mode: z.enum(['agent', 'terminal']).nullable() }), output,
-      handler: input => { guard(input); if (!getWorkspace().setSessionAgentViewModeOverride(input.sessionId, input.mode)) throw new ControlError('unavailable', 'Provider rejected this view mode'); return read(input.sessionId) } }),
+      handler: async input => {
+        const current = guard(input)
+        const meta = useAppStore.getState().workspaceState.sessions[input.sessionId]
+        if (meta?.kind === 'antigravity' && meta.providerRuntime !== antigravityRuntimeForView(input.mode ?? current.globalMode)) {
+          throw new ControlError('unavailable', 'Use the Agent View Mode picker to reopen this Antigravity conversation in another runtime')
+        }
+        const sessionId = await getWorkspace().setSessionAgentViewModeOverride(input.sessionId, input.mode)
+        if (!sessionId) throw new ControlError('unavailable', 'Provider rejected this view mode')
+        return read(sessionId)
+      } }),
     defineCapability({ id: 'views.followSet', title: 'Set an agent auto-follow preference', execution: 'window', effect: 'mutation', target: { kind: 'session', field: 'sessionId' },
       description: 'Set the exact agent’s auto-follow preference for its rendered feed or raw terminal viewport using a fresh views.preferencesRead revision. Idempotent desired state; leaves other agents and pane layout untouched. Bulk follow modes can keep followEnabled true when this preference is false; inspect tailAll/tailWorking for the current window-wide policy.',
       input: target.extend({ revision: z.string(), enabled: z.boolean() }), output,

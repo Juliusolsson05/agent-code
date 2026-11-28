@@ -1,3 +1,5 @@
+import { runtimeForNewPane } from '@renderer/workspace/agentDisplayMode'
+import { useAppStore } from '@renderer/app-state/store'
 import { DEFAULT_PROVIDER, effectiveProviderRuntime, isRemoteProviderKind } from '@shared/types/providerKind'
 import { isSidekickSession } from '@renderer/workspace/sessionOwnership'
 import { SESSION_START_FAILED_MESSAGE } from '@shared/types/session'
@@ -868,7 +870,6 @@ export function usePaneActions(
     ) => {
       const resumeSessionId = continuation?.resumeSessionId
       const builtInMcpOverrides = continuation?.builtInMcpOverrides
-      const providerRuntime = continuation?.providerRuntime
       const dispatchSnapshot = refs.stateRef.current
       // #1102 central guard (review finding #2): the DEFAULT kind bypassed
       // every per-command enablement gate because per-kind commands are
@@ -898,6 +899,9 @@ export function usePaneActions(
             ? kind
             : [...AGENT_PROVIDER_KINDS].find(candidate => enabledAgentKinds.has(candidate))!
         })()
+      // Capture the selected runtime before starting: cleanup must name the same
+      // runtime even if the project closes or settings change while agy boots.
+      const providerRuntime = runtimeForNewPane(effectiveKind, continuation?.providerRuntime, !!resumeSessionId, useAppStore.getState().settings.agentViewMode)
       // ONE Dispatch creation flow for every session kind.
       //
       // WHY terminals no longer take a separate path: they used to be inserted
@@ -985,7 +989,7 @@ export function usePaneActions(
         // the code it describes.
         sessionId = await sessionActions.spawn(cwd, {
           kind: effectiveKind,
-          ...(providerRuntime ? { providerRuntime } : {}),
+          ...(effectiveKind === 'antigravity' || providerRuntime ? { providerRuntime: providerRuntime ?? null } : {}),
           resumeSessionId,
           builtInMcpOverrides,
           ...(options?.hermesLane ? { hermesLane: options.hermesLane } : {}),
@@ -1096,7 +1100,8 @@ export function usePaneActions(
       continuation?: SplitFocusedContinuation,
       placement?: { selectCreated: boolean },
     ) => {
-      const { kind, providerRuntime } = selection
+      const { kind } = selection
+      const providerRuntime = runtimeForNewPane(kind, selection.providerRuntime, !!continuation?.resumeSessionId, useAppStore.getState().settings.agentViewMode)
       const snapshot = refs.stateRef.current
       // Resolve the target project ONCE so cwd and projectTab agree. In Tiled
       // Dispatch this follows the focused lane, not the stale active tab —
@@ -1157,7 +1162,7 @@ export function usePaneActions(
 
       let sessionId: SessionId
       try {
-        sessionId = await sessionActions.spawn(cwd, { kind, providerRuntime, resumeSessionId: continuation?.resumeSessionId, builtInMcpOverrides: continuation?.builtInMcpOverrides })
+        sessionId = await sessionActions.spawn(cwd, { kind, providerRuntime: kind === 'antigravity' ? providerRuntime ?? null : providerRuntime, resumeSessionId: continuation?.resumeSessionId, builtInMcpOverrides: continuation?.builtInMcpOverrides })
       } catch (err) {
         showToast(spawnFailureToast(kind === 'terminal' ? 'terminal' : 'agent', err, cwd))
         return null
@@ -1332,7 +1337,7 @@ export function usePaneActions(
       // main would have normalized it (Astra review, finding 3). OpenCode is
       // untouched: its absent runtime still means the structured one.
       const providerRuntime = effectiveProviderRuntime(params.kind, params.providerRuntime)
-      if (!enabledAgentProviderChoices().some(choice => choice.kind === params.kind && choice.providerRuntime === providerRuntime)) {
+      if (!enabledAgentProviderChoices().some(choice => choice.kind === params.kind && (choice.providerRuntime === providerRuntime || params.kind === 'antigravity'))) {
         throw new Error(`${params.kind} does not support the requested ${providerRuntime ?? 'structured'} runtime`)
       }
       const snapshot = refs.stateRef.current
@@ -1392,7 +1397,9 @@ export function usePaneActions(
 
       const sessionId = await sessionActions.spawn(cwd, {
         kind: params.kind,
-        ...(providerRuntime ? { providerRuntime } : {}),
+        // An orchestrated agy worker needs the per-pane MCP endpoint supplied
+        // by ACP. Only a caller explicitly asking for the terminal opts out.
+        providerRuntime: params.kind === 'antigravity' ? providerRuntime ?? null : providerRuntime,
         resumeSessionId,
         builtInMcpDomains: params.builtInMcpDomains,
       })

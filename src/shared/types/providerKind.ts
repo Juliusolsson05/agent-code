@@ -173,34 +173,14 @@ export function isChatSurfaceProviderKind(value: unknown): boolean {
 }
 
 /**
- * Providers whose ONLY runtime is structured (no PTY) but whose pane is the
- * coding feed, not a chat.
- *
- * Antigravity runs as `agy acp` (Agent Client Protocol over stdio): there is
- * no native terminal to attach, exactly like OpenCode's structured runtime,
- * yet the pane is the ordinary rendered coding feed (tool rows, thinking,
- * permissions), unlike Hermes' chat surface. WHY a provider property resolved
- * at read time, like the sets above: every gate that would otherwise mount
- * AgentTerminalLeaf (agentDisplayMode, the view-mode picker, the durable
- * override guard) sees only a kind, and a spawn path that forgot a per-pane
- * flag would paint an empty terminal.
- */
-export const STRUCTURED_ONLY_PROVIDER_KINDS = ['antigravity'] as const satisfies readonly AgentProviderKind[]
-
-export function isStructuredOnlyProviderKind(value: unknown): boolean {
-  return typeof value === 'string' && (STRUCTURED_ONLY_PROVIDER_KINDS as readonly string[]).includes(value)
-}
-
-/**
  * May a caller REQUEST the terminal runtime for this provider (the control API,
- * MCP create_agent)? OpenCode, whose native TUI is a second, separately
- * selectable runtime, and every terminal-only provider, whose only runtime it
- * is. Grok's main registry also names a terminal factory, but that is the same
+ * MCP create_agent)? OpenCode and Antigravity each offer a separate native
+ * TUI runtime. Pi runs only as a terminal. Grok's main registry also names a terminal factory, but that is the same
  * single runtime and the renderer never offered it as a choice; keeping it out
  * preserves that behaviour.
  */
 export function providerOffersTerminalRuntime(kind: SessionKind | undefined): boolean {
-  return kind === 'opencode' || isTerminalOnlyProviderKind(kind)
+  return kind === 'opencode' || kind === 'antigravity' || isTerminalOnlyProviderKind(kind)
 }
 
 /**

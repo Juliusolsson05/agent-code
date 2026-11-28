@@ -46,3 +46,9 @@ The system tests use a contract-probe child for PTY operations and bootstrap fai
 3. A signed public build needs its own release. The development evidence applies to this branch.
 
 The structured-only provider flag, selecting the most recent conversation in the directory, and treating a successful process spawn as a successful resume all failed the observations above.
+
+## Outcome and deviations
+
+The first native implementation already existed when the owner requested staged verification. The staged probe found a real handoff gap. Six regression cases failed when process startup alone counted as a successful resume. They passed after explicit resume started waiting for agy's matching ID. In a disposable copy, disabling three renderer guards also reproduced four failures: the new-pane runtime default, the preference command restarting a process, and failure to preserve a source whose conversation or turn changed.
+
+The combined live probe also reopens the rendered conversation in its native successor before the source exits. The native successor confirms its selection even before the new renderer can answer terminal queries. To repeat in an already trusted directory with a signed-in CLI, set `ANTIGRAVITY_TERMINAL_LIVE=1` and `ANTIGRAVITY_LIVE_CWD` and run `npx vitest run --config vitest.live.config.ts testing/live/antigravity-terminal.test.ts`. The probe creates empty conversations and submits only agy's local `/new` command.

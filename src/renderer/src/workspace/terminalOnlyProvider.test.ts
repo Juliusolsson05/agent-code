@@ -58,8 +58,8 @@ describe('terminal-only providers (Pi)', () => {
     ])
   })
 
-  it('may request the terminal runtime for Pi and OpenCode only', () => {
-    expect(AGENT_PROVIDER_KINDS.filter(providerOffersTerminalRuntime)).toEqual(['opencode', 'pi'])
+  it('may request the terminal runtime for providers with a native terminal factory', () => {
+    expect(AGENT_PROVIDER_KINDS.filter(providerOffersTerminalRuntime)).toEqual(['opencode', 'pi', 'antigravity'])
   })
 
   // Regression guards: the helper must not change anything for providers

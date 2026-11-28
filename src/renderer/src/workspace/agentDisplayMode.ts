@@ -1,6 +1,6 @@
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import type { AgentViewModeOverride, SessionKind } from '@renderer/workspace/types'
-import { effectiveProviderRuntime, isAgentProviderKind, isAgentSessionKind, isChatSurfaceProviderKind, isStructuredOnlyProviderKind } from '@shared/types/providerKind'
+import { effectiveProviderRuntime, isAgentProviderKind, isAgentSessionKind, isChatSurfaceProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind, AgentProviderRuntime } from '@shared/types/providerKind'
 import type {
   RenderedViewLeaseFeature,
@@ -75,24 +75,21 @@ export function providerHasNoNativeTerminal(
   providerRuntime: AgentProviderRuntime | null | undefined,
 ): boolean {
   if (isChatSurfaceProviderKind(kind)) return true
-  // Antigravity (agy over ACP) has no PTY at all; see STRUCTURED_ONLY_PROVIDER_KINDS.
-  if (isStructuredOnlyProviderKind(kind)) return true
-  return kind === 'opencode' && effectiveProviderRuntime(kind, providerRuntime) !== 'terminal'
+  return (kind === 'opencode' || kind === 'antigravity') && effectiveProviderRuntime(kind, providerRuntime) !== 'terminal'
 }
 
-function normalizeAgentViewModeForKind(
-  kind: AgentProviderKind,
-  mode: AgentViewMode,
-): AgentViewMode {
-  if (kind !== 'opencode' && !isChatSurfaceProviderKind(kind) && !isStructuredOnlyProviderKind(kind)) return mode
-  // WHY ordinary OpenCode is pinned to Agent mode:
-  // Claude/Codex "Terminal" means "attach xterm to the real provider PTY."
-  // The ordinary OpenCode choice is still HTTP/SSE and has no PTY, so mounting
-  // AgentTerminalLeaf would paint an empty terminal. OpenCode Terminal is a
-  // separately selected process runtime and is forced to terminal before this
-  // normalizer runs; keeping this pin prevents the two choices from collapsing
-  // back into one misleading view toggle.
-  return 'agent'
+// agy's interactive CLI and ACP server are different processes. Hybrid uses ACP
+// so features that need the feed can render it. Record the choice at creation;
+// preferences must never reinterpret an existing process after app restart.
+export function antigravityRuntimeForView(mode: AgentViewMode): AgentProviderRuntime | undefined {
+  return mode === 'terminal' ? 'terminal' : undefined
+}
+
+export function runtimeForNewPane(
+  kind: SessionKind, requestedRuntime: AgentProviderRuntime | null | undefined, continuing: boolean, mode: AgentViewMode,
+): AgentProviderRuntime | undefined {
+  if (kind === 'antigravity' && requestedRuntime === undefined && !continuing) return antigravityRuntimeForView(mode)
+  return requestedRuntime ?? undefined
 }
 
 export function getEffectiveAgentSurface(args: {
@@ -117,7 +114,7 @@ export function getEffectiveAgentSurface(args: {
   // terminal-only provider (Pi) is pinned whatever its metadata stored —
   // many spawn paths pass only a kind (providerKind.ts TERMINAL_ONLY_…).
   if (effectiveProviderRuntime(kind, args.providerRuntime) === 'terminal') return 'terminal'
-  const mode = normalizeAgentViewModeForKind(kind, requestedMode)
+  const mode = providerHasNoNativeTerminal(kind, args.providerRuntime) ? 'agent' : requestedMode
 
   // WHY this selector ignores leases in hard Terminal mode:
   // Terminal mode is the user's "never mount Agent Code's renderer for this
@@ -204,7 +201,7 @@ export function commandAllowedByRenderedViewPolicy(args: {
     args.mode === 'terminal' || args.mode === 'hybrid' || args.mode === 'agent'
       ? args.mode
       : 'terminal'
-  const mode = normalizeAgentViewModeForKind(args.kind, requestedMode)
+  const mode = providerHasNoNativeTerminal(args.kind, args.providerRuntime) ? 'agent' : requestedMode
 
   // Commands that open/promote the rendered surface are exactly what Hybrid
   // exists for: show them in Agent and Hybrid, but hide them in hard Terminal

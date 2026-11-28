@@ -43,7 +43,19 @@ describe('Agent View Mode picker', () => {
     expect(setSessionAgentViewModeOverride).toHaveBeenCalledWith('agent', 'agent')
   })
 
-  it('uses provider-specific copy rather than OpenCode-only copy for Antigravity and Hermes panes', () => {
+  it.each([undefined, 'terminal'] as const)('offers both agy views for runtime %s', providerRuntime => {
+    const setter = vi.fn(async () => 'replacement')
+    const workspace = {
+      state: { sessions: { agent: { cwd: '/repo', kind: 'antigravity', providerRuntime } } },
+      setSessionAgentViewModeOverride: setter,
+    } as unknown as Workspace
+    render(<AgentViewModePickerModal open sessionId="agent" workspace={workspace} globalMode="terminal" onClose={() => {}} />)
+    const next = providerRuntime ? 'Agent' : 'Terminal'
+    fireEvent.click(screen.getByRole('option', { name: new RegExp('^' + next + ' ') }))
+    expect(setter).toHaveBeenCalledWith('agent', next.toLowerCase())
+  })
+
+  it('explains the Hermes chat surface', () => {
     const workspace = {
       state: { sessions: { agent: { cwd: '/repo', kind: 'hermes', projectId: 'tab', joinedAt: 0 } } },
       setSessionAgentViewModeOverride: vi.fn(() => true),

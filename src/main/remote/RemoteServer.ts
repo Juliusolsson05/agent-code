@@ -15,7 +15,7 @@ import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import type { ResolveConditionResult } from '@shared/sessionFeed/types.js'
 import type { ConditionCustomAction } from '@shared/conditions-core/contract.js'
 import type { SessionKind, AgentProviderRuntime } from '@shared/types/providerKind.js'
-import { isAgentProviderKind, isTerminalOnlyProviderKind } from '@shared/types/providerKind.js'
+import { isAgentProviderKind, providerOffersTerminalRuntime } from '@shared/types/providerKind.js'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 import type { SessionBackendSnapshot } from '@shared/types/session.js'
 import type { RemoteSessionIdentity } from './workspaceProjection.js'
@@ -952,7 +952,7 @@ export class RemoteServer extends EventEmitter {
   }
 
   /** Session summaries with the v2 identity overlays: projection-provided
-   *  title/agentName/tabTitle/pinned, plus the OpenCode runtime so the phone
+   *  title/agentName/tabTitle/pinned, plus the selected runtime so the phone
    *  can label the TUI runtime honestly. Every overlay is additive — a
    *  missing projection or an old manager interface degrades field-by-field
    *  to the v1 summary, never to an error. */
@@ -972,12 +972,8 @@ export class RemoteServer extends EventEmitter {
               pinned: identity.pinned,
             }
           : {}),
-        // Runtime only means something for a provider whose pane can be its
-        // native TUI: OpenCode (two runtimes) and the terminal-only ones (Pi,
-        // always 'terminal' — main normalizes it at spawn). Stamping
-        // 'terminal'-vs-null onto claude/codex rows would conflate the
-        // discriminator with the plain-shell session kind.
-        ...(summary.kind === 'opencode' || isTerminalOnlyProviderKind(summary.kind) ? { providerRuntime: runtime } : {}),
+        // Include the runtime only for providers which expose it as part of their launch contract.
+        ...(isAgentProviderKind(summary.kind) && providerOffersTerminalRuntime(summary.kind) ? { providerRuntime: runtime } : {}),
         ...(subAgentCount !== null ? { subAgentCount } : {}),
       }
     })

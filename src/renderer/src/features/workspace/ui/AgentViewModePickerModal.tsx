@@ -15,7 +15,7 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { AgentViewModeOverride, SessionId } from '@renderer/workspace/types'
 import { DEFAULT_PROVIDER, effectiveProviderRuntime, isAgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
-import { providerHasNoNativeTerminal } from '@renderer/workspace/agentDisplayMode'
+import { antigravityRuntimeForView, providerHasNoNativeTerminal } from '@renderer/workspace/agentDisplayMode'
 
 type PickerValue = AgentViewModeOverride | 'default'
 
@@ -43,6 +43,7 @@ export function AgentViewModePickerModal({
 }: Props) {
   // The LISTBOX is the focus owner (focus-owner invariant, useListNavigation).
   const listRef = useRef<HTMLDivElement | null>(null)
+  const applying = useRef(false)
   const meta = sessionId ? workspace.state.sessions[sessionId] : null
   const kind = meta?.kind ?? DEFAULT_PROVIDER
   const isAgent = isAgentProviderKind(kind)
@@ -51,9 +52,12 @@ export function AgentViewModePickerModal({
   // even when its metadata carries no runtime.
   const terminalRuntime = effectiveProviderRuntime(kind, meta?.providerRuntime) === 'terminal'
   const nativeUnavailable = providerHasNoNativeTerminal(kind, meta?.providerRuntime)
-  const currentValue: PickerValue = terminalRuntime
-    ? 'terminal'
-    : meta?.agentViewModeOverride ?? 'default'
+  const switchesRuntime = kind === 'antigravity'
+  // A restored ACP pane can predate native support or a later global mode
+  // change. Show what it is actually running until the user opts to reopen it.
+  const currentValue: PickerValue = switchesRuntime
+    ? meta?.agentViewModeOverride ?? (meta?.providerRuntime === antigravityRuntimeForView(globalMode) ? 'default' : terminalRuntime ? 'terminal' : 'agent')
+    : terminalRuntime ? 'terminal' : meta?.agentViewModeOverride ?? 'default'
 
   const options = useMemo<Option[]>(
     () => [
@@ -61,37 +65,44 @@ export function AgentViewModePickerModal({
         value: 'default',
         label: `Follow Global (${labelForGlobalMode(globalMode)})`,
         description: 'Use the app-wide Agent View Mode setting.',
-        disabled: terminalRuntime,
+        disabled: terminalRuntime && !switchesRuntime,
       },
       {
         value: 'agent',
         label: 'Agent',
-        description: 'Always show Agent Code rendering for this session.',
-        disabled: terminalRuntime,
+        description: switchesRuntime ? 'Reopen this conversation in the Agent Code view.' : 'Always show Agent Code rendering for this session.',
+        disabled: terminalRuntime && !switchesRuntime,
       },
       {
         value: 'terminal',
         label: 'Terminal',
-        description: nativeUnavailable
+        description: switchesRuntime
+          ? 'Reopen this conversation in the native agy terminal.'
+          : nativeUnavailable
           ? kind === 'opencode'
             ? 'Choose OpenCode Terminal when creating an agent; this structured session has no PTY.'
             : `${provider.name} has no native terminal; it always uses Agent Code rendering.`
           : 'Always show the provider native terminal for this session.',
-        disabled: nativeUnavailable,
+        disabled: nativeUnavailable && !switchesRuntime,
       },
     ],
-    [globalMode, kind, nativeUnavailable, provider.name, terminalRuntime],
+    [globalMode, kind, nativeUnavailable, provider.name, switchesRuntime, terminalRuntime],
   )
 
-  const pick = (value: PickerValue) => {
-    if (!sessionId || !isAgent) return
+  const pick = async (value: PickerValue) => {
+    if (!sessionId || !isAgent || applying.current) return
     const option = options.find(item => item.value === value)
     if (option?.disabled) return
-    const ok = workspace.setSessionAgentViewModeOverride(
-      sessionId,
-      value === 'default' ? null : value,
-    )
-    if (ok) onClose()
+    applying.current = true
+    try {
+      const ok = await workspace.setSessionAgentViewModeOverride(
+        sessionId,
+        value === 'default' ? null : value,
+      )
+      if (ok) onClose()
+    } finally {
+      applying.current = false
+    }
   }
   // Movement, disabled-row skipping, Enter and hover go through the shared
   // list hook (plan K5); this dialog only says what Enter means. The

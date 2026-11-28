@@ -221,7 +221,7 @@ export function agentControlCapabilities(getWorkspace: () => Workspace) {
       output: sessionReference.extend({ readiness: z.object({ inputReady: z.boolean().nullable(), sessionRunId: z.string().nullable() }) }),
       handler: async ({ tabId, anchorSessionId, provider: kind, providerRuntime, title, selectCreated }) => {
         requireUi(); requireSession(anchorSessionId)
-        if (providerRuntime && !providerOffersTerminalRuntime(kind)) throw new ControlError('invalid_input', 'Only OpenCode and terminal-only providers (Pi) support the terminal runtime')
+        if (providerRuntime && !providerOffersTerminalRuntime(kind)) throw new ControlError('invalid_input', 'This provider does not offer a separate terminal runtime')
         if (!resolveTabSessions(useAppStore.getState().workspaceState, tabId).includes(anchorSessionId)) {
           throw new ControlError('unavailable', 'Anchor does not belong to that project')
         }

@@ -41,9 +41,8 @@ export interface AntigravitySession {
 /**
  * Google Antigravity (the `agy` CLI) as a structured provider: Agent Code
  * spawns `agy acp` and drives it over the Agent Client Protocol through
- * antigravity-acp-headless. There is no PTY: the pane is the rendered feed
- * (STRUCTURED_ONLY_PROVIDER_KINDS), and the same conversation opens in agy's
- * own TUI with `agy --conversation <id>` because both share agy's store.
+ * antigravity-acp-headless. This runtime powers the rendered feed. The terminal
+ * runtime opens the same conversation in agy's interactive TUI with `agy --conversation <id>` because both share agy's store.
  *
  * Auth is agy's own: the user signs in once in agy (Google account, AI
  * Pro/Ultra plans included); Agent Code never sees a credential.

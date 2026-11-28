@@ -1,4 +1,4 @@
-import { isChatSurfaceProviderKind, isStructuredOnlyProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
+import { isChatSurfaceProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
 import { useRef, useState } from 'react'
 
 import type { SessionId } from '@renderer/workspace/types'
@@ -117,7 +117,7 @@ export function useComposerKeybinds({
   // as prompt text in session/prompt, where agy expands them. PTY slash mode
   // would send each key to a write() that refuses it, and Enter would then
   // clear the line without sending anything (review finding).
-  const noPtySlashMode = chatSurface || isStructuredOnlyProviderKind(provider)
+  const noPtySlashMode = chatSurface || provider === 'antigravity'
   const isLocalUsageCommand = () => !chatSurface && input.trim().toLowerCase() === '/usage'
   const openLocalUsageCommand = async (clearProviderLine: boolean) => {
     // WHY this local slash command is intercepted LATE instead of blocking

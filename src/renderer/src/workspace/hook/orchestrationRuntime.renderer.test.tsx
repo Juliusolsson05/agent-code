@@ -1,5 +1,6 @@
 import { act, cleanup, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { requestConfirm } from '@renderer/components/ui/confirm-dialog'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { OrchestrationRendererRequest, OrchestrationRendererResponse } from '@mcp/shared/orchestrationTypes'
@@ -11,6 +12,8 @@ import { oneLaneStage } from '@renderer/workspace/testing/stageFixtures'
 // suppress them so this deterministic create test cannot discover processes
 // or read personal configuration. window.api.spawnSession is the main-process
 // boundary, whose existing runtime factory selection is not reimplemented.
+vi.mock('./actions/initialHistory', () => ({ loadInitialHistoryForSession: vi.fn(async () => undefined) }))
+vi.mock('@renderer/components/ui/confirm-dialog', () => ({ requestConfirm: vi.fn(async () => false) }))
 vi.mock('./ipc/useIpcSubscriptions', () => ({ useIpcSubscriptions: () => undefined }))
 vi.mock('./ipc/useWorkspaceAdoption', () => ({ useWorkspaceAdoption: () => undefined }))
 vi.mock('./persistence/useBootstrap', () => ({ useBootstrap: () => undefined }))
@@ -44,6 +47,7 @@ beforeEach(() => {
     resolveOrchestrationRequest: resolved,
     spawnSession,
     reportSessionLifecycle: vi.fn(),
+    killOwnedSession: vi.fn(async () => true),
     appendFeedDebugLog: async () => undefined,
   } })
 })
@@ -63,6 +67,63 @@ async function dispatch(request: OrchestrationRendererRequest): Promise<void> {
   // a timer that can touch a restored window.api after the test ends.
   await act(async () => { await vi.runOnlyPendingTimersAsync() })
 }
+
+describe('changing the view of an existing Antigravity pane', () => {
+  it('resumes a saved conversation opened in a new tab in the preferred view', async () => {
+    const hook = renderHook(() => useWorkspace())
+    await act(async () => { await hook.result.current.newTab('/repo', 'agy-history', 'antigravity') })
+    expect(spawnSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      kind: 'antigravity', providerRuntime: 'terminal', resumeSessionId: 'agy-history',
+    }))
+    expect(useAppStore.getState().workspaceState.sessions.child?.providerRuntime).toBe('terminal')
+  })
+
+
+  it.each(['another conversation', 'a new turn'])('keeps the original process if the source starts %s while agy launches', async change => {
+    const id = 'agy-source-changing'
+    useAppStore.setState(state => ({ workspaceState: { ...state.workspaceState, stage: oneLaneStage(id), sessions: {
+      ...state.workspaceState.sessions, [id]: { ...state.workspaceState.sessions.root!, kind: 'antigravity', providerSessionId: 'agy-before' },
+    } } }))
+    const hook = renderHook(() => useWorkspace())
+    let started!: () => void
+    spawnSession.mockImplementationOnce(() => new Promise(resolve => { started = () => resolve({ sessionId: 'unused-agy' }) }))
+    let opening!: Promise<string | null>
+    await act(async () => { opening = hook.result.current.setSessionAgentViewModeOverride(id, 'terminal'); await Promise.resolve() })
+    expect(spawnSession).toHaveBeenCalled()
+    await act(async () => {
+      if (change === 'a new turn') {
+        useAppStore.setState(state => ({ workspaceRuntimes: { ...state.workspaceRuntimes, [id]: { ...emptyRuntime(), processActive: true } } }))
+      } else {
+        useAppStore.setState(state => ({ workspaceState: { ...state.workspaceState, sessions: {
+          ...state.workspaceState.sessions, [id]: { ...state.workspaceState.sessions[id]!, providerSessionId: 'agy-after' },
+        } } }))
+      }
+      started()
+      expect(await opening).toBeNull()
+    })
+    expect(window.api.killOwnedSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: 'unused-agy', caller: 'replace.orphaned-successor' }))
+    expect(useAppStore.getState().workspaceState.sessions[id]).toBeDefined()
+    expect(useAppStore.getState().workspaceState.sessions['unused-agy']).toBeUndefined()
+  })
+
+  it('opens the same conversation in agy and preserves the native process when switching back is cancelled', async () => {
+    useAppStore.setState(state => ({ workspaceState: { ...state.workspaceState, stage: oneLaneStage('agy-source'), sessions: {
+      ...state.workspaceState.sessions, 'agy-source': { ...state.workspaceState.sessions.root!, kind: 'antigravity', providerSessionId: 'agy-conversation' },
+    } } }))
+    const hook = renderHook(() => useWorkspace())
+    let successor: string | null = null
+    await act(async () => { successor = await hook.result.current.setSessionAgentViewModeOverride('agy-source', 'terminal') })
+    expect(successor).toBe('child')
+    expect(spawnSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      kind: 'antigravity', providerRuntime: 'terminal', resumeSessionId: 'agy-conversation',
+    }))
+    expect(useAppStore.getState().workspaceState.sessions.child).toMatchObject({ providerRuntime: 'terminal', agentViewModeOverride: 'terminal' })
+
+    await act(async () => { expect(await hook.result.current.setSessionAgentViewModeOverride('child', 'agent')).toBeNull() })
+    expect(requestConfirm).toHaveBeenCalledWith(expect.objectContaining({ confirmLabel: 'Switch view' }))
+    expect(spawnSession).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe('renderer orchestration runtime creation', () => {
   it.each([true, false])('carries the selected runtime and ownership through real spawn; terminal=%s', async terminal => {
@@ -97,6 +158,14 @@ describe('renderer orchestration runtime creation', () => {
     expect(resolved).toHaveBeenLastCalledWith(expect.objectContaining({ requestId: 'list', ok: true, agents: [expect.objectContaining({ sessionId: 'child', ...ownership })] }))
     await dispatch({ requestId: 'read', type: 'read-agent', parentSessionId: 'parent', sessionId: 'child' })
     expect(resolved).toHaveBeenLastCalledWith(expect.objectContaining({ requestId: 'read', ok: true, output: expect.objectContaining({ agent: expect.objectContaining({ sessionId: 'child', ...ownership }) }) }))
+  })
+
+  it.each([undefined, 'terminal'] as const)('creates an Antigravity worker with runtime %s', async providerRuntime => {
+    renderHook(() => useWorkspace())
+    await dispatch({ requestId: 'agy', type: 'create-agent', parentSessionId: 'parent', kind: 'antigravity', providerRuntime })
+    expect(resolved).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'agy', ok: true }))
+    expect(spawnSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ kind: 'antigravity', providerRuntime }))
+    expect(useAppStore.getState().workspaceState.sessions.child?.providerRuntime).toBe(providerRuntime)
   })
 
   // Astra review finding 3: MCP create_agent may name only the kind. Pi has

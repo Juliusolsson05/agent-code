@@ -43,6 +43,8 @@ export type TerminalSessionOptions = {
    * about Windows — if/when Agent Code runs there we'll add a branch.
    */
   shell?: string
+  /** Direct executable arguments, e.g. an agent CLI resuming its own conversation. */
+  args?: string[]
   /** Extra environment overrides for the spawned shell. */
   env?: Record<string, string | undefined>
   /**
@@ -104,6 +106,7 @@ export class TerminalSession extends EventEmitter {
   private readonly cols: number
   private readonly rows: number
   private readonly shell: string
+  private readonly args: string[]
   private readonly extraEnv: Record<string, string | undefined>
   private readonly runtime: 'direct' | 'tmux'
   private readonly tmuxSessionName: string | null
@@ -122,6 +125,7 @@ export class TerminalSession extends EventEmitter {
     // in a way that read like a crash. An explicit options.shell still
     // bypasses the probe — see pickShell for why.
     this.shell = pickShell(options.shell)
+    this.args = options.args ?? []
     this.extraEnv = options.env ?? {}
     this.runtime = options.runtime ?? 'direct'
     this.tmuxSessionName = options.tmuxSessionName ?? null
@@ -198,7 +202,7 @@ export class TerminalSession extends EventEmitter {
         },
       )
     } else {
-      this.pty = ptySpawn(this.shell, [], {
+      this.pty = ptySpawn(this.shell, this.args, {
         name: 'xterm-256color',
         cols: this.cols,
         rows: this.rows,
