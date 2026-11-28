@@ -107,7 +107,7 @@ function mcpRefused(text: string): boolean {
 
 function Verdict({ result }: { result: ScriptResult | undefined }) {
   const badge = verdict(result)
-  return badge ? <span className={`ml-auto shrink-0 font-code text-[11px] ${badge.tone}`} aria-label={badge.label}>{badge.text}</span> : null
+  return badge ? <span className={`ml-auto max-w-full shrink-0 wrap-anywhere font-code text-[11px] ${badge.tone}`} aria-label={badge.label}>{badge.text}</span> : null
 }
 
 /**
@@ -161,10 +161,14 @@ function ResultBody({ result }: { result: ScriptResult }): ReactNode {
 function StepLine({ step, result, time }: { step: ScriptStep; result?: ScriptResult; time?: string | null }) {
   return (
     <div className="flex flex-col gap-0.5" data-script-step={step.kind}>
-      <div className="flex min-w-0 items-baseline gap-2 text-[12.5px]">
-        <span aria-hidden className="w-3 shrink-0 text-center font-code text-muted">{GLYPH[step.kind]}</span>
-        {step.kind !== 'command' && <span className="shrink-0 font-code text-ink">{step.title}</span>}
-        <span className={`min-w-0 truncate font-code ${step.kind === 'command' ? 'text-ink' : 'text-muted'}`} title={step.detail}>{step.detail}</span>
+      {/* Give the argument a few characters before wrapping. A zero basis let long MCP
+          names push the entire argument (including its hover target) and outcome offscreen. */}
+      <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[12.5px]">
+        <span className="inline-flex max-w-full items-baseline gap-2">
+          <span aria-hidden className="w-3 shrink-0 text-center font-code text-muted">{GLYPH[step.kind]}</span>
+          {step.kind !== 'command' && <span className="min-w-0 wrap-anywhere font-code text-ink">{step.title}</span>}
+        </span>
+        {step.detail && <span className={`min-w-0 flex-[1_1_5ch] truncate font-code ${step.kind === 'command' ? 'text-ink' : 'text-muted'}`} title={step.detail}>{step.detail}</span>}
         <Verdict result={result} />
         {time && <span className="shrink-0 font-code text-[11px] text-muted">{time}</span>}
       </div>
