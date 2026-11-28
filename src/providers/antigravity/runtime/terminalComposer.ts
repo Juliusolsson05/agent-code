@@ -1,4 +1,8 @@
-import { Terminal } from '@xterm/headless'
+import xterm, { type Terminal } from '@xterm/headless'
+
+// Electron links the production bundle as native ESM. xterm-headless 5.x
+// publishes a CommonJS value whose Terminal property is available at runtime
+// but is absent from Node's synthetic named exports.
 
 /** Read only the current editable region. A chat message can contain a fake
  * prompt; agy's native cursor, two full-width rules and empty-only hint bind
@@ -12,7 +16,7 @@ export class AntigravityTerminalComposer {
   private disposed = false
 
   constructor(cols: number, rows: number, private readonly changed: () => void) {
-    this.screen = new Terminal({ cols, rows, scrollback: 0, allowProposedApi: true })
+    this.screen = new xterm.Terminal({ cols, rows, scrollback: 0, allowProposedApi: true })
   }
 
   output(data: string): Promise<void> {

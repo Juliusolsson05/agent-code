@@ -381,7 +381,10 @@ async function runPackagingSmoke(): Promise<void> {
     join(app.getAppPath(), 'out', 'main', 'runtime', 'cloudflared', 'manifest.json'),
   ]
   const missing = required.filter(path => !existsSync(path))
-  if (!app.isPackaged || missing.length > 0) {
+  // PR CI also runs the compiled bundle in Electron's default app before signing.
+  // An unbundled binary still cannot pass the packaged launcher's check.
+  const expectPackaged = !process.argv.includes('--built-main-smoke')
+  if (app.isPackaged !== expectPackaged || missing.length > 0) {
     console.error('[packaging-smoke] failed', { isPackaged: app.isPackaged, missing })
     app.exit(1)
     return

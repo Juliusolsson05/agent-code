@@ -44,7 +44,7 @@
     "test:live:conversations": "NODE_ENV=test AGENT_CODE_LIVE_CONVERSATIONS=1 vitest run --config vitest.live.config.ts src/main/conversations/conversations.live.test.ts",
     "test:live:image-corpus": "NODE_ENV=test AGENT_CODE_LIVE_IMAGE_CORPUS=1 vitest run --config vitest.live.config.ts src/providers/shared/renderer/protocols/media/imageAttachment.live.test.ts",
     "test:coverage": "npm run workflow-mcp:build && NODE_ENV=test vitest run --coverage",
-    "test:package": "npm run build && node scripts/verify-build-output.mjs",
+    "test:package": "npm run build && node scripts/verify-build-output.mjs && node scripts/smoke-packaged-mac.mjs --built-main",
     "test:contract": "node scripts/check-test-contract.mjs",
     "check:worktree-live-fixtures": "tsx --tsconfig tsconfig.web.json scripts/extract-worktree-live-attribution-fixtures.mts --verify-checked-in",
     "extract:conversations": "tsx --tsconfig tsconfig.node.json scripts/extract-conversation-corpus.mts",
