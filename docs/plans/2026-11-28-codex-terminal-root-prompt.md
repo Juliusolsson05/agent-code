@@ -15,3 +15,12 @@ its agents shortcut and omits its shortcuts label.
 3. Exercise normal provider delivery with a disposable native CLI and local-only
    model endpoint. Check writes, readback and draft preservation.
 4. Keep caller, transport, modal and settled-frame guards intact.
+
+## Verified mechanism
+
+On the same local fixture, 20–56 columns showed the agents-only hint and
+64, 80 and 120 columns showed both hints. At 40 columns the baseline returned
+occupied with zero writes, while the wide empty control accepted one write.
+A typed draft, including the exact placeholder text, remained unsent.
+The verified provider change is codex-headless commit 5e246e1. It uses
+the CLI's empty-only agents-navigation contract and does not match status-line paths.
