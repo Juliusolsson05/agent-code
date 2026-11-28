@@ -287,6 +287,7 @@ describe('AntigravitySession start', () => {
   it('a spawn failure is reported as spawn-failed and fails start', async () => {
     const { session, events, agy } = create(() => {})
     const starting = session.start()
+    await vi.waitFor(() => expect(agy()).toBeDefined())
     agy().emit('error', Object.assign(new Error('spawn agy ENOENT'), { code: 'ENOENT' }))
     await expect(starting).rejects.toThrow(/agy acp did not start/)
     const [first] = named(events, 'jsonl-error')

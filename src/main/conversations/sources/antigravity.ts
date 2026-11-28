@@ -1,3 +1,4 @@
+import { assertAntigravityExternalControlExcluded } from '@providers/antigravity/runtime/externalControl.js'
 import { spawn } from 'node:child_process'
 
 import { listAntigravityConversations } from 'antigravity-acp-headless'
@@ -48,6 +49,7 @@ export class AntigravityConversationSource implements ConversationSource {
     }
     let listings
     try {
+      await assertAntigravityExternalControlExcluded(process.cwd())
       const child = spawn(this.binary(), ['acp'], { stdio: ['pipe', 'pipe', 'pipe'] })
       child.stderr.on('data', () => {})
       const failed = new Promise<never>((_, reject) => child.once('error', reject))

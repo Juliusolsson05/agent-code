@@ -33,6 +33,10 @@ export class AntigravityTerminalComposer {
     // xterm answers device-status and attribute queries through the same write
     // API as typing. Those replies never edit agy's composer.
     if (/^(?:\x1b\[\??[\d;]*R|\x1b\[[?>][\d;]*c)$/.test(data)) return
+    // Backspace on a settled empty agy 1.5.18 prompt is a no-op with
+    // no ensuing edit to observe. Never clear an already outstanding key:
+    // its draft may still be waiting for the CLI's first echo.
+    if ((data === '\x7f' || data === '\x08') && this.ready()) return
     this.inputRevision++
     if (this.emptyScreen()) this.awaitingEdit = true
     this.changed()

@@ -1,3 +1,4 @@
+import { assertAntigravityExternalControlExcluded } from './externalControl.js'
 import { resolveAntigravityUserMcpEntries } from './userMcpEntries.js'
 import { openAgyTurnHooks } from './turnHooks.js'
 import { EventEmitter } from 'node:events'
@@ -61,6 +62,7 @@ export interface AntigravitySession {
  */
 export class AntigravitySession extends EventEmitter implements AgentSession {
   private child: ChildProcessWithoutNullStreams | null = null
+  private starting = false
   private acp: AntigravityAcpSession | null = null
   private exited = false
   private stopping = false
@@ -106,7 +108,12 @@ export class AntigravitySession extends EventEmitter implements AgentSession {
   }
 
   async start(): Promise<void> {
-    if (this.child) throw new Error('AntigravitySession already started')
+    if (this.child || this.starting) throw new Error('AntigravitySession already started')
+    this.starting = true
+    try { await this.startSession() } finally { this.starting = false }
+  }
+
+  private async startSession(): Promise<void> {
     this.exited = false
     this.emit('input-readiness', { ready: false, reason: 'starting' })
 
@@ -117,6 +124,7 @@ export class AntigravitySession extends EventEmitter implements AgentSession {
       else env[key] = value
     }
 
+    await assertAntigravityExternalControlExcluded(this.cwd, env, [...this.builtInMcpServers, ...this.userMcpServers])
     if (this.builtInMcpServers.some(server => server.tldrHooks)) {
       this.turnHooks = await openAgyTurnHooks(this.builtInMcpServers, () => this.providerSessionId, (active, turnInterrupted) => {
         // ACP normally owns process state. A reporting interruption also needs to

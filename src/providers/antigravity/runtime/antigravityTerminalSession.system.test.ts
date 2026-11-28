@@ -128,6 +128,7 @@ it('does not start a terminal when the pane closes during identity allocation', 
   const allocate = vi.fn(() => new Promise<string>(resolve => { finish = resolve }))
   session = new AntigravityTerminalSession({ binary, cwd }, { allocate })
   const starting = session.start()
+  await vi.waitFor(() => expect(allocate).toHaveBeenCalledOnce())
   await session.stop()
   finish('unused')
   await starting

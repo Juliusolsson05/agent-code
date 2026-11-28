@@ -1,3 +1,4 @@
+import { readAntigravityConfig } from '@providers/antigravity/runtime/externalControl.js'
 import { access, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -166,10 +167,7 @@ async function readClaudeNative(paths: NativeMcpPaths): Promise<NativeMcpServerS
 async function readAntigravityNative(file: string, paths: NativeMcpPaths): Promise<NativeMcpServerSource[]> {
   let config: unknown
   try {
-    // agy supports line comments. Match quoted strings first so https:// and escaped
-    // quotes inside server arguments survive unchanged.
-    const text = await readFile(file, 'utf8')
-    config = JSON.parse(text.replace(/"(?:\\.|[^"\\])*"|\/\/[^\r\n]*/g, token => token.startsWith('//') ? '' : token))
+    config = await readAntigravityConfig(file)
   } catch { return [] }
   if (!isPlainObject(config) || !isPlainObject(config.mcpServers)) return []
   return Object.entries(config.mcpServers).map(([name, value]) => {

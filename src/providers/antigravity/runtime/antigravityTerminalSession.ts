@@ -1,3 +1,4 @@
+import { assertAntigravityExternalControlExcluded } from './externalControl.js'
 import { spawn } from 'node:child_process'
 import { openAgyTurnHooks } from './turnHooks.js'
 import { EventEmitter } from 'node:events'
@@ -67,6 +68,12 @@ export class AntigravityTerminalSession extends EventEmitter implements AgentSes
     this.started = true
     this.emit('input-readiness', { ready: false, reason: 'starting' })
     const binary = this.options.binary ?? 'agy'
+    const policyEnv = { ...process.env, ...this.options.env }
+    const paneServers = [...this.options.builtInMcpServers ?? [], ...this.options.userMcpServers ?? []]
+    // Preallocation starts its own agy before the native PTY. In particular,
+    // its recoverable sign-in fallback must never swallow a policy conflict.
+    await assertAntigravityExternalControlExcluded(this.options.cwd, policyEnv, paneServers)
+    if (this.startup.signal.aborted) return
     const requested = this.options.resumeSessionId
     if (requested) {
       // agy silently ignores an unknown --conversation and opens a blank prompt. During a mode
@@ -97,6 +104,8 @@ export class AntigravityTerminalSession extends EventEmitter implements AgentSes
     const failResume = (message: string) => {
       if (awaitingResume) reject(new Error(message))
     }
+    await assertAntigravityExternalControlExcluded(this.options.cwd, policyEnv, paneServers)
+    if (this.startup.signal.aborted) return
     this.nativeMcp = await openAntigravityNativeMcp(this.options)
     if (this.startup.signal.aborted) { this.closeObserver(); return }
     try {

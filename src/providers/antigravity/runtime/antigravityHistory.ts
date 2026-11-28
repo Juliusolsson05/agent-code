@@ -1,3 +1,4 @@
+import { assertAntigravityExternalControlExcluded } from './externalControl.js'
 // Antigravity history pages, and the `antigravity://session/<id>` locator.
 //
 // WHY the live session's rows first: a renderer reload (and the phone's
@@ -65,6 +66,7 @@ export type AntigravityReplayDeps = {
 
 /** Replay a conversation through a short-lived `agy acp` (no model call). */
 export async function replayAntigravityConversation(sessionId: string, cwd: string, deps: AntigravityReplayDeps = {}): Promise<AntigravityRow[]> {
+  await assertAntigravityExternalControlExcluded(cwd, deps.env)
   const binary = deps.binary ?? 'agy'
   const child = (deps.spawn ?? ((bin, args, options) => spawn(bin, args, { ...options, stdio: ['pipe', 'pipe', 'pipe'] })))(binary, ['acp'], { cwd, ...(deps.env ? { env: deps.env } : {}), ...(deps.signal ? { signal: deps.signal } : {}) })
   child.stderr.on('data', () => {})
