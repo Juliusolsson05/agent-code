@@ -183,7 +183,7 @@ jobs:
         run: npm run runtime:prepare:mac
 
       - name: Build app
-        run: npm run build
+        run: npm run test:package
 
       - name: Archive app build
         # WHY a tar instead of uploading `out/` directly: upload-artifact zips its
