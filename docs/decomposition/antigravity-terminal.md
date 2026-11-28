@@ -18,6 +18,12 @@ The opt-in [registry-to-prompt probe](../../testing/live/antigravity-terminal.te
 | H3. An interactive process starting proves it resumed the requested conversation. | Disproven. With one nonexistent ID agy stayed alive and reported that it could not find the conversation. |
 | H4. A pane can follow changes inside agy without reading its conversation content. | Observed on this CLI. The native `/new` action emitted a process-local active-conversation record naming the new ID. Other diagnostic records mention unrelated IDs. |
 
+### Explicit resume probe
+
+Nine native launches received no user input. Three of three ACP-created empty conversations and three of three conversations selected by a previous native `/new` emitted `conversation_manager.go:<line>] Streaming conversation <requested UUID>` within 380–514 ms. The matching redraw followed within 433–568 ms. Three of three nonexistent IDs emitted `Conversation <requested UUID> not found, ignoring --conversation flag` within 260–324 ms. None emitted a matching active-stream record within three seconds.
+
+**Resume contract.** Only the matching active-stream record establishes a successful explicit handoff. The local store check catches an obviously missing target early. A wrong ID, a refusal, early exit or a timeout cannot retire the source pane. A fresh pane can open the CLI's own sign-in screen without a prior conversation.
+
 ## Verification stages
 
 | Boundary | Produces | Independently verified by | Why separate | Real evidence |
