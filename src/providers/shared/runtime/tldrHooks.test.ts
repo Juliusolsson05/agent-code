@@ -8,7 +8,7 @@ import {
   CODEX_SESSION_FLAGS_HOOK_SOURCE,
   claudeTldrHookSettings,
   codexHookTrustHash,
-  createCodexTldrHooks,
+  createCodexLaunchHooks,
   sweepStaleTldrHookFiles,
   tldrHookServer,
 } from './tldrHooks'
@@ -61,7 +61,7 @@ describe('provider launch hooks', () => {
 
   it('pre-trusts exactly the Codex hooks it injects and keeps the bearer out of argv', async () => {
     const root = await appRoot()
-    const hooks = await createCodexTldrHooks([server()], root)
+    const hooks = await createCodexLaunchHooks([server()], root)
     expect(hooks).not.toBeNull()
     try {
       expect(hooks!.args.join(' ')).not.toContain('session-secret-token')
@@ -100,8 +100,20 @@ describe('provider launch hooks', () => {
     }
   })
 
+  it('keeps startup and reporting trust in the same invocation without exposing extra MCP grants', async () => {
+    const hooks = (await createCodexLaunchHooks([server()], await appRoot(), true))!
+    try {
+      const states = hooks.args.filter(arg => arg.startsWith('hooks.state='))
+      expect(states).toHaveLength(1)
+      for (const label of ['session_start', 'user_prompt_submit', 'post_tool_use', 'stop']) {
+        expect(states[0]).toContain(`${CODEX_SESSION_FLAGS_HOOK_SOURCE}:${label}:0:0`)
+      }
+      expect(hooks.args.join(' ')).not.toContain('session-secret-token')
+    } finally { await hooks.dispose() }
+  })
+
   it('injects nothing for sessions without TLDR hooks or a bearer', async () => {
-    expect(await createCodexTldrHooks([server({ tldrHooks: undefined })], await appRoot())).toBeNull()
+    expect(await createCodexLaunchHooks([server({ tldrHooks: undefined })], await appRoot())).toBeNull()
     expect(tldrHookServer([server({ bearerToken: undefined })])).toBeUndefined()
   })
 })
@@ -114,7 +126,7 @@ describe('stale Codex hook credentials', () => {
     await writeFile(join(root, 'codex-earlier-run', 'authorization'), 'Authorization: Bearer revoked\n')
     await sweepStaleTldrHookFiles(root)
     expect(await readdir(root)).toEqual([])
-    const hooks = await createCodexTldrHooks([server()], root)
+    const hooks = await createCodexLaunchHooks([server()], root)
     expect(await readdir(root)).toHaveLength(1)
     await hooks!.dispose()
   })

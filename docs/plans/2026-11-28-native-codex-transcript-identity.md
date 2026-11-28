@@ -16,3 +16,9 @@ The existing exact-ID locator and lease validate a candidate before tailing. Use
 4. Exercise concurrent same-directory launches, delayed files, invalid evidence, cleanup and real CLI compatibility.
 
 Refs #1565
+
+## Results
+
+Two installed Codex 0.172.0 TUIs shared a disposable home and cwd, with a localhost fixture and no TLDR or proxy. Both returned their own marker from the application transcript and distinct root session IDs. The personal SessionStart hook ran for both launches. Removing the launch identity hook reproduced the empty transcript on the same test.
+
+The receipt can arrive before headless startup or rollout creation. The existing exact-ID locator still owns the final filename, metadata and lease checks. Disabled or unsupported hooks provide no additional evidence. Existing panes need a fresh launch or a resume by known identity.

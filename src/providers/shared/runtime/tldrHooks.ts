@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
+import { NativeStartupReceipt } from '@providers/codex/runtime/nativeStartupReceipt.js'
 import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 
 // Provider turn hooks that make TLDR reporting enforceable (#917).
@@ -110,13 +111,16 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
-export type PrivateCodexTldrHooks = {
+export type PrivateCodexLaunchHooks = {
   args: string[]
+  startup?: NativeStartupReceipt
   dispose(): Promise<void>
 }
 
 /**
- * Materialize Codex's TLDR hooks: `--config` arguments plus a private header file.
+ * Combine the launch's reporting and optional root identity hooks into a single
+ * session-flags trust table. Assigning hooks.state twice would drop the earlier
+ * launch grants. Lower-priority personal/project hooks retain their own source.
  *
  * WHY `curl` reading a header file: Codex's `mcp_tool` hook handler would call
  * the MCP server directly, but a hook-only tool on that server is also listed to
@@ -127,33 +131,52 @@ export type PrivateCodexTldrHooks = {
  * Callers own `dispose()` on normal stop and on every partial-start rollback,
  * matching the private Claude MCP config file's lifecycle.
  */
-export async function createCodexTldrHooks(
+export async function createCodexLaunchHooks(
   servers: readonly BuiltInMcpServerConfig[],
   root: string,
-): Promise<PrivateCodexTldrHooks | null> {
+  captureStartup = false,
+): Promise<PrivateCodexLaunchHooks | null> {
   const server = tldrHookServer(servers)
-  if (!server) return null
+  if (!server && !captureStartup) return null
   // `root` is app-owned rather than os.tmpdir(): this file must outlive days of
   // idleness, and macOS clears its temp directory after three. See
   // TLDR_HOOK_RUNTIME_DIR. 0700 because every entry holds a live bearer.
-  await mkdir(root, { recursive: true, mode: 0o700 })
-  await chmod(root, 0o700)
-  const directory = await mkdtemp(join(root, 'codex-'))
+  let directory: string
+  try {
+    await mkdir(root, { recursive: true, mode: 0o700 })
+    await chmod(root, 0o700)
+    directory = await mkdtemp(join(root, 'codex-'))
+  } catch (error) {
+    if (server) throw error
+    // A host identity hint is optional. A read-only state directory must not
+    // take away a native terminal which could previously launch without TLDR.
+    console.warn('[codex] Could not create the launch directory for transcript identity')
+    return null
+  }
   const headerPath = join(directory, 'authorization')
   try {
-    await writeFile(headerPath, `Authorization: Bearer ${server.bearerToken}\n`, { encoding: 'utf8', mode: 0o600 })
+    if (server) await writeFile(headerPath, `Authorization: Bearer ${server.bearerToken}\n`, { encoding: 'utf8', mode: 0o600 })
   } catch (error) {
     await rm(directory, { recursive: true, force: true })
     throw error
   }
   const args: string[] = []
   const trusted: string[] = []
-  for (const event of EVENTS) {
+  const events = server ? EVENTS.map(event => ({
+    ...event,
+    command: `curl -fsS -H @${shellQuote(headerPath)} --data-binary @- ${shellQuote(`${server.tldrHooks.baseUrl}/${event.route}`)}`,
+  })) : []
+  const startup = captureStartup ? new NativeStartupReceipt(directory) : undefined
+  const startupEvent = {
+    provider: 'SessionStart',
+    label: 'session_start',
+    // A unique, atomically published receipt also survives startup preceding
+    // the host watcher. Other hooks and panes cannot overwrite this launch.
+    command: `f=$(/usr/bin/mktemp ${shellQuote(join(directory, 'start.XXXXXXXX'))}) && /bin/cat > "$f" && /bin/mv "$f" "$f.json"`,
+  }
+  for (const event of startup ? [...events, startupEvent] : events) {
     const handler: CodexCommandHandler = {
-      type: 'command',
-      command: `curl -fsS -H @${shellQuote(headerPath)} --data-binary @- ${shellQuote(`${server.tldrHooks.baseUrl}/${event.route}`)}`,
-      timeout: HOOK_TIMEOUT_SECONDS,
-      async: false,
+      type: 'command', command: event.command, timeout: HOOK_TIMEOUT_SECONDS, async: false,
     }
     args.push('--config', `hooks.${event.provider}=[{hooks=[{type="command",command=${JSON.stringify(handler.command)},timeout=${handler.timeout},async=${handler.async}}]}]`)
     const key = `${CODEX_SESSION_FLAGS_HOOK_SOURCE}:${event.label}:0:0`
@@ -164,7 +187,8 @@ export async function createCodexTldrHooks(
   args.push('--config', `hooks.state={${trusted.join(',')}}`)
   return {
     args,
-    dispose: () => rm(directory, { recursive: true, force: true }),
+    startup,
+    dispose: async () => { startup?.stop(); await rm(directory, { recursive: true, force: true }) },
   }
 }
 
@@ -172,9 +196,8 @@ export async function createCodexTldrHooks(
  * Delete hook credential files left by an earlier app run.
  *
  * Every bearer they hold was revoked when that run's MCP host stopped, so they
- * are dead weight rather than live credentials. A process that exits naturally
- * never calls stop() on its session, so without this sweep those files would
- * accumulate. Call only before any session registers: it removes every entry.
+ * are dead weight rather than live credentials. Crashes can leave a receipt
+ * or credential file behind. Call only before any session registers.
  */
 export async function sweepStaleTldrHookFiles(root: string): Promise<void> {
   let entries: string[]
