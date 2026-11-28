@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { AntigravitySession } from './antigravitySession.js'
 import { AntigravityTerminalSession } from './antigravityTerminalSession.js'
 import { replayAntigravityConversation } from './antigravityHistory.js'
+import { resolveFamily } from '@main/conversations/family.js'
 import { AntigravityConversationSource } from '@main/conversations/sources/antigravity.js'
 
 let home: string, globalConfig: string
@@ -30,7 +31,8 @@ it('blocks native preallocation, rendered launch, history replay and catalog bef
     await expect(acp.start()).rejects.toThrow(/agent-code-control/)
     await expect(terminal.start()).rejects.toThrow(/agent-code-control/)
     await expect(replayAntigravityConversation('unused', home, { spawn })).rejects.toThrow(/agent-code-control/)
-    expect(await source.discover({ scope: 'everywhere', family: { matches: () => true } } as Parameters<typeof source.discover>[0])).toEqual([])
+    const family = await resolveFamily(home, 'everywhere', { listWorktrees: async () => [] })
+    expect(await source.discover({ scope: 'everywhere', family })).toEqual([])
     expect(spawn).not.toHaveBeenCalled()
     expect(allocate).not.toHaveBeenCalled()
     expect(terminal.getProcessPid()).toBeNull()
