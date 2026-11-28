@@ -42,4 +42,14 @@ describe('Agent View Mode picker', () => {
     fireEvent.click(apply)
     expect(setSessionAgentViewModeOverride).toHaveBeenCalledWith('agent', 'agent')
   })
+
+  it('uses provider-specific copy rather than OpenCode-only copy for Antigravity and Hermes panes', () => {
+    const workspace = {
+      state: { sessions: { agent: { cwd: '/repo', kind: 'hermes', projectId: 'tab', joinedAt: 0 } } },
+      setSessionAgentViewModeOverride: vi.fn(() => true),
+    } as unknown as Workspace
+    render(<AgentViewModePickerModal open sessionId="agent" workspace={workspace} globalMode="terminal" onClose={() => {}} />)
+    expect(screen.getByText('Hermes has no native terminal; it always uses Agent Code rendering.')).toBeTruthy()
+    expect(screen.queryByText(/Choose OpenCode Terminal/)).toBeNull()
+  })
 })

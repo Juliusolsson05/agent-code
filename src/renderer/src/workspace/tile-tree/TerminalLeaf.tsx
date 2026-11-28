@@ -19,6 +19,7 @@ import { createTerminalInputForwarder } from '@renderer/workspace/tile-tree/term
 import { encodeTerminalPaste, registerTerminalPasteTarget } from '@renderer/workspace/terminal/textPasteTarget'
 import { subscribeToTerminalData } from '@renderer/workspace/terminal/sessionDataDispatcher'
 import { attachXtermWebglRenderer } from '@renderer/workspace/terminal/xtermWebglRenderer'
+import { attachOsc52ClipboardHandler } from '@renderer/workspace/terminal/osc52Clipboard'
 import { isEngagementKeydown } from '@renderer/workspace/tile-tree/engagementKeydown'
 import { attachTerminalWheelBoundary } from '@renderer/workspace/terminal/terminalWheelBoundary'
 import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
@@ -159,8 +160,11 @@ export function TerminalLeaf({
   // The xterm instance itself. Kept in a ref so the effects below
   // can access it without triggering re-renders on every data tick.
   const termRef = useRef<Terminal | null>(null)
-  const focusedRef = useRef(focused)
-  focusedRef.current = focused
+  // Mirror AgentTerminalLeaf (#1493 / #1551): the keyboard region joins
+  // `focused` for input/paste ownership so a shell lane stops capturing focus
+  // or paste events while the Sidekick panel owns keyboard focus.
+  const focusedRef = useRef(focused && regionActive)
+  focusedRef.current = focused && regionActive
   // Session metadata and activity as PRIMITIVE selectors (#865). This leaf
   // deliberately never takes the runtime as a prop: the xterm owns its output
   // path, and a runtime prop would re-render the leaf on every PTY chunk. Each
@@ -217,6 +221,7 @@ export function TerminalLeaf({
     let fit: FitAddon | null = null
     let webglRenderer: ReturnType<typeof attachXtermWebglRenderer> | null = null
     let wheelBoundary: ReturnType<typeof attachTerminalWheelBoundary> | null = null
+    let osc52Disposable: { dispose(): void } | null = null
     let onDataDisposable: { dispose(): void } | null = null
     let offUserInput: (() => void) | null = null
     let offTerminalData: (() => void) | null = null
@@ -341,6 +346,9 @@ export function TerminalLeaf({
       fit = new FitAddon()
       term.loadAddon(fit)
       term.open(container)
+      // Write-only OSC 52 clipboard support so tmux mouse-drag selections copy
+      // to the macOS clipboard without exposing clipboard reads to the PTY.
+      osc52Disposable = attachOsc52ClipboardHandler(term)
       // Host-level, after open(): bubbles after every xterm wheel listener so
       // xterm keeps first refusal — see terminalWheelBoundary.ts.
       wheelBoundary = attachTerminalWheelBoundary(container)
@@ -588,6 +596,7 @@ export function TerminalLeaf({
       if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
       resizeObserver?.disconnect()
       onDataDisposable?.dispose()
+      osc52Disposable?.dispose()
       offTerminalData?.()
       offFollowAttach?.()
       offTextPaste?.()
@@ -618,15 +627,17 @@ export function TerminalLeaf({
   // focused at the workspace level. For that we have the
   // synchronous `focusTerminal()` handler below, wired into the
   // outer div's onMouseDown.
-  const prevFocusedRef = useRef(focused)
+  const prevFocusedRef = useRef(focused && regionActive)
   useEffect(() => {
-    const focusChanged = prevFocusedRef.current !== focused
-    prevFocusedRef.current = focused
-    if (!focused || !ownerVisible) return
+    const activeFocus = focused && regionActive
+    const focusChanged = prevFocusedRef.current !== activeFocus
+    prevFocusedRef.current = activeFocus
+    if (!activeFocus || !ownerVisible) return
     // On a reveal only take an unowned focus (see focusIsUnowned): editor-
-    // fullscreen exit must leave the caret in Monaco.
+    // fullscreen exit must leave the caret in Monaco, and Sidekick must keep
+    // keyboard focus while regionActive is false.
     if (focusChanged || focusIsUnowned()) termRef.current?.focus()
-  }, [focused, ownerVisible])
+  }, [focused, regionActive, ownerVisible])
 
   // Imperative re-focus. Called from outer-div mousedown so that
   // ANY click inside the terminal pane re-focuses xterm's helper
