@@ -204,7 +204,7 @@ export function useUndoCloseAction(
       try {
         const sessionId = await sessionActions.spawn(meta.cwd, {
           kind,
-          ...(meta.providerRuntime ? { providerRuntime: meta.providerRuntime } : {}),
+          ...(kind === 'antigravity' || meta.providerRuntime ? { providerRuntime: meta.providerRuntime ?? null } : {}),
           //   - an agent with a durable transcript resumes it;
           //   - a terminal with tmuxName re-attaches the same tmux session,
           //     preserving scrollback and any running process. Without this,

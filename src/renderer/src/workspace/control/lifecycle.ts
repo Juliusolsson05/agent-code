@@ -71,7 +71,7 @@ export function lifecycleControlCapabilities(getWorkspace: () => Workspace) {
         const check = () => {
           if (getWorkspace().restoreStatus === 'pending' || hasAppInteractionOwner()) throw new ControlError('unavailable', 'Wait for restoration or finish the input-owning surface')
           if (!resolveTabSessions(useAppStore.getState().workspaceState, input.tabId).includes(input.anchorSessionId)) throw new ControlError('unavailable', 'Anchor is not in the target project')
-          if (input.runtime && !providerOffersTerminalRuntime(input.provider)) throw new ControlError('invalid_input', 'Only OpenCode and terminal-only providers (Pi) support the terminal runtime')
+          if (input.runtime && !providerOffersTerminalRuntime(input.provider)) throw new ControlError('invalid_input', 'This provider does not offer a separate terminal runtime')
         }
         check()
         return startControlTask(context, async () => {

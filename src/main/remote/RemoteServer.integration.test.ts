@@ -313,17 +313,18 @@ describe('v2 session summary overlays', () => {
     }
   }
 
-  it('overlays title, agent name, tab, pin and the OpenCode runtime onto summaries', async () => {
+  it('overlays title, agent name, tab, pin and the selected native runtime onto summaries', async () => {
     const workspace = fakeWorkspace([
       ['s-oc', { title: 'Shell rewrite', agentName: 'Apollo', tabTitle: 'agent-code', pinned: true, tldrIdentity: 't1', cwd: '/dev/agent-code', kind: 'opencode' }],
       ['s-cl', { title: null, agentName: null, tabTitle: null, pinned: false, tldrIdentity: null, cwd: null, kind: 'claude' }],
     ])
     ;(manager.getSpawnProviderRuntime as ReturnType<typeof vi.fn>).mockImplementation(
-      (sessionId: string) => (sessionId === 's-oc' ? 'terminal' : null),
+      (sessionId: string) => (sessionId === 's-oc' || sessionId === 's-ag' ? 'terminal' : null),
     )
     await restartServer({ workspace: workspace.model })
     try {
       manager.emit('started', { sessionId: 's-oc', kind: 'opencode', projectDir: '/dev/agent-code' })
+      manager.emit('started', { sessionId: 's-ag', kind: 'antigravity', projectDir: '/dev/agent-code' })
       manager.emit('started', { sessionId: 's-cl', kind: 'claude', projectDir: '/dev/x' })
       const { ws, frames } = await openAuthed()
       await waitFor(frames, f => framesOfType(f, 'session-list').length > 0)
@@ -338,7 +339,7 @@ describe('v2 session summary overlays', () => {
         pinned: true,
         providerRuntime: 'terminal',
       })
-      // Runtime is stamped ONLY on the provider that has two runtimes.
+      expect(sessions.find(s => s.sessionId === 's-ag')).toMatchObject({ providerRuntime: 'terminal' })
       expect(cl).toMatchObject({ title: null, agentName: null, pinned: false })
       expect('providerRuntime' in (cl ?? {})).toBe(false)
       ws.close()

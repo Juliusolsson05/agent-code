@@ -191,7 +191,7 @@ export type {
 export type SessionSpawnOptions = {
   /** Which kind of session to spawn. Defaults to 'claude' in main. */
   kind?: SessionKind
-  /** Alternate agent execution runtime. Currently supported by OpenCode only. */
+  /** Alternate agent execution runtime when the provider offers a native terminal. */
   providerRuntime?: AgentProviderRuntime
   cwd: string
   cols?: number

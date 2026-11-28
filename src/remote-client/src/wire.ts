@@ -28,8 +28,7 @@ export type RemoteSessionSummary = {
   agentName?: string | null
   tabTitle?: string | null
   pinned?: boolean
-  /** OpenCode execution runtime ('terminal' = the TUI runtime). Absent =
-   *  the structured runtime, and always absent for other providers. */
+  /** Selected execution runtime for providers offering a native TUI. */
   providerRuntime?: 'terminal' | null
   subAgentCount?: number
 }

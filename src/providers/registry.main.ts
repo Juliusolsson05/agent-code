@@ -23,6 +23,7 @@ import { resolvePiBridgeScript } from '@providers/pi/runtime/bridgeScript.js'
 import { loadPiHistoryChunk } from '@providers/pi/runtime/piHistory.js'
 import { resolvePiSessionFile } from 'pi-terminal-headless'
 import { getToolPath } from '@main/setup/toolchain.js'
+import { AntigravityTerminalSession } from '@providers/antigravity/runtime/antigravityTerminalSession.js'
 import { AntigravitySession } from '@providers/antigravity/runtime/antigravitySession.js'
 import { deliverAntigravityPrompt } from '@providers/antigravity/runtime/promptDelivery.js'
 import { discoverAntigravitySkillRoots } from '@providers/antigravity/runtime/skillDiscovery.js'
@@ -254,9 +255,8 @@ const antigravityMain: MainProviderConfig = {
     supported: false,
     reason: 'Antigravity reads project skills from .agents/skills; its personal skill folder is not documented, so Agent Code does not deploy personal skills to it.',
   },
-  // One runtime: `agy acp` (ACP over stdio), structured, no PTY
-  // (STRUCTURED_ONLY_PROVIDER_KINDS pins the pane to the rendered feed).
   createSession: (opts) => new AntigravitySession(opts),
+  createTerminalSession: (opts) => new AntigravityTerminalSession(opts),
   getProjectDir: async (cwd) => cwd,
   // No transcript FILE Agent Code reads: agy's store is private SQLite.
   // History comes from the live session's rows, else from an agy replay

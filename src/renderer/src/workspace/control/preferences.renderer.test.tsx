@@ -1,5 +1,5 @@
 import { act, cleanup, renderHook } from '@testing-library/react'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { useAppStore } from '@renderer/app-state/store'
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import { useWorkspaceHelpers } from '@renderer/workspace/hook/helpers'
@@ -55,4 +55,19 @@ it('reports working follow dynamically and invalidates stale preference revision
   expect(await invoke('views.followSet', { sessionId: 'first', revision, enabled: false })).toMatchObject({ ok: false, error: { code: 'stale_cursor' } })
   expect(await invoke('views.tailAllSet', { expected: false, enabled: true })).toMatchObject({ ok: true })
   expect(await invoke('views.preferencesRead', { sessionId: 'first' })).toMatchObject({ ok: true, value: { tailAll: true, tailWorking: false, followEnabled: true } })
+})
+
+
+it('allows Antigravity view preferences without replacing a running process through control', async () => {
+  useAppStore.setState({ workspaceState: { ...original.workspaceState, sessions: { agy: { kind: 'antigravity', cwd: '/trial' } } } })
+  const setMode = vi.fn(async () => 'agy')
+  const caps = preferenceControlCapabilities(() => ({ restoreStatus: 'fresh', setSessionAgentViewModeOverride: setMode }) as unknown as Workspace)
+  const invoke = (id: string, input: unknown) => caps.find(cap => cap.descriptor.id === id)!.execute(input, context)
+  const current = await invoke('views.preferencesRead', { sessionId: 'agy' })
+  if (!current.ok) throw new Error('Missing Antigravity preferences')
+  const target = { sessionId: 'agy', revision: (current.value as { revision: string }).revision }
+  expect(await invoke('views.modeSet', { ...target, mode: 'terminal' })).toMatchObject({ ok: false, error: { code: 'unavailable' } })
+  expect(setMode).not.toHaveBeenCalled()
+  expect(await invoke('views.modeSet', { ...target, mode: 'agent' })).toMatchObject({ ok: true })
+  expect(setMode).toHaveBeenCalledWith('agy', 'agent')
 })

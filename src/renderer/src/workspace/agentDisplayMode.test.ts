@@ -104,7 +104,7 @@ describe('agent display mode policy', () => {
     ).toBe('terminal')
   })
 
-  it('keeps Antigravity (STRUCTURED_ONLY) on the rendered feed even under default Terminal mode', () => {
+  it('keeps an existing Antigravity ACP session rendered under default Terminal mode', () => {
     expect(
       getEffectiveAgentSurfaceForSession({
         kind: 'antigravity',
@@ -121,6 +121,12 @@ describe('agent display mode policy', () => {
         runtime: emptyRuntime(),
       }),
     ).toBe(true)
+  })
+
+  it('keeps the native agy prompt attached to its PTY under all display preferences', () => {
+    for (const mode of ['agent', 'hybrid', 'terminal'] as const) {
+      expect(getEffectiveAgentSurface({ kind: 'antigravity', providerRuntime: 'terminal', mode, runtime: emptyRuntime() })).toBe('terminal')
+    }
   })
 
   it('falls back to Terminal mode when an unrecognized mode reaches the selector (#1548)', () => {

@@ -15,7 +15,7 @@ import { SESSION_START_FAILED_MESSAGE, type SessionRecoverFailureCode } from '@s
 import { useCallback, useRef } from 'react'
 
 import { useAppStore } from '@renderer/app-state/store'
-import { shouldUseProxyForSession } from '@renderer/workspace/agentDisplayMode'
+import { runtimeForNewPane, shouldUseProxyForSession } from '@renderer/workspace/agentDisplayMode'
 
 import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
@@ -86,7 +86,7 @@ export type SessionActions = {
     opts?: {
       resumeSessionId?: string
       kind?: SessionKind
-      providerRuntime?: AgentProviderRuntime
+      providerRuntime?: AgentProviderRuntime | null
       dangerousMode?: boolean
       recoverTmuxName?: string
       tldrIdentity?: string
@@ -109,7 +109,7 @@ export type SessionActions = {
     opts?: {
       resumeSessionId?: string
       kind?: SessionKind
-      providerRuntime?: AgentProviderRuntime
+      providerRuntime?: AgentProviderRuntime | null
       /** Per-domain MCP choices to ADOPT; omit to continue the pane's own. */
       builtInMcpOverrides?: BuiltInMcpOverrides
       preserveTldr?: boolean
@@ -414,7 +414,7 @@ export function useSessionActions(
         predecessorSessionId?: SessionId
         predecessorKillCaller?: KillCaller
         kind?: SessionKind
-        providerRuntime?: AgentProviderRuntime
+        providerRuntime?: AgentProviderRuntime | null
         dangerousMode?: boolean
         recoverTmuxName?: string
         tldrIdentity?: string
@@ -433,6 +433,10 @@ export function useSessionActions(
       },
     ): Promise<SessionId> => {
       const kind: SessionKind = opts?.kind ?? DEFAULT_PROVIDER
+      // Only a fresh request follows today's workspace preference. Old agy panes
+      // stored no runtime because their only process was the ACP server.
+      const providerRuntime = runtimeForNewPane(kind, opts?.providerRuntime,
+        !!opts?.predecessorSessionId, useAppStore.getState().settings.agentViewMode)
       // Only remote kinds wait for the connection list. An unconditional
       // await here deferred EVERY spawn's IPC by a microtask, which broke
       // replaceSession's ordering against edits made while a replacement is
@@ -492,7 +496,7 @@ export function useSessionActions(
           const result = await window.api.spawnSession({
             tldrIdentity,
             kind,
-            providerRuntime: opts?.providerRuntime,
+            providerRuntime,
             cwd,
             resumeSessionId: opts?.resumeSessionId,
             ...(opts?.predecessorSessionId
@@ -575,7 +579,7 @@ export function useSessionActions(
           kind,
           // Write the field even when absent so a pathological reused id cannot
           // inherit an alternate runtime from stale metadata.
-          providerRuntime: opts?.providerRuntime,
+          providerRuntime,
           ...(tmuxName ? { tmuxName } : {}),
           ...(kind !== 'terminal' && requestedProviderSessionId
             ? {
@@ -1241,7 +1245,7 @@ export function useSessionActions(
       opts?: {
         resumeSessionId?: string
         kind?: SessionKind
-        providerRuntime?: AgentProviderRuntime
+        providerRuntime?: AgentProviderRuntime | null
         /** Per-domain choices this replacement should ADOPT. Omit to continue
          * the pane's existing choices; replacement never takes the previous
          * process's effective capability list as intent. */
@@ -1319,7 +1323,7 @@ export function useSessionActions(
       // Reload/resume of the same provider preserves its execution surface;
       // switching providers drops it because runtime capabilities are owned by
       // the target provider, not transferable pane decoration.
-      const providerRuntime = spawnOpts.providerRuntime ?? (
+      const providerRuntime = spawnOpts.providerRuntime !== undefined ? spawnOpts.providerRuntime ?? undefined : (
         nextKind === (oldMeta.kind ?? DEFAULT_PROVIDER)
           ? oldMeta.providerRuntime
           : undefined
@@ -1349,8 +1353,15 @@ export function useSessionActions(
               defaultDomains: refs.defaultBuiltInMcpDomainsRef.current,
             })
           : undefined
+      const switchingAgyView = nextKind === 'antigravity' && oldMeta.kind === nextKind &&
+        oldMeta.providerRuntime !== providerRuntime && !spawnOpts.newConversation
       const canCommit = (state: WorkspaceState) => {
         const current = state.sessions[oldId]
+        // Starting the successor can take seconds. Keep the original pane if
+        // it changed conversations or received a new ACP turn during that wait.
+        if (switchingAgyView && (!spawnOpts.resumeSessionId ||
+          resumableProviderSessionId(current) !== spawnOpts.resumeSessionId ||
+          (oldMeta.providerRuntime !== 'terminal' && refs.latestRuntimesRef.current[oldId]?.processActive))) return false
         return Boolean(current && current.cwd === oldMeta.cwd && current.kind === oldMeta.kind
           && current.providerRuntime === oldMeta.providerRuntime
           // Still owned: its project still exists. (A `buried` check sat here

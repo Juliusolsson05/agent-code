@@ -17,7 +17,7 @@ export async function deliverAntigravityPrompt(io: PromptDeliveryIo): Promise<Pr
       ok: false,
       stage: 'before-write',
       code: 'missing-capability',
-      message: `antigravity session ${io.sessionId} has no prompt delivery capability (runtime not started?)`,
+      message: `Antigravity session ${io.sessionId} has no structured prompt transport. Type in its native terminal, or use the rendered Agent view for automated prompts.`,
       retrySafe: true,
       disposition: 'session-unusable',
       promptWritten: false,

@@ -59,6 +59,29 @@ async function perform(operation: () => Promise<unknown>) {
   await act(async () => { await operation(); await vi.runAllTimersAsync() })
 }
 
+describe('Antigravity runtime selection', () => {
+  it('stores the default Terminal runtime on a new pane and preserves ACP on a legacy reload', async () => {
+    const h = setup({ kind: 'antigravity' })
+    await perform(() => h.hook.result.current.sessions.spawn('/project', { kind: 'antigravity' }))
+    expect(h.spawnSession.mock.calls.at(-1)![0].providerRuntime).toBe('terminal')
+    expect(h.writer.getState().sessions['new-1']?.providerRuntime).toBe('terminal')
+
+    await perform(() => h.hook.result.current.provider.reloadSessionAgent('original'))
+    expect(h.spawnSession.mock.calls.at(-1)![0]).toMatchObject({ resumeSessionId: 'native-original', providerRuntime: undefined })
+  })
+
+  it('replaces an Antigravity pane in either direction with the same conversation', async () => {
+    const h = setup({ kind: 'antigravity' })
+    for (const runtime of ['terminal', null] as const) {
+      await perform(() => h.hook.result.current.sessions.replaceSession('/project', {
+        kind: 'antigravity', providerRuntime: runtime, targetSessionId: h.focused(), resumeSessionId: 'native-original',
+      }))
+      expect(h.spawnSession.mock.calls.at(-1)![0]).toMatchObject({ resumeSessionId: 'native-original', providerRuntime: runtime ?? undefined })
+      expect(h.writer.getState().sessions[h.focused()]?.providerRuntime).toBe(runtime ?? undefined)
+    }
+  })
+})
+
 describe('global MCP preferences at actual provider replacement', () => {
   // Not MCP, but this is the file that drives the REAL reloadSessionAgent →
   // replaceSession → spawn path. Review a #3: Reload Agent re-resolved the

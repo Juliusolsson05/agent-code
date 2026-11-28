@@ -570,7 +570,7 @@ export function getSettingsRegistry(
       category: 'workspace',
       title: 'Agent View Mode',
       description:
-        'Choose whether PTY-backed agent panes (Claude, Codex, Grok) show the provider terminal, Agent Code rendering, or terminal-first Hybrid mode that renders only while a feature needs the feed. Terminal-only providers (OpenCode Terminal, Pi) always use their native terminal; structured-only providers (OpenCode, Hermes, Antigravity) always use Agent Code rendering.',
+        'Choose whether PTY-backed agent panes (Claude, Codex, Grok) show the provider terminal, Agent Code rendering, or terminal-first Hybrid mode that renders only while a feature needs the feed. New Antigravity sessions open the agy prompt in Terminal mode and the rendered conversation in Agent or Hybrid mode. OpenCode Terminal and Pi use their native terminals. OpenCode and Hermes use Agent Code rendering.',
       keywords: ['agent', 'view', 'mode', 'terminal', 'raw', 'hybrid', 'renderer', 'feed', 'tui'],
       control: {
         type: 'select',
