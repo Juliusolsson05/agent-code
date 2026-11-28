@@ -7,3 +7,5 @@ An Antigravity pane in Terminal mode should accept keyboard input in the install
 ## Change and verification
 
 Select a PTY-backed interactive agy session for Terminal and keep the existing ACP session for the rendered view. Carry the pane's selected runtime through creation, restoration and switching. Exercise input, resize, exit, runtime selection and the rendered path with focused tests. Smoke-test the installed CLI without submitting a model request. Releasing a new signed build is separate.
+
+The staged contracts, evidence and remaining release boundary are recorded in the [native terminal decomposition](../decomposition/antigravity-terminal.md). The decomposition was added after the initial implementation when the owner requested this verification method.
